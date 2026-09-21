@@ -8,7 +8,7 @@
     "start": "next start --hostname 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "db:init": "tsx scripts/init-db.ts"
+    "db:init": "node --env-file=.env.local --import tsx scripts/init-db.ts"
   },
   "engines": {
     "node": ">=22"
