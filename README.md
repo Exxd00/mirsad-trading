@@ -4,7 +4,7 @@ A private Arabic RTL workspace for **manual** market monitoring and trading deci
 
 - Private repository: [Exxd00/mirsad-trading](https://github.com/Exxd00/mirsad-trading).
 - Published site: [mirsad-trading.vercel.app](https://mirsad-trading.vercel.app), project `mirsad-trading` in the actual browser-accessible `ixa1` team. Initial deployment exists, but login/account functionality is not yet usable because production database and server secrets remain unconfigured.
-- Recoverable source checkpoint: `37d78f34593c2983917295a266333033bf738a07`. Later work may be ahead of that checkpoint; inspect Git before continuing.
+- Recoverable source checkpoint: `bf7060671d53fb8397f55a3934ce44349ff7d826`. Later work may be ahead of that checkpoint; inspect Git before continuing.
 
 ## What is implemented
 

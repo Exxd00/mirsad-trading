@@ -1,6 +1,6 @@
 # Verification record
 
-Last independent HTTP/source inspection: **2026-09-21 23:52 UTC** (22 September 01:52 Europe/Berlin).
+Last deployed HTTP inspection: **2026-09-21 23:55 UTC** (22 September 01:55 Europe/Berlin), after deployment of implementation commit `bf7060671d53fb8397f55a3934ce44349ff7d826`. Source comparison was performed at 23:52 UTC.
 
 ## Automated and local checks
 
@@ -21,12 +21,12 @@ Last independent HTTP/source inspection: **2026-09-21 23:52 UTC** (22 September 
 | Production script `unsafe-inline` / `unsafe-eval` | Neither present | Neither present |
 | Login response `no-store` | Confirmed | Confirmed |
 | Anonymous `/api/session`, `/api/dashboard`, `/api/market`, `/api/settings` | All 401, all `no-store` | All 401, all `no-store` |
-| Anonymous order confirmation | 401 | 403; Origin configuration had not yet been redeployed |
-| Anonymous `/` and `/simulation` | 307 to `/login` | 500 in the earlier deployment; source fix and tests completed, redeployment required |
+| Anonymous empty order confirmation | 401 | 401 with configured production Origin |
+| Anonymous `/` and `/simulation` | 307 to `/login` | 307 to `/login` after deployed configuration fix |
 
 The anonymous CSRF endpoint was also checked locally: it exposes only a CSRF token and sets a Secure, HttpOnly cookie. This public endpoint does not expose a session or account.
 
-The earlier generated deployment URL redirected anonymous requests to Vercel Deployment Protection. The canonical URL `https://mirsad-trading.vercel.app` was inspected directly instead. The final deployment must be checked again after the blank-origin fix and configured `APP_ORIGIN` are deployed; the table above deliberately preserves the actual observation rather than attributing local results to the cloud.
+The generated deployment URL redirected anonymous requests to Vercel Deployment Protection. The canonical URL `https://mirsad-trading.vercel.app` was inspected directly. The blank-origin bug was fixed and redeployed; the table records the successful follow-up. Production CSRF bootstrap also returned a Secure, HttpOnly, SameSite=Strict cookie. Repeat these checks with `node scripts/verify-deployment.mjs https://mirsad-trading.vercel.app`; the script uses no account credentials, and its empty confirmation request stops at authentication.
 
 ## Source and client secret inspection
 

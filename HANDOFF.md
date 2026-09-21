@@ -5,9 +5,9 @@ Updated 2026-09-22, Europe/Berlin. Read [the consolidated requirements ledger](d
 ## Saved work and deployment identity
 
 - Private GitHub repository: https://github.com/Exxd00/mirsad-trading
-- Full-source checkpoint: `37d78f34593c2983917295a266333033bf738a07`. Inspect `git status` and later commits before resuming; do not repeat implementation already present.
+- Verified implementation checkpoint: `bf7060671d53fb8397f55a3934ce44349ff7d826`. Later documentation/checker commits may follow; inspect remote `main` before resuming. Code was pushed through the GitHub connector; the local Git index has not been committed. Do not force-push a new local root over the existing remote history.
 - Actual browser-accessible Vercel workspace: team slug `ixa1`; project `mirsad-trading` was created and initially deployed through that UI.
-- Published canonical URL: https://mirsad-trading.vercel.app. Initial deployment exists, but login is not usable until durable storage and server secrets are configured. The missing/blank `APP_ORIGIN` startup error path is being hardened by the security agent; verify the resulting deployment rather than assuming a login redirect works. Do not call the production app ready before storage/authentication work.
+- Published canonical URL: https://mirsad-trading.vercel.app. Verified implementation deployment: https://vercel.com/ixa1/mirsad-trading/65TqdmyZAWCzU23LM2NgXX7TghXD (Ready). The blank-origin startup issue is fixed and production APP_ORIGIN was saved. Anonymous private pages now redirect to login; private APIs reject access. Login itself is not usable until durable storage, password hash and encryption key are configured. Do not call the production app ready before those dependencies.
 - The connector's stale inventory pointed to an unrelated Vercel team. It is not evidence about the actual `ixa1` project. Existing unrelated projects were left alone.
 
 ## Evidence already obtained
@@ -24,13 +24,13 @@ A local UI order bought **0.0001 BTC exclusively in `/simulation`**; the virtual
 - No IBKR account authorization, API entitlement, market-data subscription, gateway, or persistent bridge was established. Its current implementation cannot route real IBKR orders.
 - Production durable database provisioning is pending **user acceptance of Neon technical terms**. No database was created or purchased at this checkpoint.
 - Secure production environment import is unfinished. The Chrome extension blocks file upload until the user enables **Allow access to file URLs**. The CLI device-auth attempt expired and is not an available authenticated deployment path.
-- Published desktop/mobile authenticated flows, deployed API protection, production broker egress, private account attribution, and actual broker P&L remain unverified. Local tests do not establish these results.
+- Published desktop/mobile authenticated flows, production broker egress, private account attribution, and actual broker P&L remain unverified. Published anonymous API/page protection, nonce CSP and login-page responsiveness have been verified; see docs/VERIFICATION.md.
 
 The app must fail closed when production storage/secrets are missing. Do not replace durable storage with process memory or a Vercel local file to make a deployment look complete. A working public login shell alone is not a functional deployed private application.
 
 ## Next execution steps, in dependency order
 
-1. Inspect the current Vercel `ixa1/mirsad-trading` deployment at https://mirsad-trading.vercel.app, verify the initial-configuration error/redirect fix, and preserve the existing GitHub/project association. Do not create another project.
+1. Preserve the existing GitHub/Vercel association. The latest implementation deploy and anonymous boundary checks passed; start with the pending storage/configuration work rather than rebuilding the app. The branch `verification/protection` was created for a protected-preview check; inspect whether Vercel generated it before creating further previews.
 2. Have the user complete the pending free Neon technical-terms acceptance and browser extension file-upload permission. Do not accept financial agreements, purchase a plan, or treat elapsed time as consent.
 3. Complete authorized durable database setup and securely import server configuration. Use production `APP_ORIGIN`, durable `DATABASE_URL`, `INITIAL_PASSWORD_HASH`, and `ENCRYPTION_KEY`; do not import local-only database settings into production. Keep preview storage/secrets separate.
 4. Redeploy and verify the actual HTTPS site: login/logout/password change, session cookies, protected pages and direct API access, CSRF, public data freshness, simulation, and responsive desktop/mobile flows. No real transaction is a test.
@@ -50,5 +50,7 @@ The root agent has sent one consolidated asynchronous request for Neon technical
 ## Secret and continuity rules
 
 The local `.env.local` is ignored and already contains development configuration, the salted password hash and encryption key; local PGlite data exists. Preserve these without printing values, committing them, or placing them in logs or screenshots. The exact secret values are intentionally not in GitHub and must be supplied securely on a fresh machine. Never regenerate an encryption key over stored broker ciphertext without a planned migration.
+
+The ignored `.local/vercel-import.env` contains only the prepared server hash, encryption key and production origin for secure import. Add the eventual production database through the storage integration; do not publish this file. Vercel initially created seven empty variables from `.env.example`; only APP_ORIGIN has been populated. Empty DATABASE_URL/INITIAL_PASSWORD_HASH/ENCRYPTION_KEY still require setup. The second CLI login was also disabled in Vercel's device UI and was cancelled; no CLI authentication is available. The temporary production verification server was stopped; the local development server can be restarted with the documented dev command.
 
 The application uses polling while open; it does not keep working after the session through a trading automation. The earlier conversation heartbeat is paused and must remain paused unless the user explicitly asks to restart it. Live order sending remains locked. No background auto-trader has been created.
