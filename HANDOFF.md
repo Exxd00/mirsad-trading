@@ -30,7 +30,7 @@ The app must fail closed when production storage/secrets are missing. Do not rep
 
 ## Next execution steps, in dependency order
 
-1. Preserve the existing GitHub/Vercel association. The latest implementation deploy and anonymous boundary checks passed; start with the pending storage/configuration work rather than rebuilding the app. The branch `verification/protection` was created for a protected-preview check; inspect whether Vercel generated it before creating further previews.
+1. Preserve the existing GitHub/Vercel association. The latest implementation deploy and anonymous boundary checks passed; start with the pending storage/configuration work rather than rebuilding the app. Both production and `verification/protection` at commit `21a32e934b55ad7e4a0889d0cb8c7b04c266034c` are Ready. The preview URL `https://mirsad-trading-kzpk3r26d-ixa1.vercel.app` redirects anonymous page and API requests to Vercel SSO. Do not create another preview/project just to repeat that check.
 2. Have the user complete the pending free Neon technical-terms acceptance and browser extension file-upload permission. Do not accept financial agreements, purchase a plan, or treat elapsed time as consent.
 3. Complete authorized durable database setup and securely import server configuration. Use production `APP_ORIGIN`, durable `DATABASE_URL`, `INITIAL_PASSWORD_HASH`, and `ENCRYPTION_KEY`; do not import local-only database settings into production. Keep preview storage/secrets separate.
 4. Redeploy and verify the actual HTTPS site: login/logout/password change, session cookies, protected pages and direct API access, CSRF, public data freshness, simulation, and responsive desktop/mobile flows. No real transaction is a test.

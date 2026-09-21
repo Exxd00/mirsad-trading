@@ -2,6 +2,8 @@
 
 Last deployed HTTP inspection: **2026-09-21 23:55 UTC** (22 September 01:55 Europe/Berlin), after deployment of implementation commit `bf7060671d53fb8397f55a3934ce44349ff7d826`. Source comparison was performed at 23:52 UTC.
 
+Follow-up on commit `21a32e934b55ad7e4a0889d0cb8c7b04c266034c`: production checker passed again at **23:57:40 UTC**. Vercel marked both production and `verification/protection` preview Ready. Anonymous requests to `/login` and `/api/dashboard` on preview `https://mirsad-trading-kzpk3r26d-ixa1.vercel.app` returned **302 to Vercel SSO**. This verifies the outer preview access barrier; authenticated preview account/market behavior remains unverified and has no configured database or broker credentials.
+
 ## Automated and local checks
 
 - The complete suite passed **64 tests**, and the production build passed, in the root execution at approximately 01:51 Berlin.
