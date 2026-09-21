@@ -109,6 +109,8 @@ Validate current pair `status`, `base_step`, `quote_step`, `min_order_size` (bas
 
 For market orders the configuration is, for example, `{"market":{"base_size":"0.0001"}}`. Create-limit `time_in_force` supports `gtc` or `ioc`; optional `execution_instructions` can include `post_only`. Do not infer that all read-order TIFs or TP/SL/TWAP types are creatable. The adapter exposes only market and GTC limit using **base quantity**. It does not implement post-only, quote-sized submission, replacement, cancellation, TP/SL creation, or autonomous exits.
 
+**Lifetime wording audit:** `MarketOrderConfiguration` has only `base_size`/`quote_size`; it neither accepts `time_in_force` nor establishes an IOC default in the reviewed schema. Market summaries therefore say **broker default** instead of asserting IOC. Limit summaries remain GTC because the adapter explicitly sends `time_in_force:"gtc"`. The German rules explain immediate matching and possible execution across several book levels, but that does not establish a specific market-order TIF. Sources: [current configuration schema](https://developer.revolut.com/docs/api/revolut-x-crypto-exchange.yml), [German order rules, sections 9–12](https://www.revolut.com/en-DE/legal/crypto-exchange-trading-rules/).
+
 The successful submission body is `{data:{venue_order_id,client_order_id,state}}`; an acknowledgment is not an execution. Order states are `pending_new`, `new`, `partially_filled`, `filled`, `cancelled`, `rejected`, `replaced`. Read details report `filled_quantity`, `filled_amount`, `average_fill_price`, and optional `total_fee`/`fee_currency`. Quantity can be absent for some buy-TWAP orders. Partial fills remain real after cancellation. Source: [create and order schemas](https://developer.revolut.com/docs/api/revolut-x-crypto-exchange.yml).
 
 Other documented mutations, deliberately absent from this adapter: `PUT /api/1.0/orders/{venueOrderId}` replaces an order and changes the venue ID; `DELETE /api/1.0/orders/{venueOrderId}` cancels one; `DELETE /api/1.0/orders` cancels all. These are consequential actions and are not connection tests.
@@ -228,6 +230,22 @@ Vercel ordinary egress is not a stable broker allowlist. [Static IPs](https://ve
 Function invocations are finite: current Fluid limits are 300 seconds on Hobby and normally up to 800 seconds on Pro/Enterprise, with a documented extended beta under conditions. This does not provide an always-running brokerage session on the user's computer. Do not claim that a hosted route maintains Gateway indefinitely. Vercel now documents WebSocket features in beta, so the obsolete blanket statement that it has no WebSocket support should not guide architecture. Sources: [function limitations](https://vercel.com/docs/functions/limitations), [Gateway machine constraint](https://www.interactivebrokers.com/docs/web-api/authentication/cpgw/limitations-of-the-client-portal-gateway).
 
 ## Verification performed and remaining checks
+
+### Scripted partial-fill accounting audit and fix
+
+The isolated simulator previously deducted only the filled quantity and set `available=total` while leaving the order `PARTIALLY_FILLED`. That made its unfilled commitment spendable again. This has been fixed in `services.ts`: partial buys reserve the remaining quote amount plus the modeled 0.09% fee; partial sells reserve the remaining base quantity. The balance lock protects settlement, and settlement independently rejects any new order that would consume existing reservations. Dashboard and trading-context balances expose `reserved`, `total`, and `available=total-reserved`.
+
+The deterministic reproduction uses **artificial** prices, no broker/network calls, and an in-memory database:
+
+1. Start with virtual EUR 10,000 and zero BTC. Submit the scripted partial scenario for a limit buy of 90 BTC at the fixture price EUR 100.
+2. The script fills 45 BTC: EUR 4,500 notional plus EUR 4.05 fee. The remaining total cash is EUR 5,495.95.
+3. The unfilled 45 BTC requires EUR 4,504.05 reserved, including the modeled remaining fee. Spendable cash is therefore **EUR 991.90**, not EUR 5,495.95.
+4. A second full buy of 40 BTC would require EUR 4,003.60. Previously it could consume the first order's commitment; now both validation and transactional settlement reject it.
+5. For a partial sell of 90 BTC starting with 100 BTC, 45 BTC fills, 45 BTC remains reserved, and only 10 of the remaining 55 BTC is available to sell.
+
+`tests/simulation.test.ts` runs these scenarios against the actual simulation service with cached artificial market fixtures and a hard network prohibition. It also checks cumulative reservations, repeated-order idempotency, full-fill balances and reconstruction of reservations for older stored partial orders. Reconstruction retains actual totals; it does not invent cash or reset a legacy portfolio. If old activity already overcommitted funds, available funds may become negative, visibly blocking further spending rather than concealing the deficit.
+
+This remains a **scripted order-state simulator**, not a live matching-engine model: choosing the partial scenario assigns a half fill, including for an unmarketable limit, and the remainder stays reserved without automatic later execution or cancellation. The script does not validate live fill probability, slippage, liquidity, or strategy returns. A future simulator with lifecycle transitions must release or consume the stored reservation atomically with each cancellation/fill.
 
 - TypeScript passed after the adapter was added.
 - An in-memory, unregistered Ed25519 test key verified a mocked GET signature and balance normalization. No live key or real account was used.

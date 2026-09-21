@@ -2,7 +2,7 @@ import 'server-only';
 import { createHash } from 'node:crypto';
 import Decimal from 'decimal.js';
 import { z } from 'zod';
-import { query, transaction } from './db';
+import { query, transaction, type SqlExecutor } from './db';
 import { encryptSecret, decryptSecret } from './secrets';
 import { AppError, fail } from './errors';
 import { getPublicInstruments, getPublicMarket, RevolutXClient, BrokerApiError, type RevolutMarket, type RevolutInstrument, type RevolutOrder } from './brokers/revolut';
@@ -91,24 +91,48 @@ export async function dashboard(mode='live'){
  const events=(await query('SELECT event,created_at FROM audit_events ORDER BY id DESC LIMIT 15')).rows;
  return {accounts:[revolut,emptyAccount('ibkr','Interactive Brokers','لم يُثبت وجود حساب أو تفويض API. يحتاج الحساب الفردي بوابة مستمرة وجلسة دخول واشتراكات بيانات بحسب المنتج.')],liveEnabled:!isPreview()&&await setting('live_enabled',false),watchlist,audit:events,unresolved,serverTime:new Date().toISOString(),mode:'live'};
 }
-async function simulationBalances(){return setting<{currency:string;available:string;total:string}[]>('simulation:balances',[{currency:'EUR',available:'10000',total:'10000'}]);}
+type SimulationBalance={currency:string;available:string;total:string;reserved:string};
+// Rebuild reservations from the durable scripted orders, including older
+// partial-fill fixtures created before reservation accounting was introduced.
+async function lockedSimulationBalances(tx:SqlExecutor):Promise<SimulationBalance[]>{
+ await tx.query("INSERT INTO app_settings(key,value) VALUES('simulation:balances',$1) ON CONFLICT DO NOTHING",[JSON.stringify([{currency:'EUR',available:'10000',total:'10000',reserved:'0'}])]);
+ const stored=(await tx.query<{value:{currency:string;total:string}[]}>("SELECT value FROM app_settings WHERE key='simulation:balances' FOR UPDATE")).rows[0].value;
+ const orders=(await tx.query<{value:NormalOrder}>("SELECT value FROM app_settings WHERE key LIKE 'simulation:order:%'")).rows.map(r=>r.value);
+ const reserved=new Map<string,Decimal>();
+ for(const order of orders){
+  if(order.status!=='PARTIALLY_FILLED')continue;
+  if(order.quantity===null||!order.price)throw new AppError('SIMULATION_LEDGER_INVALID',409,'تعذر حساب الجزء المحجوز لأمر المحاكاة.');
+  const remaining=new Decimal(order.quantity).sub(order.filledQuantity);
+  if(remaining.lt(0))throw new AppError('SIMULATION_LEDGER_INVALID',409,'كمية التنفيذ في المحاكاة غير متسقة.');
+  const [base,quote]=order.symbol.split('-'),currency=order.side==='buy'?quote:base;
+  const amount=order.side==='buy'?remaining.mul(order.price).mul('1.0009'):remaining;
+  reserved.set(currency,(reserved.get(currency)??new Decimal(0)).add(amount));
+ }
+ for(const currency of reserved.keys())if(!stored.some(b=>b.currency===currency))stored.push({currency,total:'0'});
+ return stored.map(b=>{const held=reserved.get(b.currency)??new Decimal(0);return {currency:b.currency,total:b.total,reserved:held.toString(),available:new Decimal(b.total).sub(held).toString()};});
+}
+async function simulationBalances(){return transaction(lockedSimulationBalances);}
 function simulationOrder(draft:Draft,id:string,price:string,status:string):NormalOrder{return {id,clientOrderId:id,symbol:draft.symbol,side:draft.side,type:draft.type,quantity:draft.quantity,filledQuantity:status==='FILLED'?draft.quantity:status==='PARTIALLY_FILLED'?new Decimal(draft.quantity).div(2).toString():'0',status,price,createdAt:new Date().toISOString(),mode:'simulation'};}
 async function settleSimulation(draft:Draft,id:string,status:string){
  const m=await market(draft.symbol,15);const price=draft.type==='limit'?draft.limitPrice!:String(draft.side==='buy'?m.quote.ask:m.quote.bid);
  return transaction(async tx=>{
+  const balances=await lockedSimulationBalances(tx);
   const key=`simulation:order:${id}`;
   const old=(await tx.query<{value:NormalOrder}>('SELECT value FROM app_settings WHERE key=$1',[key])).rows[0]?.value;if(old)return old;
-  await tx.query("INSERT INTO app_settings(key,value) VALUES('simulation:balances',$1) ON CONFLICT DO NOTHING",[JSON.stringify([{currency:'EUR',available:'10000',total:'10000'}])]);
-  const balances=(await tx.query<{value:{currency:string;available:string;total:string}[]}>("SELECT value FROM app_settings WHERE key='simulation:balances' FOR UPDATE")).rows[0].value;
   const order=simulationOrder(draft,id,price,status);
   const qty=new Decimal(order.filledQuantity),amount=qty.mul(price),fee=amount.mul('.0009');
   if(qty.gt(0)){
    const [base,quote]=draft.symbol.split('-');
-   for(const currency of [base,quote])if(!balances.some(b=>b.currency===currency))balances.push({currency,available:'0',total:'0'});
+   for(const currency of [base,quote])if(!balances.some(b=>b.currency===currency))balances.push({currency,available:'0',total:'0',reserved:'0'});
    const baseBalance=balances.find(b=>b.currency===base)!,quoteBalance=balances.find(b=>b.currency===quote)!;
    const b=new Decimal(baseBalance.total).add(draft.side==='buy'?qty:qty.negated()),q=new Decimal(quoteBalance.total).add(draft.side==='buy'?amount.add(fee).negated():amount.sub(fee));
-   if(b.lt(0)||q.lt(0))throw new AppError('BROKER_REJECTED',400,'رصيد المحاكاة غير كافٍ.');
-   baseBalance.total=baseBalance.available=b.toString();quoteBalance.total=quoteBalance.available=q.toString();order.fee=fee.toString();order.feeCurrency=quote;
+   const remainder=status==='PARTIALLY_FILLED'?new Decimal(draft.quantity).sub(qty):new Decimal(0);
+   const baseReserved=new Decimal(baseBalance.reserved).add(draft.side==='sell'?remainder:0);
+   const quoteReserved=new Decimal(quoteBalance.reserved).add(draft.side==='buy'?remainder.mul(price).mul('1.0009'):0);
+   const baseAvailable=b.sub(baseReserved),quoteAvailable=q.sub(quoteReserved);
+   if(b.lt(0)||q.lt(0)||baseAvailable.lt(0)||quoteAvailable.lt(0))throw new AppError('BROKER_REJECTED',400,'رصيد المحاكاة المتاح غير كافٍ بعد حجز الأوامر المفتوحة.');
+   baseBalance.total=b.toString();baseBalance.reserved=baseReserved.toString();baseBalance.available=baseAvailable.toString();
+   quoteBalance.total=q.toString();quoteBalance.reserved=quoteReserved.toString();quoteBalance.available=quoteAvailable.toString();order.fee=fee.toString();order.feeCurrency=quote;
   }
   await tx.query("UPDATE app_settings SET value=$1,updated_at=NOW() WHERE key='simulation:balances'",[JSON.stringify(balances)]);
   await tx.query('INSERT INTO app_settings(key,value) VALUES($1,$2)',[key,JSON.stringify(order)]);
