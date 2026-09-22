@@ -48,3 +48,14 @@ The root agent verified the published login on desktop and at **390 × 844** mob
 No authenticated cloud database session or private broker connection has been verified. No Revolut X private API key or Interactive Brokers API session was available for a verified account read. Public market-data checks are separate from account authentication and do not demonstrate broker-account access.
 
 **No real trade, live cancellation, transfer, or financial test transaction was performed.** Live submission remains locked until the owner completes secure configuration and explicitly activates it inside the application.
+
+## Supabase deployment checkpoint — 22 September 2026, 17:13 UTC
+
+- User-entered DATABASE_URL saved as a Production Secret; hash and encryption key already saved as Production-only Secrets.
+- Diagnosed and fixed SELF_SIGNED_CERT_IN_CHAIN using the official public Supabase CA, keeping certificate and hostname validation enabled. Credential-free TLSv1.3 probe passed.
+- 68 tests and TypeScript passed; Vercel deployment Fag56Lo1F4oEh5uetTEnJLEbYG87 succeeded at source d9b167ecf9fcf1056d5cd49e17d331d818e61a82.
+- Deployed login reached PostgreSQL authentication but received 28P01. Correct database credentials are still required. No authenticated cloud session or durable writes verified.
+- Anonymous HTTPS protection, fresh nonce CSP and Secure/HttpOnly/SameSite login-CSRF cookie rechecked successfully at 17:13:35 UTC. No real brokerage actions.
+
+At 17:16 UTC, the owner's second saved DATABASE_URL was redeployed, but login still reported 28P01. Added optional raw DATABASE_PASSWORD override, with a regression covering @, :, #, %, spaces, slash, plus and Unicode; 69 tests and TypeScript pass. Owner entry and deployed authenticated verification remain pending.
+
