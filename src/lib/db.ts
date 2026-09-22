@@ -1,5 +1,6 @@
 import { Pool, type PoolConfig } from "pg";
 import { PGlite } from "@electric-sql/pglite";
+import { supabaseCa } from "./supabase-ca";
 
 export interface QueryResult<T> { rows: T[]; rowCount: number }
 export interface SqlExecutor {
@@ -33,7 +34,8 @@ export function postgresPoolConfiguration(connectionString: string): PoolConfig 
   for (const key of [...url.searchParams.keys()]) {
     if (key.startsWith("ssl") || key === "uselibpqcompat") url.searchParams.delete(key);
   }
-  return { connectionString: url.toString(), ssl: { rejectUnauthorized: true }, max: 2,
+  const isSupabase = url.hostname.endsWith(".pooler.supabase.com") || /^db\.[a-z0-9]+\.supabase\.co$/.test(url.hostname);
+  return { connectionString: url.toString(), ssl: { rejectUnauthorized: true, ...(isSupabase ? { ca: supabaseCa } : {}) }, max: 2,
     idleTimeoutMillis: 10_000, connectionTimeoutMillis: 10_000,
     statement_timeout: 20_000, idle_in_transaction_session_timeout: 25_000 };
 }
