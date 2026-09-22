@@ -1,12 +1,12 @@
 # مرصاد | Mirsad
 
-**Storage update:** the owner selected Supabase. The server now uses standard TLS PostgreSQL (`pg`), and private application tables enforce RLS and deny Supabase API-role access. 66 isolated tests and the production build passed. Supabase project creation and server secrets are still pending owner input; see [the prepared setup](docs/SUPABASE.md). Older references to pending Neon acceptance are superseded.
+**Production storage verified:** Supabase is connected. Cloud login/logout, durable simulation, private API protection and table RLS were verified on 22 September 2026. 69 isolated tests pass. Private brokerage accounts are still not connected.
 
-A private Arabic RTL workspace for **manual** market monitoring and trading decisions. The application is implemented, builds successfully, and has been verified locally. It is **not yet a connected production brokerage application**: durable production storage and server environment setup remain blocked, and no private broker API account has been verified. Real-order submission remains locked.
+A private Arabic RTL workspace for **manual** market monitoring and trading decisions. The application is deployed and usable for authenticated public-market monitoring and isolated simulation. Supabase storage is verified; no private broker API account has been connected or verified. Real-order submission remains locked.
 
 - Private repository: [Exxd00/mirsad-trading](https://github.com/Exxd00/mirsad-trading).
-- Published site: [mirsad-trading.vercel.app](https://mirsad-trading.vercel.app), project `mirsad-trading` in the actual browser-accessible `ixa1` team. Initial deployment exists, but login/account functionality is not yet usable because production database and server secrets remain unconfigured.
-- Recoverable source checkpoint: `bf7060671d53fb8397f55a3934ce44349ff7d826`. Later work may be ahead of that checkpoint; inspect Git before continuing.
+- Published site: [mirsad-trading.vercel.app](https://mirsad-trading.vercel.app), project `mirsad-trading` in the actual browser-accessible `ixa1` team. Production login, storage and public-market views are operational; private broker balances require account connection.
+- Recoverable source checkpoint: `35cf64540b9141a0271da60bb80f5430ad2f6c51`. Later work may be ahead of that checkpoint; inspect Git before continuing.
 
 ## What is implemented
 
@@ -38,13 +38,13 @@ pnpm typecheck
 pnpm build
 ```
 
-The verified checkpoint passed 64 automated tests, TypeScript checking, and a production build. Local browser checks covered desktop 1920×850 and mobile 390×844 without horizontal overflow. One local UI buy of 0.0001 BTC was executed **only in the isolated simulator**, with its virtual ledger updated. No real order, cancellation, modification, or transfer was used for verification.
+The verified checkpoint passed 69 automated tests, TypeScript checking, and a production build. Local browser checks covered desktop 1920×850 and mobile 390×844 without horizontal overflow. One local UI buy of 0.0001 BTC was executed **only in the isolated simulator**, with its virtual ledger updated. No real order, cancellation, modification, or transfer was used for verification.
 
 ## Deploy and connect
 
-Use the existing private repository and the existing Vercel project; do not create duplicates or modify unrelated projects. Complete durable free Postgres provisioning only after the user accepts the pending Neon technical terms. No database was created or purchased at the documented checkpoint. Then securely configure production variables, set the exact deployed origin, redeploy, and verify authentication and direct API protection on the actual deployed URL. A successful build alone does not establish production readiness.
+Use the existing private repository, Vercel project and Supabase project rqxxhpberxhpadgynrnw. Production storage and required server secrets are configured and verified. Preserve their values; do not provision duplicates or modify unrelated resources.
 
-The browser extension currently blocks environment-file upload until the user enables its **Allow access to file URLs** setting. The CLI device authentication attempt expired; it is not an authenticated deployment path. Prefer completing the already prepared browser workflow. Do not upload a development environment unchanged: production needs the production origin and durable database connection, without a local database fallback. Preview deployments require independent storage/secrets; broker access and live submission are additionally blocked in preview by the application.
+Browser environment-file upload works. Vercel CLI is installed but unauthenticated; the browser deployment workflow works. Keep production secrets in Vercel, use the exact deployed origin, and keep preview storage/secrets independent. Private broker access and live sending are additionally blocked in preview.
 
 After the server is ready, the user can register an Ed25519 public key in their existing Revolut X account and enter the corresponding API key and private PEM through the authenticated site settings. Never send private keys through chat. Saving credentials performs reads only. A successful balances read verifies reading, not trading scope; trading scope is explicitly declared by the user and is not execution-tested. Keep live sending disabled until the user chooses to activate it. If their key requires an IP allowlist, resolve actual deployment egress first; no static-IP service has been purchased.
 
@@ -55,6 +55,7 @@ Passwords use salted scrypt hashes. Session tokens are random, stored hashed, an
 | Environment variable | Purpose |
 |---|---|
 | `DATABASE_URL` | Durable production Postgres connection; server only |
+| `DATABASE_PASSWORD` | Optional raw server-only password override; avoids manual URI encoding |
 | `INITIAL_PASSWORD_HASH` | Initial salted password hash; never plaintext |
 | `ENCRYPTION_KEY` | Server encryption/signing secret |
 | `APP_ORIGIN` | Exact allowed site origin |
@@ -69,3 +70,4 @@ No secret values belong in this repository, client bundle, screenshots, logs, or
 [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) is the single requirements/dependencies ledger. [HANDOFF.md](HANDOFF.md) records the exact continuation point and pending user-only steps. [docs/BROKERS.md](docs/BROKERS.md) contains official API references, supported contracts, jurisdiction and session constraints, and test limitations.
 
 Monitoring runs through polling while the app is open. There is no background trading bot, ongoing unattended execution, or newly enabled automation. The previous conversation heartbeat remains paused.
+
