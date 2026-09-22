@@ -59,3 +59,19 @@ No authenticated cloud database session or private broker connection has been ve
 
 At 17:16 UTC, the owner's second saved DATABASE_URL was redeployed, but login still reported 28P01. Added optional raw DATABASE_PASSWORD override, with a regression covering @, :, #, %, spaces, slash, plus and Unicode; 69 tests and TypeScript pass. Owner entry and deployed authenticated verification remain pending.
 
+## Production acceptance — 22 September 2026, 17:39–17:43 UTC
+
+The prior TLS/authentication blockers are RESOLVED after the owner saved raw DATABASE_PASSWORD and deployment J18hWSLGpyJubQo4wu8nsNnfDuFk completed. Website login succeeds and actual Supabase schema/session/storage operations work.
+
+- Authenticated desktop 1920x850 and mobile 390x844 visually verified; mobile scroll width 375 <= viewport 390. No horizontal overflow. PWA installation control is offered, not installation-tested.
+- Live dashboard has 0/2 brokers connected, blank real balances and live sending OFF. Official public Revolut X ticker/book/64 displayed candles updated with timestamps. Private broker access is NOT established.
+- Virtual order 93de2376-572e-481c-bf76-8965da01e450 bought 0.0001 BTC in /simulation only. Fill and 9992.43 EUR virtual balance survived reload and logout/new login.
+- Virtual order 0f8d2650-90d4-4a36-8307-07528c759acc used scripted UNKNOWN outcome. UI reconciliation returned FILLED with the same intent ID; exactly two virtual orders are displayed, no blind resubmission.
+- Logout redirects to login. A subsequent direct /simulation navigation also redirects. New login succeeds. Real view remains separated from virtual balances/orders.
+- Metadata-only production SQL query: app_owner, app_sessions, app_settings, audit_events, auth_rate_limits, broker_credentials, order_intents all RLS=true; anon/authenticated/service_role SELECT privilege=false for every table.
+- Anonymous deployment checker passed at 17:40:29 UTC: private page redirects, private API 401/no-store, empty unauthenticated confirm rejected, nonce CSP and Secure/HttpOnly/SameSite login-CSRF cookie verified.
+- Known-secret scan: 57 source files and 8 public login script assets, zero matches for stored initial hash/encryption key. Not an exhaustive security audit.
+- 69 isolated tests and TypeScript previously passed; actual Vercel build passed. Partial-fill/duplicate/stale/session/ownership tests are isolated automated tests, not real broker trials.
+
+No real financial trade, cancellation, transfer, paid subscription or brokerage account opening occurred. Private Revolut X and IBKR connection remain incomplete.
+
