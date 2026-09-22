@@ -32,8 +32,8 @@ function validateContext(d:Draft,c:TradingContext,sessionId?:string){
  validateIdentity(d,c,sessionId);
  if(d.mode==='simulation'&&d.accountId!=='simulation'||d.mode==='live'&&d.accountId!=='revolut-x')fail('ACCOUNT_MISMATCH',400,'الحساب لا يطابق بيئة الأمر.');
  if(d.mode==='live'){
-  if(process.env.VERCEL_ENV&&process.env.VERCEL_ENV!=='production')fail('PREVIEW_LOCKED',403,'الإرسال الحقيقي غير متاح في نسخ المعاينة.');
-  if(!c.liveEnabled)fail('LIVE_LOCKED',403,'إرسال الأوامر الحقيقية مقفول.');
+  if(process.env.VERCEL_ENV&&process.env.VERCEL_ENV!=='production')fail('PREVIEW_LOCKED',403,'إرسال الأوامر غير متاح في نسخ المعاينة.');
+  if(!c.liveEnabled)fail('LIVE_LOCKED',403,'إرسال أوامر الوسيط مقفول.');
   if(!c.readVerified||!c.tradeAcknowledged||!c.regionConfirmed)fail('PERMISSIONS_REQUIRED',403,'يجب التحقق من الربط ونطاق المفتاح والمنطقة أولاً.');
  }
  if(c.instrument.symbol!==d.symbol||!['active','tradable','online'].includes(c.instrument.status))fail('INSTRUMENT_UNAVAILABLE',400,'الأداة غير متاحة للتداول.');
@@ -131,3 +131,4 @@ export async function reconcileOrder(id:string,sessionId:string,port:TradingPort
  return {intentId:id,state:intent.state,order:intent.response,message:'لم يُعثر على نتيجة مؤكدة بعد. لا تعِد إرسال الأمر؛ تحقق من منصة الوسيط.'};
 }
 export { validateContext };
+
