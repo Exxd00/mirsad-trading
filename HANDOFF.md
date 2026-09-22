@@ -52,3 +52,7 @@ Latest implementation e6b17387f01e70ea45e2770845db452065651537 uses neutral Arab
 
 The prepared Revolut form was changed, WITHOUT saving, to `Mirsad - manual trading`: Primary account, Spot view and Spot trade checked; MCP/CLI unchecked; no expiry or IP restriction. This supersedes the earlier read-only draft. A fresh action-time confirmation for issuance plus encrypted cloud storage was requested, and no approval has yet arrived. Do not submit until that confirmation arrives. No broker credential has been issued or connected. Site sending remains OFF.
 
+## Single workspace request
+
+User explicitly requested one broker workspace, no visible simulation area and no additional spending. Removed simulation navigation on desktop/mobile and changed authenticated /simulation to redirect to /. Anonymous access still redirects to login. Historical simulation records and isolated test infrastructure remain preserved. This is a UI removal, not deletion of stored data. TypeScript passed. No purchases, subscription changes or actual financial actions were made. User wants connection restored at login; existing encrypted credential persistence supports this once registration is approved and verified. Do not promise uninterrupted 24-hour service on free plans or assume expired broker sessions can bypass renewed authentication. The prepared trade-key grant is still awaiting explicit action-time confirmation.
+
