@@ -12,6 +12,14 @@ beforeAll(async () => {
 afterAll(async () => { await closeDatabase(); vi.unstubAllEnvs(); });
 
 describe("durable SQL boundary", () => {
+  it("encodes a raw password override exactly once without changing database identity", () => {
+    const password = "test-only @:#% /+ Unicode-ä";
+    const config = postgresPoolConfiguration("postgresql://postgres.project:old@aws-0-eu-central-1.pooler.supabase.com:6543/postgres", password);
+    const url = new URL(config.connectionString!);
+    expect(decodeURIComponent(url.password)).toBe(password);
+    expect(url.username).toBe("postgres.project");
+    expect(url.hostname).toBe("aws-0-eu-central-1.pooler.supabase.com");
+  });
   it("trusts the official Supabase CA only for Supabase database hosts while retaining hostname verification", () => {
     const tls = postgresPoolConfiguration("postgresql://test:fixture@aws-0-eu-central-1.pooler.supabase.com:6543/postgres").ssl as {ca:string;rejectUnauthorized:boolean};
     expect(tls.rejectUnauthorized).toBe(true);
