@@ -26,10 +26,12 @@ export function databaseConfiguration(env: NodeJS.ProcessEnv = process.env) {
 }
 
 /** Standard TLS Postgres works with Supabase's transaction pooler on Vercel. */
-export function postgresPoolConfiguration(connectionString: string): PoolConfig {
+export function postgresPoolConfiguration(connectionString: string, password?: string): PoolConfig {
   let url: URL;
   try { url = new URL(connectionString); } catch { throw new Error("Invalid database connection configuration"); }
   if (!["postgres:", "postgresql:"].includes(url.protocol)) throw new Error("Postgres database URL required");
+  // Optional raw server secret avoids requiring the owner to encode URI symbols.
+  if (password !== undefined) url.password = encodeURIComponent(password);
   // URL SSL options must not silently override certificate verification in pg.
   for (const key of [...url.searchParams.keys()]) {
     if (key.startsWith("ssl") || key === "uselibpqcompat") url.searchParams.delete(key);
@@ -79,7 +81,7 @@ async function createDatabase(): Promise<Database> {
   const config = databaseConfiguration();
   let db: Database;
   if (config.kind === "postgres") {
-    const pool = new Pool(postgresPoolConfiguration(config.location));
+    const pool = new Pool(postgresPoolConfiguration(config.location, process.env.DATABASE_PASSWORD || undefined));
     // Avoid uncaught idle-connection errors; requests receive sanitized failures.
     pool.on("error", () => undefined);
     const executor = (client: Pick<Pool, "query">): SqlExecutor => ({
