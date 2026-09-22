@@ -174,7 +174,7 @@ export async function settings(){
 }
 export async function toggleLive(enabled:boolean){
  if(isPreview()){if(enabled)fail('PREVIEW_LOCKED',403,'إرسال الأوامر محظور في المعاينة.');return {liveEnabled:false};}
- if(enabled){if(isPreview())fail('PREVIEW_LOCKED',403,'إرسال الأوامر محظور في المعاينة.');const c=await credentials();if(!c||!c.metadata.regionConfirmed||!c.metadata.tradePermissionAcknowledged)fail('PERMISSIONS_REQUIRED',409,'تحقق من الحساب ونطاق مفتاح التداول ومنطقة EEA أولاً.');await c.client.getBalances();}
+ if(enabled){if(isPreview())fail('PREVIEW_LOCKED',403,'إرسال الأوامر محظور في المعاينة.');const c=await credentials();if(!c)fail('NOT_CONNECTED',409,'لم يُحفظ ربط Revolut X بعد. احفظ بيانات المفتاح وتحقق من الربط أولاً.');if(!c.metadata.regionConfirmed||!c.metadata.tradePermissionAcknowledged)fail('PERMISSIONS_REQUIRED',409,'الربط محفوظ؛ أكّد منطقة الحساب وصلاحية التداول ضمن بيانات الربط أولاً.');await c.client.getBalances();}
  await setSetting('live_enabled',enabled);await audit(enabled?'live.enabled':'live.disabled');return {liveEnabled:enabled};
 }
 
