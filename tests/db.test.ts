@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { X509Certificate } from "node:crypto";
 import { closeDatabase, databaseConfiguration, databaseFailureCode, ensureSchema, postgresPoolConfiguration, query, transaction } from "../src/lib/db";
 
 beforeAll(async () => {
@@ -11,6 +12,12 @@ beforeAll(async () => {
 afterAll(async () => { await closeDatabase(); vi.unstubAllEnvs(); });
 
 describe("durable SQL boundary", () => {
+  it("trusts the official Supabase CA only for Supabase database hosts while retaining hostname verification", () => {
+    const tls = postgresPoolConfiguration("postgresql://test:fixture@aws-0-eu-central-1.pooler.supabase.com:6543/postgres").ssl as {ca:string;rejectUnauthorized:boolean};
+    expect(tls.rejectUnauthorized).toBe(true);
+    expect(new X509Certificate(tls.ca).subject).toContain("Supabase");
+    expect(postgresPoolConfiguration("postgresql://test:fixture@pooler.supabase.com.attacker.example/db").ssl).toEqual({rejectUnauthorized:true});
+  });
   it("reports only allowlisted operational codes without connection secrets", () => {
     expect(databaseFailureCode({code: "28P01", message: "secret password"})).toBe("28P01");
     expect(databaseFailureCode({code: "secret password", message: "postgresql://private"})).toBe("DATABASE_INITIALIZATION_FAILED");
