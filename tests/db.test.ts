@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { closeDatabase, databaseConfiguration, ensureSchema, query, transaction } from "../src/lib/db";
+import { closeDatabase, databaseConfiguration, ensureSchema, postgresPoolConfiguration, query, transaction } from "../src/lib/db";
 
 beforeAll(async () => {
   vi.stubEnv("NODE_ENV", "test"); vi.stubEnv("VERCEL", ""); vi.stubEnv("DATABASE_URL", ""); vi.stubEnv("LOCAL_DATABASE_PATH", "memory://");
@@ -11,6 +11,32 @@ beforeAll(async () => {
 afterAll(async () => { await closeDatabase(); vi.unstubAllEnvs(); });
 
 describe("durable SQL boundary", () => {
+  it("uses standard Postgres with verified TLS even when URL options request weaker SSL", () => {
+    const configuration = postgresPoolConfiguration("postgresql://test:fixture@pooler.example:6543/postgres?sslmode=disable&sslrootcert=untrusted&uselibpqcompat=true");
+    expect(configuration.ssl).toEqual({ rejectUnauthorized: true });
+    expect(configuration.connectionString).not.toContain("sslmode");
+    expect(configuration.connectionString).not.toContain("sslrootcert");
+    expect(configuration.max).toBe(2);
+    expect(() => postgresPoolConfiguration("https://example.test")).toThrow("Postgres");
+    expect(databaseConfiguration({ NODE_ENV: "production", DATABASE_URL: "postgresql://test:fixture@pooler.example/db" }).kind).toBe("postgres");
+  });
+  it("blocks API-style roles from private tables even if table grants are accidentally added", async () => {
+    const protection = await query<{ relname: string; relrowsecurity: boolean }>("SELECT relname,relrowsecurity FROM pg_class WHERE relnamespace='public'::regnamespace AND relname IN ('app_owner','app_sessions','auth_rate_limits','app_settings','broker_credentials','order_intents','audit_events')");
+    expect(protection.rows).toHaveLength(7);
+    expect(protection.rows.every(row => row.relrowsecurity)).toBe(true);
+    await query("CREATE ROLE mirsad_api_test NOLOGIN");
+    await query("GRANT SELECT ON app_owner TO mirsad_api_test");
+    await query("INSERT INTO app_owner(id,password_hash) VALUES(1,'fixture-not-a-real-hash')");
+    const read = await transaction(async tx => {
+      await tx.query("SET LOCAL ROLE mirsad_api_test");
+      return tx.query("SELECT * FROM app_owner");
+    });
+    expect(read.rows).toEqual([]);
+    await expect(transaction(async tx => {
+      await tx.query("SET LOCAL ROLE mirsad_api_test");
+      await tx.query("SELECT * FROM broker_credentials");
+    })).rejects.toThrow(/permission denied/i);
+  });
   it("never falls back to temporary storage in production or Vercel previews", () => {
     expect(() => databaseConfiguration({ NODE_ENV: "production", LOCAL_DATABASE_PATH: "./local-db" })).toThrow("DATABASE_URL");
     expect(() => databaseConfiguration({ NODE_ENV: "development", VERCEL: "1", LOCAL_DATABASE_PATH: "memory://" })).toThrow("DATABASE_URL");

@@ -1,5 +1,9 @@
 # Continuation checkpoint — Mirsad / مرصاد
 
+## Current continuation: Supabase selected (22 September, evening)
+
+The owner has selected Supabase; the older Neon setup steps below are superseded by [docs/SUPABASE.md](docs/SUPABASE.md). Standard TLS `pg` support and table RLS/API-role restrictions are implemented, with **66 tests and the production build passing**. Existing Supabase login/Free organization verified. A new independent `mirsad-trading` form is configured for Frankfurt, Data API off and automatic RLS on. Await the owner's new database-password entry and Create new project submission; no Supabase database connection has been established. Chrome file upload was retried and is still blocked by the extension's file-URL permission. A user input request is pending for the credential handoff. Preserve the prepared form and do not touch older projects or create a new organization.
+
 Updated 2026-09-22, Europe/Berlin. Read [the consolidated requirements ledger](docs/REQUIREMENTS.md) before changing scope. This is an implemented application with local verification, **not yet a verified connected production trading service**.
 
 ## Saved work and deployment identity

@@ -1,4 +1,4 @@
-import { Pool } from "@neondatabase/serverless";
+import { Pool, type PoolConfig } from "pg";
 import { PGlite } from "@electric-sql/pglite";
 
 export interface QueryResult<T> { rows: T[]; rowCount: number }
@@ -8,12 +8,12 @@ export interface SqlExecutor {
 export interface Database extends SqlExecutor {
   transaction<T>(fn: (tx: SqlExecutor) => Promise<T>): Promise<T>;
   close(): Promise<void>;
-  kind: "neon" | "pglite";
+  kind: "postgres" | "pglite";
 }
 
 /** No temporary/in-memory database is permitted in a deployed application. */
 export function databaseConfiguration(env: NodeJS.ProcessEnv = process.env) {
-  if (env.DATABASE_URL) return { kind: "neon" as const, location: env.DATABASE_URL };
+  if (env.DATABASE_URL) return { kind: "postgres" as const, location: env.DATABASE_URL };
   if (env.VERCEL || env.NODE_ENV === "production") {
     throw new Error("DATABASE_URL is required for deployed storage");
   }
@@ -24,6 +24,21 @@ export function databaseConfiguration(env: NodeJS.ProcessEnv = process.env) {
   return { kind: "pglite" as const, location: env.LOCAL_DATABASE_PATH };
 }
 
+/** Standard TLS Postgres works with Supabase's transaction pooler on Vercel. */
+export function postgresPoolConfiguration(connectionString: string): PoolConfig {
+  let url: URL;
+  try { url = new URL(connectionString); } catch { throw new Error("Invalid database connection configuration"); }
+  if (!["postgres:", "postgresql:"].includes(url.protocol)) throw new Error("Postgres database URL required");
+  // URL SSL options must not silently override certificate verification in pg.
+  for (const key of [...url.searchParams.keys()]) {
+    if (key.startsWith("ssl") || key === "uselibpqcompat") url.searchParams.delete(key);
+  }
+  return { connectionString: url.toString(), ssl: { rejectUnauthorized: true }, max: 2,
+    idleTimeoutMillis: 10_000, connectionTimeoutMillis: 10_000,
+    statement_timeout: 20_000, idle_in_transaction_session_timeout: 25_000 };
+}
+
+const privateTables = ["app_owner", "app_sessions", "auth_rate_limits", "app_settings", "broker_credentials", "order_intents", "audit_events"];
 const schema = [
   `CREATE TABLE IF NOT EXISTS app_owner (
     id INTEGER PRIMARY KEY CHECK (id = 1), password_hash TEXT NOT NULL,
@@ -61,8 +76,10 @@ const schema = [
 async function createDatabase(): Promise<Database> {
   const config = databaseConfiguration();
   let db: Database;
-  if (config.kind === "neon") {
-    const pool = new Pool({ connectionString: config.location, max: 4, idleTimeoutMillis: 10_000, connectionTimeoutMillis: 10_000 });
+  if (config.kind === "postgres") {
+    const pool = new Pool(postgresPoolConfiguration(config.location));
+    // Avoid uncaught idle-connection errors; requests receive sanitized failures.
+    pool.on("error", () => undefined);
     const executor = (client: Pick<Pool, "query">): SqlExecutor => ({
       async query<T>(sql: string, params: unknown[] = []) {
         const result = await client.query(sql, params);
@@ -70,7 +87,7 @@ async function createDatabase(): Promise<Database> {
       },
     });
     db = {
-      kind: "neon", ...executor(pool),
+      kind: "postgres", ...executor(pool),
       async transaction<T>(fn: (tx: SqlExecutor) => Promise<T>) {
         const client = await pool.connect();
         try {
@@ -104,8 +121,19 @@ async function createDatabase(): Promise<Database> {
   try {
     await db.transaction(async (tx) => {
       // Serialize schema bootstrap between independent Vercel cold starts.
-      if (db.kind === "neon") await tx.query("SELECT pg_advisory_xact_lock(837294651)");
+      if (db.kind === "postgres") await tx.query("SELECT pg_advisory_xact_lock(837294651)");
       for (const sql of schema) await tx.query(sql);
+      // Supabase's Data API must not provide an alternative path around app auth.
+      // The server connects as the table owner; API roles get no grants/policies.
+      for (const table of privateTables) {
+        await tx.query(`ALTER TABLE public.${table} ENABLE ROW LEVEL SECURITY`);
+        await tx.query(`REVOKE ALL ON TABLE public.${table} FROM PUBLIC`);
+        await tx.query(`DO $block$ DECLARE role_name text; BEGIN
+          FOR role_name IN SELECT rolname FROM pg_roles WHERE rolname IN ('anon','authenticated','service_role') LOOP
+            EXECUTE format('REVOKE ALL ON TABLE public.${table} FROM %I', role_name);
+          END LOOP; END $block$`);
+      }
+      await tx.query("REVOKE ALL ON SEQUENCE public.audit_events_id_seq FROM PUBLIC");
     });
     return db;
   } catch (error) { await db.close(); throw error; }

@@ -1,5 +1,7 @@
 # مرصاد | Mirsad
 
+**Storage update:** the owner selected Supabase. The server now uses standard TLS PostgreSQL (`pg`), and private application tables enforce RLS and deny Supabase API-role access. 66 isolated tests and the production build passed. Supabase project creation and server secrets are still pending owner input; see [the prepared setup](docs/SUPABASE.md). Older references to pending Neon acceptance are superseded.
+
 A private Arabic RTL workspace for **manual** market monitoring and trading decisions. The application is implemented, builds successfully, and has been verified locally. It is **not yet a connected production brokerage application**: durable production storage and server environment setup remain blocked, and no private broker API account has been verified. Real-order submission remains locked.
 
 - Private repository: [Exxd00/mirsad-trading](https://github.com/Exxd00/mirsad-trading).

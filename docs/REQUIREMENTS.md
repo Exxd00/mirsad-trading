@@ -1,5 +1,7 @@
 # Mirsad — consolidated requirements and dependencies ledger
 
+**Latest storage decision (22 September, evening): Supabase replaces Neon.** R05 now depends on the owner completing the prepared Supabase project's database credential/submission and secure Vercel configuration, not Neon acceptance. Standard `pg` with certificate verification, table RLS and revoked public/API-role grants is implemented; **66 tests and production build passed**. Existing free organization verified, new form prepared for Frankfurt; resource creation and actual database connection remain unverified. See [SUPABASE.md](SUPABASE.md) for the exact continuation workflow. Existing older projects were left unchanged.
+
 Updated 2026-09-22, Europe/Berlin. **This is the single requirements ledger.** Status terms: **implemented** means code exists; **locally verified** means local/test evidence exists; **externally blocked** means deployment, credentials, account approval, or user action is still required. None of these labels by itself means a live account is connected or real trading is verified.
 
 | ID | Consolidated requirement | Implementation / evidence | Remaining dependency and status |
