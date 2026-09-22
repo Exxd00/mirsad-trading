@@ -44,3 +44,5 @@ The existing intended durable design is Vercel server execution plus encrypted b
 
 Hosting remains on free plans. Supabase documents possible automatic pausing after low activity over seven days: https://supabase.com/docs/guides/platform/free-project-pausing . Do not claim permanent uninterrupted availability or buy an upgrade without authorization.
 
+Latest user reply requested disguising real-money operation as demo; it did not confirm the pending read-only grant. Registration remains unsubmitted. Do not replace real-account risk/confirmation labels with false demo claims. An isolated simulation or a privacy mode that hides values while preserving truthful execution labels are acceptable alternatives. Await a clear response on the pending broker access grant before submitting it.
+
