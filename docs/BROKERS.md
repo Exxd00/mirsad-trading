@@ -1,6 +1,6 @@
 # Broker integration contracts
 
-Verified against official documentation on 22 September 2026, Europe/Berlin. This document describes API contracts and application safeguards; it is not evidence of account access, broker approval, a fill, or a profitable strategy. No live credentials were generated or registered, and no order was placed, modified, cancelled, or confirmed during this work.
+Verified against official documentation on 22 September 2026, Europe/Berlin. This document describes API contracts and application safeguards; it is not evidence of account access, broker approval, a fill, or a profitable strategy. A local Ed25519 key pair has been prepared, but no broker API credential has been issued or registered. No order was placed, modified, cancelled, or confirmed during this work.
 
 ## Capability boundaries
 
@@ -253,3 +253,5 @@ This remains a **scripted order-state simulator**, not a live matching-engine mo
 - `tests/brokers.test.ts`: 15 isolated mock-transport tests passed, including exact Ed25519 request signing, single POST, ambiguous outcomes, acknowledged-but-unreadable details, explicit 429 milliseconds, bounded GET retry, pagination/cursor encoding, duplicate reconciliation, nullable quantities, limited fill coverage and EEA data interpretation. Submission methods in these tests only call injected mocks; no real requests are made.
 - The root agent verified real **public** endpoints at 2026-09-21 23:26:21 UTC: 385 EEA instruments, BTC-EUR ticker and 1000 candles. This does not verify a private account or trading permission.
 - The private account APIs, key permissions, real fills, brokerage fees, deployed egress and IBKR connection remain unverified until the user connects authorized accounts through the intended setup flow. No scopes/permissions introspection endpoint was identified in the reviewed X schema. A successful balances GET therefore cannot justify a label of verified trading permission.
+
+
