@@ -46,3 +46,9 @@ Hosting remains on free plans. Supabase documents possible automatic pausing aft
 
 Latest user reply requested disguising real-money operation as demo; it did not confirm the pending read-only grant. Registration remains unsubmitted. Do not replace real-account risk/confirmation labels with false demo claims. An isolated simulation or a privacy mode that hides values while preserving truthful execution labels are acceptable alternatives. Await a clear response on the pending broker access grant before submitting it.
 
+## Neutral account wording and pending trade scope — 22 September 2026
+
+Latest implementation e6b17387f01e70ea45e2770845db452065651537 uses neutral Arabic broker-account/order-sending labels. It does not label broker execution as simulation. Activation and order confirmation still explicitly explain that sending affects broker balances/positions and may lose funds. All locks, passwords, CSRF and per-order confirmations remain. TypeScript and all 69 tests passed; final follow-up changed only the simulation return-link text. Vercel deployment verification is pending.
+
+The prepared Revolut form was changed, WITHOUT saving, to `Mirsad - manual trading`: Primary account, Spot view and Spot trade checked; MCP/CLI unchecked; no expiry or IP restriction. This supersedes the earlier read-only draft. A fresh action-time confirmation for issuance plus encrypted cloud storage was requested, and no approval has yet arrived. Do not submit until that confirmation arrives. No broker credential has been issued or connected. Site sending remains OFF.
+
