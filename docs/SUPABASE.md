@@ -2,7 +2,7 @@
 
 The owner selected Supabase instead of Neon on 22 September 2026. No Neon resource is needed. The existing signed-in Supabase organization is `roxqtfpwtmiybnbrffcy` on Free. Its three older projects were inspected only; none was changed or resumed.
 
-The new-project form is prepared at https://supabase.com/dashboard/new/roxqtfpwtmiybnbrffcy with name `mirsad-trading`, region **Central EU (Frankfurt)**, Data API **off**, automatic table exposure **off**, and automatic RLS **on**. Creation is not yet confirmed. The owner must complete the database credential field and submission in the browser; no database password is requested in chat.
+The project was created by the owner: https://supabase.com/dashboard/project/rqxxhpberxhpadgynrnw, name mirsad-trading, Free, Central EU (Frankfurt). Data API is confirmed disabled. The initial overview also had a database-process advisor warning despite its Healthy badge; actual connectivity is not yet verified.
 
 ## Application changes
 
@@ -14,11 +14,14 @@ The new-project form is prepared at https://supabase.com/dashboard/new/roxqtfpwt
 
 ## Remaining secure configuration
 
-1. Verify that the owner completed the prepared project creation on the free plan. If Free capacity is exhausted, do not pause/delete an unrelated project or upgrade without specific authorization.
+1. Project creation is verified. Use the existing project rqxxhpberxhpadgynrnw; do not create a duplicate or modify older projects.
 2. Obtain the actual Transaction pooler connection information through Supabase Connect. The owner should enter the database connection secret directly into the production `DATABASE_URL` field in Vercel, or use a secure environment import. Never paste credentials in conversation.
-3. Securely import `INITIAL_PASSWORD_HASH` and `ENCRYPTION_KEY` from the already prepared ignored `.local/vercel-import.env`. `APP_ORIGIN` is already set for the canonical production domain. The current Chrome extension still blocks file upload until its Allow access to file URLs permission is enabled by the owner.
+3. DONE: Chrome file upload works. INITIAL_PASSWORD_HASH and ENCRYPTION_KEY are saved as Secret variables for Production only; APP_ORIGIN is already correct. DATABASE_URL remains the only missing server value: the user has a prepared Vercel edit form and must enter their own password securely and save. The template has not been saved.
 4. Redeploy and verify schema initialization, actual login/logout, persistence and isolated simulation over HTTPS. Read-only account verification still requires separate Revolut X credentials. Keep live trading off throughout setup.
 
 The project has no need for Supabase Auth, Realtime or public client API keys at this stage. Existing application authentication is retained. Free projects may pause after low activity; this is not an always-on guarantee.
 
 Official references: [connection methods](https://supabase.com/docs/guides/database/connecting-to-postgres), [API security](https://supabase.com/docs/guides/api/securing-your-api), [free project pausing](https://supabase.com/docs/guides/platform/free-project-pausing).
+
+Verified transaction pooler: aws-0-eu-central-1.pooler.supabase.com:6543; user postgres.rqxxhpberxhpadgynrnw; database postgres. Password values are intentionally omitted.
+
