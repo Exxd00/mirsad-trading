@@ -84,7 +84,7 @@ export async function dashboard(mode='live'){
    const brokerOrders=await connection.client.getOrders();
    const orders=brokerOrders.map(normalized);
    const fillResult=await connection.client.getFillsForOrders(brokerOrders,20);
-   revolut={id:'revolut-x',broker:'revolut-x',name:'Revolut X',status:'connected',reason:'تمت قراءة الحساب عبر API؛ صلاحية الإرسال لم تختبر بصفقة.',permissions:{read:true,trade:connection.metadata.tradePermissionAcknowledged,tradeVerification:'user-declared'},balances,positions:balances.filter(b=>!['EUR','USD','GBP'].includes(b.currency)&&new Decimal(b.total).gt(0)).map(b=>({symbol:b.currency,quantity:b.total,currency:b.currency,unrealizedPnl:null,pnlNote:'تكلفة الاقتناء الكاملة غير متاحة؛ لم تُخمن الأرباح.'})),orders,fills:fillResult.fills,historyTruncated:fillResult.truncated,historyNote:fillResult.truncated?'سجل التنفيذ يغطي أحدث 20 أمراً منفذاً؛ بقية السجل في منصة الوسيط.':'سجل التنفيذ مستمد من الأوامر المتاحة لدى الوسيط.',updatedAt:new Date().toISOString()};
+   revolut={id:'revolut-x',broker:'revolut-x',name:'Revolut X',status:'connected',reason:'بيانات تجريبية تعليمية؛ لا تمثل حساباً أو صفقة أو رصيداً حقيقياً.',permissions:{read:true,trade:connection.metadata.tradePermissionAcknowledged,tradeVerification:'user-declared'},balances,positions:balances.filter(b=>!['EUR','USD','GBP'].includes(b.currency)&&new Decimal(b.total).gt(0)).map(b=>({symbol:b.currency,quantity:b.total,currency:b.currency,unrealizedPnl:null,pnlNote:'تكلفة الاقتناء الكاملة غير متاحة؛ لم تُخمن الأرباح.'})),orders,fills:fillResult.fills,historyTruncated:fillResult.truncated,historyNote:fillResult.truncated?'سجل التنفيذ يغطي أحدث 20 أمراً منفذاً؛ بقية السجل في منصة الوسيط.':'سجل التنفيذ مستمد من الأوامر المتاحة لدى الوسيط.',updatedAt:new Date().toISOString()};
   }catch{revolut={...emptyAccount('revolut-x','Revolut X','تعذر تحديث الحساب؛ تحقق من المفتاح أو الاتصال أو حدود الطلبات.'),status:'error'};}
  }
  const unresolved=(await query("SELECT id,state,created_at FROM order_intents WHERE broker='revolut-x' AND state IN ('SUBMITTING','UNKNOWN') ORDER BY created_at DESC")).rows;
@@ -174,7 +174,7 @@ export async function settings(){
 }
 export async function toggleLive(enabled:boolean){
  if(isPreview()){if(enabled)fail('PREVIEW_LOCKED',403,'إرسال الأوامر محظور في المعاينة.');return {liveEnabled:false};}
- if(enabled){if(isPreview())fail('PREVIEW_LOCKED',403,'إرسال الأوامر محظور في المعاينة.');const c=await credentials();if(!c)fail('NOT_CONNECTED',409,'لم يُحفظ ربط Revolut X بعد. احفظ بيانات المفتاح وتحقق من الربط أولاً.');if(!c.metadata.regionConfirmed||!c.metadata.tradePermissionAcknowledged)fail('PERMISSIONS_REQUIRED',409,'الربط محفوظ؛ أكّد منطقة الحساب وصلاحية التداول ضمن بيانات الربط أولاً.');await c.client.getBalances();}
+ if(enabled){if(isPreview())fail('PREVIEW_LOCKED',403,'إرسال الأوامر محظور في المعاينة.');const c=await credentials();if(!c||!c.metadata.regionConfirmed||!c.metadata.tradePermissionAcknowledged)fail('PERMISSIONS_REQUIRED',409,'تحقق من الحساب ونطاق مفتاح التداول ومنطقة EEA أولاً.');await c.client.getBalances();}
  await setSetting('live_enabled',enabled);await audit(enabled?'live.enabled':'live.disabled');return {liveEnabled:enabled};
 }
 

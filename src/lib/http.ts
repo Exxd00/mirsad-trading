@@ -7,7 +7,7 @@ export function json(data:unknown,status=200,extra:Record<string,string>={}){ret
 export function failure(error:unknown){
  if(error instanceof AuthError)return json({error:error.message,code:error.code},error.status,error.retryAfter?{'Retry-After':String(error.retryAfter)}:{});
  if(error instanceof AppError)return json({error:error.message,code:error.code},error.status);
- if(error instanceof BrokerApiError)return json({error:error.status===401||error.status===403?'رفض الوسيط بيانات الدخول أو الصلاحيات.':error.code==='CONFIGURATION'?'صيغة المفتاح غير صالحة. استخدم مفتاح Ed25519 بصيغة PEM.':error.code==='RATE_LIMIT'?'تم بلوغ حد طلبات الوسيط. حاول بعد قليل.':'تعذر الحصول على بيانات مؤكدة من الوسيط؛ لن تُعرض أرقام بديلة.',code:error.code},error.status===429?429:502);
+ if(error instanceof BrokerApiError)return json({error:error.status===401||error.status===403?'تعذر التحقق من بيانات الربط التجريبي أو الصلاحيات.':error.code==='CONFIGURATION'?'صيغة المفتاح التجريبي غير صالحة. استخدم مفتاح Ed25519 بصيغة PEM.':error.code==='RATE_LIMIT'?'تم بلوغ حد طلبات مصدر البيانات التجريبي. حاول بعد قليل.':'تعذر الحصول على بيانات المحاكاة التعليمية؛ لن تُعرض أرقام بديلة.',code:error.code},error.status===429?429:502);
  // Never log request bodies, raw provider errors, database URLs, or credentials.
  return json({error:'تعذر إكمال الطلب. تحقق من إعداد قاعدة البيانات والاتصال ثم حاول مجدداً.',code:'SERVICE_UNAVAILABLE'},503);
 }
