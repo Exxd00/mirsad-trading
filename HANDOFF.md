@@ -34,3 +34,13 @@ Preserve ignored .env.local, .local/database and .local/vercel-import.env. The l
 
 Update docs/REQUIREMENTS.md when scope changes. Polling runs while the app is open; no unattended trading or implied background work. Earlier market heartbeat stays PAUSED.
 
+## Pending Revolut key registration — 22 September 2026
+
+A new Ed25519 pair was generated locally for this site. Preserve ignored `.local/revolut-x/private-key.pem` and `.local/revolut-x/public-key.pem`; the private file has restricted Windows ACLs. Never print, commit or regenerate it. Public PEM SHA-256: `399bda21d6917893f57898406e24db230706c09a03b829ab4f5dead0ad5590e3`.
+
+Revolut X API-key form is prepared in Chrome tab 779460322 at https://exchange.revolut.com/account/api-keys: Primary account, name `Mirsad - read only`, matching public key, Spot view only, Spot trade and MCP/CLI unchecked, no IP restriction or explicit expiry. Save has NOT been clicked. No broker API credential has been issued or uploaded. Action-time user approval was requested before granting the app new private financial-data access. Do not interpret this preparation as a connected account.
+
+The existing intended durable design is Vercel server execution plus encrypted broker credentials in Supabase, protected by the existing Vercel ENCRYPTION_KEY. No duplicate service is required. After approval, register the key, handle any user 2FA, securely import credentials via authenticated site Settings, then verify private balances/orders by read calls only. Keep live sending OFF. The private PEM may need a secure file-import input added to Settings to avoid copying secrets through conversation. Never infer account-region confirmation from public feeds.
+
+Hosting remains on free plans. Supabase documents possible automatic pausing after low activity over seven days: https://supabase.com/docs/guides/platform/free-project-pausing . Do not claim permanent uninterrupted availability or buy an upgrade without authorization.
+
