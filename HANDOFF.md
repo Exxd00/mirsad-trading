@@ -1,40 +1,36 @@
 # Continuation checkpoint — Mirsad / مرصاد
 
-Updated 22 September 2026, Europe/Berlin. Supabase replaces the earlier Neon plan. Read docs/REQUIREMENTS.md for the single requirements ledger.
+Updated 22 September 2026, 19:43 Europe/Berlin. Supabase setup is COMPLETE and production login/storage are verified. Do not repeat provisioning or password setup.
 
-## Saved resources and current state
+## Resources and current evidence
 
-- Private repository: https://github.com/Exxd00/mirsad-trading. Implementation checkpoint: 35cf64540b9141a0271da60bb80f5430ad2f6c51. Documentation commits follow; inspect remote main. The local index has no commits; never force-push a new root.
-- Vercel: team ixa1, project mirsad-trading, https://mirsad-trading.vercel.app. Implementation deployment By35fYNYQhki69pHDA2E2iHJVRhd is Ready. Anonymous page/API protection passed. Authenticated cloud operation is blocked by database authentication (28P01); the URL is now saved, but Supabase rejects its password.
-- Supabase project CREATED by the owner: rqxxhpberxhpadgynrnw, mirsad-trading, Free organization roxqtfpwtmiybnbrffcy, Central EU (Frankfurt). The refreshed overview reports Healthy with no advisor issues; the earlier startup warning cleared. Data API is confirmed disabled. Older projects were not changed.
-- Actual Connect dialog Transaction pooler: aws-0-eu-central-1.pooler.supabase.com, port 6543, database postgres, username postgres.rqxxhpberxhpadgynrnw. Never guess a host or use the direct username here.
-- Chrome file upload now WORKS. Existing INITIAL_PASSWORD_HASH and ENCRYPTION_KEY were updated successfully as write-only Secret variables scoped to Production only. APP_ORIGIN already points to the canonical URL. Imported .env initially produced duplicate-variable errors without saving; existing values were then edited successfully.
-- DATABASE_URL was saved successfully as a Production Secret after the owner entered it. Redeployment exposed SELF_SIGNED_CERT_IN_CHAIN. This is fixed with the official Supabase public CA (source/fingerprint in docs/SUPABASE.md), preserving TLS and hostname verification. Latest deployment Fag56Lo1F4oEh5uetTEnJLEbYG87 is successful. Login then reports PostgreSQL 28P01, an authentication rejection; no cloud schema/session/persistence is verified. The owner corrected and saved DATABASE_URL again, but the 19:16 Berlin attempt still reports 28P01. To remove URI-encoding ambiguity, an optional server-only DATABASE_PASSWORD raw override is implemented and tested. A new Vercel Secret/Production form for DATABASE_PASSWORD is prepared, unsaved; the owner is asked to paste only the current project database password as-is and Save. Await that response, redeploy, and recheck once. Do not reset the database password yourself or repeatedly retry a rejected credential.
+- Private repository: https://github.com/Exxd00/mirsad-trading. Implementation checkpoint 35cf64540b9141a0271da60bb80f5430ad2f6c51; later documentation commits follow. Remote main is authoritative; local Git index has no commits. Never force-push a new local root.
+- Live site: https://mirsad-trading.vercel.app. Vercel team ixa1, project mirsad-trading. Verified deployment: https://vercel.com/ixa1/mirsad-trading/J18hWSLGpyJubQo4wu8nsNnfDuFk (Ready, source 642553b3980169ee6e7d5e3d8bfa24e2e74ed0b7).
+- Supabase: rqxxhpberxhpadgynrnw in Free organization roxqtfpwtmiybnbrffcy, Frankfurt. Transaction pooler aws-0-eu-central-1.pooler.supabase.com:6543, database postgres, username postgres.rqxxhpberxhpadgynrnw. No other projects changed.
+- Production Secrets DATABASE_URL, DATABASE_PASSWORD, INITIAL_PASSWORD_HASH and ENCRYPTION_KEY are saved. APP_ORIGIN is the canonical URL. The raw DATABASE_PASSWORD override fixed the authentication blocker; preserve it. Never display its value or overwrite it with a URI placeholder.
+- Official Supabase root CA is bundled as PUBLIC certificate material; TLS and hostname validation stay enabled. The prior TLS and 28P01 errors are resolved. Data API remains disabled.
 
-## Implemented and verified
+## Verified on actual production
 
-Arabic RTL responsive PWA, server authentication and CSRF, secure cookies, durable sessions/rate limits, encrypted broker keys, separate account UI, public official Revolut X market adapter, manual order review/confirmation, durable idempotency/reconciliation, default live lock, and isolated simulator are implemented. Standard pg uses verified TLS and private tables enable RLS with API-role grants revoked. No production memory/filesystem fallback exists.
+Successful owner login, private settings reads, real Revolut X PUBLIC ticker/book/candles, logout followed by redirect on private /simulation, and successful new login. Desktop 1920x850 and mobile 390x844 were visually checked; no horizontal overflow. Browser offers PWA installation; actual installation was not performed.
 
-69 isolated tests and production build passed. Local durable storage and desktop/mobile authenticated flows passed. Public Revolut X EEA reads previously returned 385 instruments and 1000 BTC-EUR candles. Local simulated BTC orders only were tested, including unknown outcome reconciliation. Published anonymous pages redirect, private APIs return 401, CSP uses fresh nonces, and CSRF cookies have Secure/HttpOnly/SameSite Strict. Run scripts/verify-deployment.mjs for the anonymous check. See docs/VERIFICATION.md for evidence scope.
+Two isolated CLOUD simulation buys of 0.0001 BTC each were tested: one normal fill, and one scripted UNKNOWN outcome reconciled to FILLED under the same intent ID. Exactly two simulated orders remain. The first fill survived reload and logout/new login. Virtual records remain only in /simulation; live accounts are disconnected and contain no synthetic balances. No real broker operation occurred.
 
-## Next actions
+A metadata-only query in the project's Supabase SQL Editor verified all seven app tables exist with RLS=true and SELECT privileges=false for anon, authenticated and service_role. No private rows/secrets were read for this check.
 
-1. Await/check the owner's corrected DATABASE_URL; do not overwrite it with the placeholder. Preserve Vercel/Supabase handoff tabs. The password is not available to the agent and must not be requested in chat.
-2. Redeploy once all production values are saved. Verify real TLS database connectivity, schema initialization, cloud login/logout, persistence, public market reads, isolated simulation and responsive desktop/mobile UI. Keep certificate verification enabled; diagnose any CA/pooler issue rather than disabling TLS checks.
-3. Verify the production table RLS/grants and absence of private/API responses to anonymous clients. Keep preview secrets/storage separate. Existing preview verification/protection is already protected by Vercel SSO; no duplicate project is necessary.
-4. Update docs and push to the existing private GitHub repository. Distinguish simulation/public market evidence from real private account reads.
+Anonymous cloud checks passed at 17:40:29 UTC: private pages redirect, APIs return 401/no-store, empty unauthenticated order-confirm request rejected, nonce CSP valid, Secure/HttpOnly/SameSite login-CSRF cookie. 69 isolated tests, TypeScript and production build passed. Secret scan: 57 source files and 8 public login script assets contained no saved initial hash or encryption key. Scope is these known secrets/assets, not an exhaustive security audit.
 
-## Remaining user-only broker dependencies
+## Remaining requirements
 
-Actual Revolut X API settings showed No API keys. No private account API reads, balances, trading scope, P&L or account entitlements have been verified. After site readiness, the owner can register their Ed25519 public key and enter associated secrets in authenticated site settings; verify through read-only calls. Account/IP/EEA permissions still need checking.
+Revolut X PRIVATE account access is not connected. Actual API settings previously showed No API keys. The owner must register an Ed25519 public key in their existing account and enter the corresponding API key/private PEM through authenticated site Settings. Never request private keys in chat. Then validate balances/orders by READ calls only, check EEA/Germany/account scope and any IP allowlist. Public feed access does not establish account trade permission or P&L.
 
-IBKR is a disconnected placeholder with researched integration constraints, not an operational adapter. It needs an existing authorized account, data entitlements and suitable persistent authenticated gateway or approved access before implementation can be completed.
+IBKR remains a disconnected placeholder, not an operational adapter. It requires an existing authorized account, API/data entitlements and persistent authenticated gateway or approved alternative before implementation and verification. No new broker account or paid service is authorized.
 
-No financial order, cancellation, transfer, new financial account, paid subscription or new financial agreement was performed. Live sending stays locked until the owner enables it, and every future manual order requires individual confirmation. No autonomous trader exists.
+Live sending remains OFF. Do not activate it, submit/cancel real orders, transfer funds or test with real money. The owner can voluntarily enable future manual sending inside the app; each order requires separate confirmation.
 
-## Secret and continuity rules
+## Continuity
 
-Preserve ignored .env.local, .local/database and .local/vercel-import.env. The import file contains the server hash, encryption key and production origin only; no DATABASE_URL. Do not print, commit or regenerate these secrets. Next dotenv expands dollar signs locally; Vercel stores literal hash dollar signs.
+Preserve ignored .env.local, .local/database and .local/vercel-import.env. The last file has the initial hash, encryption key and origin only; database credentials are held in Vercel. Never regenerate encryption over existing ciphertext. CLI is installed but not authenticated; browser deployment and GitHub connector work. Keep preview secrets/database separate; existing verification/protection preview is Vercel-SSO protected. No need for another project or preview.
 
-Official Vercel CLI is installed but not authenticated; browser deployment works. All work uses the existing project. App polling runs while open; there is no promise of background work. The earlier market heartbeat remains PAUSED.
+Update docs/REQUIREMENTS.md when scope changes. Polling runs while the app is open; no unattended trading or implied background work. Earlier market heartbeat stays PAUSED.
 
