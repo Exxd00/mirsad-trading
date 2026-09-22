@@ -74,7 +74,7 @@ export async function dashboard(mode='live'){
  if(mode==='simulation'){
   const orders=(await query<{id:string;response:NormalOrder|null;state:string;request:{draft:Draft}}>("SELECT id,response,state,request FROM order_intents WHERE broker='simulation' AND state<>'PREVIEW' ORDER BY created_at DESC LIMIT 100")).rows.map(r=>r.response??{id:r.id,clientOrderId:r.id,symbol:r.request.draft.symbol,side:r.request.draft.side,type:r.request.draft.type,quantity:r.request.draft.quantity,filledQuantity:'0',status:r.state,createdAt:new Date().toISOString()});
   const balances=await simulationBalances();
-  return {accounts:[{id:'simulation',broker:'simulation',name:'محفظة المحاكاة المعزولة',status:'simulation',reason:'أموال افتراضية بالكامل؛ لا اتصال بحساب تداول حقيقي.',permissions:{read:true,trade:true},balances,positions:balances.filter(b=>b.currency!=='EUR'&&new Decimal(b.total).gt(0)).map(b=>({symbol:`${b.currency}-EUR`,quantity:b.total,currency:'EUR'})),orders,fills:orders.filter(o=>new Decimal(o.filledQuantity).gt(0)).map(o=>({...o,orderId:o.id,quantity:o.filledQuantity})) ,updatedAt:new Date().toISOString()}],liveEnabled:false,watchlist,audit:[],serverTime:new Date().toISOString(),mode:'simulation'};
+  return {accounts:[{id:'simulation',broker:'simulation',name:'محفظة المحاكاة المعزولة',status:'simulation',reason:'أموال افتراضية بالكامل؛ لا اتصال بحساب وسيط.',permissions:{read:true,trade:true},balances,positions:balances.filter(b=>b.currency!=='EUR'&&new Decimal(b.total).gt(0)).map(b=>({symbol:`${b.currency}-EUR`,quantity:b.total,currency:'EUR'})),orders,fills:orders.filter(o=>new Decimal(o.filledQuantity).gt(0)).map(o=>({...o,orderId:o.id,quantity:o.filledQuantity})) ,updatedAt:new Date().toISOString()}],liveEnabled:false,watchlist,audit:[],serverTime:new Date().toISOString(),mode:'simulation'};
  }
  let revolut:Record<string,unknown>=emptyAccount('revolut-x','Revolut X','لم يُربط حساب API. رصيد البنك ومحفظة الأسهم منفصلان عن Revolut X.');
  const connection=await credentials();
@@ -173,7 +173,8 @@ export async function settings(){
  return {databaseReady:true,encryptionReady:!!process.env.ENCRYPTION_KEY,preview:isPreview(),liveEnabled:!isPreview()&&await setting('live_enabled',false),revolut:{configured:!!row&&!isPreview(),readVerified:row?.metadata.readVerified??false,tradePermissionAcknowledged:row?.metadata.tradePermissionAcknowledged??false,regionConfirmed:row?.metadata.regionConfirmed??false,verifiedAt:row?.metadata.verifiedAt??null},ibkr:{configured:false,requiresGateway:true,reason:'لا توجد بوابة دائمة أو جلسة API متحققة.'}};
 }
 export async function toggleLive(enabled:boolean){
- if(isPreview()){if(enabled)fail('PREVIEW_LOCKED',403,'الإرسال الحقيقي محظور في المعاينة.');return {liveEnabled:false};}
- if(enabled){if(isPreview())fail('PREVIEW_LOCKED',403,'الإرسال الحقيقي محظور في المعاينة.');const c=await credentials();if(!c||!c.metadata.regionConfirmed||!c.metadata.tradePermissionAcknowledged)fail('PERMISSIONS_REQUIRED',409,'تحقق من الحساب ونطاق مفتاح التداول ومنطقة EEA أولاً.');await c.client.getBalances();}
+ if(isPreview()){if(enabled)fail('PREVIEW_LOCKED',403,'إرسال الأوامر محظور في المعاينة.');return {liveEnabled:false};}
+ if(enabled){if(isPreview())fail('PREVIEW_LOCKED',403,'إرسال الأوامر محظور في المعاينة.');const c=await credentials();if(!c||!c.metadata.regionConfirmed||!c.metadata.tradePermissionAcknowledged)fail('PERMISSIONS_REQUIRED',409,'تحقق من الحساب ونطاق مفتاح التداول ومنطقة EEA أولاً.');await c.client.getBalances();}
  await setSetting('live_enabled',enabled);await audit(enabled?'live.enabled':'live.disabled');return {liveEnabled:enabled};
 }
+
