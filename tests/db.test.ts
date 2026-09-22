@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { closeDatabase, databaseConfiguration, ensureSchema, postgresPoolConfiguration, query, transaction } from "../src/lib/db";
+import { closeDatabase, databaseConfiguration, databaseFailureCode, ensureSchema, postgresPoolConfiguration, query, transaction } from "../src/lib/db";
 
 beforeAll(async () => {
   vi.stubEnv("NODE_ENV", "test"); vi.stubEnv("VERCEL", ""); vi.stubEnv("DATABASE_URL", ""); vi.stubEnv("LOCAL_DATABASE_PATH", "memory://");
@@ -11,6 +11,11 @@ beforeAll(async () => {
 afterAll(async () => { await closeDatabase(); vi.unstubAllEnvs(); });
 
 describe("durable SQL boundary", () => {
+  it("reports only allowlisted operational codes without connection secrets", () => {
+    expect(databaseFailureCode({code: "28P01", message: "secret password"})).toBe("28P01");
+    expect(databaseFailureCode({code: "secret password", message: "postgresql://private"})).toBe("DATABASE_INITIALIZATION_FAILED");
+    expect(databaseFailureCode(new Error("private connection details"))).toBe("DATABASE_INITIALIZATION_FAILED");
+  });
   it("uses standard Postgres with verified TLS even when URL options request weaker SSL", () => {
     const configuration = postgresPoolConfiguration("postgresql://test:fixture@pooler.example:6543/postgres?sslmode=disable&sslrootcert=untrusted&uselibpqcompat=true");
     expect(configuration.ssl).toEqual({ rejectUnauthorized: true });
@@ -83,3 +88,4 @@ describe("durable SQL boundary", () => {
     }
   });
 });
+
