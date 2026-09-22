@@ -140,9 +140,18 @@ async function createDatabase(): Promise<Database> {
 }
 
 const state = globalThis as typeof globalThis & { __mirsadDatabase?: Promise<Database> };
+/** Operational codes only: never log URLs, query parameters or driver messages. */
+export function databaseFailureCode(error: unknown): string {
+  const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+  const allowed = ["28P01", "28000", "3D000", "42501", "53300", "57P03", "XX000", "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "ENOTFOUND", "ENETUNREACH", "SELF_SIGNED_CERT_IN_CHAIN", "DEPTH_ZERO_SELF_SIGNED_CERT", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "CERT_HAS_EXPIRED", "ERR_TLS_CERT_ALTNAME_INVALID"];
+  return allowed.includes(code) ? code : "DATABASE_INITIALIZATION_FAILED";
+}
 export async function getDb(): Promise<Database> {
   if (!state.__mirsadDatabase) {
-    state.__mirsadDatabase = createDatabase().catch((error) => { delete state.__mirsadDatabase; throw error; });
+    state.__mirsadDatabase = createDatabase().catch((error) => {
+      console.error("Database initialization:", databaseFailureCode(error));
+      delete state.__mirsadDatabase; throw error;
+    });
   }
   return state.__mirsadDatabase;
 }
@@ -158,3 +167,4 @@ export async function closeDatabase(): Promise<void> {
   delete state.__mirsadDatabase;
   if (pending) await (await pending).close();
 }
+
