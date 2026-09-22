@@ -58,3 +58,7 @@ User explicitly requested one broker workspace, no visible simulation area and n
 
 Production verification for 835885fd15a1f4293ef8d64a76c97e8a5bc14890: Vercel reports success at https://vercel.com/ixa1/mirsad-trading/2kBkjDacrY2YDDwdQmqVMqv9tpQD . Authenticated navigation to /simulation redirected to /; browser showed one broker workspace with no simulation navigation and neutral labels. Anonymous authentication/security checks passed at 18:02:21 UTC. Broker registration remains unsubmitted; no new private account-read claim is made.
 
+## Activation error clarification
+
+Implementation 045d5f7ac58c10f9e5521edf89210c4030e320f1 fixes the owner screenshot issue: activation was attempted before saved credentials existed. Settings now disables enabling until persisted broker metadata confirms configured/read/region/trade readiness and explains that checking unsaved boxes is insufficient. Server differentiates missing credentials from missing permission acknowledgements. Existing durable live_enabled remains unchanged and is not reset by login/logout. No broker key has been issued by the agent and no trade has occurred. TypeScript passed; deploy/test results checked in conversation.
+
