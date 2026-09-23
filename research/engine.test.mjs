@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { runResearch,normalizeCandles,validateConfig,hash,csv } from './engine.mjs';
+import { pageCandles } from './feed.mjs';
 const c={...JSON.parse(fs.readFileSync(new URL('./config.json',import.meta.url))),fast:2,slow:3,maxHoldBars:3,start:'2026-09-01T00:00:00Z'};
 const step=3600000,start=Date.parse(c.start);
 function bars(){return [10,10,10,9,8,9,11,12,12,10,8,8,9,11,12,13,12,10,8,9,11,12].map((p,i)=>({start:start+(i-5)*step,open:p,close:p,high:p+1,low:p-1,volume:1}));}
@@ -18,3 +19,15 @@ test('entry is next open, not signal close',()=>{const r=runResearch(bars(),c,as
 test('zero volume entry does not fill',()=>{const base=runResearch(bars(),c,asOf);const time=Date.parse(base.records[0].openedAt);const r=runResearch(bars().map(b=>b.start===time?{...b,volume:0}:b),c,asOf);assert.ok(r.skipped.some(s=>s.reason==='ZERO_VOLUME_ENTRY_SKIPPED'));});
 test('changing costs changes identities and net results',()=>{const a=runResearch(bars(),c,asOf),b=runResearch(bars(),{...c,feeBpsPerSide:30},asOf);assert.notEqual(a.configHash,b.configHash);assert.ok(b.metrics.net<a.metrics.net);});
 test('CSV is marked paper and history is hashed',()=>{const r=runResearch(bars(),c,asOf);assert.match(csv(r),/paper-research/);assert.equal(r.coverage.candlesHash,hash(normalizeCandles(bars(),c,asOf)));});
+test('inclusive page boundary uses next page full candle, with no gaps',()=>{
+ const bs=bars(), boundary=bs[10].start;
+ const page1={metadata:{region:'EEA'},data:[...bs.slice(0,10),{...bs[10],close:bs[10].close+0.5}]};
+ const page2={metadata:{region:'EEA'},data:bs.slice(10)};
+ const joined=[...pageCandles(page1,bs[0].start,boundary),...pageCandles(page2,boundary,bs.at(-1).start+step)];
+ assert.deepEqual(normalizeCandles(joined,c,asOf),normalizeCandles(bs,c,asOf));
+});
+test('page adapter retains within-page conflicts and rejects out-of-range data',()=>{
+ const bs=bars();const data={metadata:{region:'EEA'},data:[...bs,{...bs[0],close:10.5}]};
+ assert.throws(()=>normalizeCandles(pageCandles(data,bs[0].start,bs.at(-1).start+step),c,asOf),/CONFLICTING/);
+ assert.throws(()=>pageCandles(data,bs[1].start,bs.at(-1).start+step),/PAGE_RANGE/);
+});

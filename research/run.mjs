@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { validateConfig, runResearch, csv, hash } from './engine.mjs';
+import { pageCandles } from './feed.mjs';
 
 const dir=dirname(fileURLToPath(import.meta.url));
 const config=validateConfig(JSON.parse(await fs.readFile(join(dir,'config.json'),'utf8')));
@@ -25,7 +26,7 @@ try {
     const data=await res.json();
     if(data.metadata?.region!=='EEA'||!Array.isArray(data.data))throw Error('PUBLIC_FEED_SCHEMA');
     requests.push({since:from,until:end,count:data.data.length,first:data.data[0]?.start,last:data.data.at(-1)?.start});
-    all.push(...data.data.filter(c=>c.start>=since&&c.start<until));
+    all.push(...pageCandles(data,from,end));
   }
   // Reject truncated/old or missing history rather than making up continuity.
   const starts=new Set(all.map(c=>c.start));
