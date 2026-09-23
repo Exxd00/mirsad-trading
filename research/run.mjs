@@ -9,6 +9,7 @@ const now=Date.now(), step=config.intervalMinutes*60000, until=Math.floor(now/st
 const since=Date.parse(config.start)-(config.slow+2)*step;
 const out=join(dir,'output'); await fs.mkdir(out,{recursive:true});
 let report;
+const requests=[];
 try {
   if (until<=since || (until-since)/step>config.maxCandles) throw Error('HISTORY_LIMIT_REQUIRES_NEW_BATCH');
   const all=[];
@@ -23,6 +24,7 @@ try {
     if(!res.headers.get('content-type')?.includes('application/json'))throw Error('PUBLIC_FEED_NOT_JSON');
     const data=await res.json();
     if(data.metadata?.region!=='EEA'||!Array.isArray(data.data))throw Error('PUBLIC_FEED_SCHEMA');
+    requests.push({since:from,until:end,count:data.data.length,first:data.data[0]?.start,last:data.data.at(-1)?.start});
     all.push(...data.data.filter(c=>c.start>=since&&c.start<until));
   }
   // Reject truncated/old or missing history rather than making up continuity.
@@ -34,7 +36,7 @@ try {
 } catch(error) {
   // Publish explicit failure; consumers keep prior successful records unchanged.
   const code=/^[A-Z0-9_]+$/.test(error.message)?error.message:'PUBLIC_FEED_UNAVAILABLE';
-  report={schemaVersion:1,status:'unavailable',mode:'paper-research',generatedAt:new Date(now).toISOString(),config,configHash:hash(config),error:code,records:[]};
+  report={schemaVersion:1,status:'unavailable',mode:'paper-research',generatedAt:new Date(now).toISOString(),config,configHash:hash(config),error:code,diagnostics:{requests,...error.diagnostics},records:[]};
 }
 await fs.writeFile(join(out,'latest.json'),JSON.stringify(report,null,2)+'\n');
 console.log(JSON.stringify({status:report.status,records:report.records.length,error:report.error}));

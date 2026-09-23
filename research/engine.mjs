@@ -35,7 +35,11 @@ export function normalizeCandles(raw, config, asOf) {
     if (c.high < Math.max(c.open, c.close, c.low) || c.low > Math.min(c.open, c.close, c.high)) throw Error('INVALID_OHLC');
     if (c.start + step > asOf) continue;
     const old = byTime.get(c.start);
-    if (old && hash(old) !== hash(c)) throw Error('CONFLICTING_CANDLE');
+    if (old && hash(old) !== hash(c)) {
+      const error = Error('CONFLICTING_CANDLE');
+      error.diagnostics = { first: old, conflicting: c };
+      throw error;
+    }
     byTime.set(c.start, c);
   }
   const candles = [...byTime.values()].sort((a, b) => a.start - b.start);
