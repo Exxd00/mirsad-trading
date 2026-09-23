@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "status": "unavailable",
   "mode": "paper-research",
-  "generatedAt": "2026-09-23T14:45:53.703Z",
+  "generatedAt": "2026-09-23T20:17:52.563Z",
   "config": {
     "schemaVersion": 1,
     "mode": "paper-research",
@@ -24,7 +24,69 @@
   },
   "configHash": "a9d717d98ea0bea86e14369540f45409de23b90abe1931567d853b7d01fbef67",
   "error": "CONFLICTING_CANDLE",
+  "diagnostics": {
+    "requests": [
+      {
+        "since": 1788105600000,
+        "until": 1788462000000,
+        "count": 100,
+        "first": 1788105600000,
+        "last": 1788462000000
+      },
+      {
+        "since": 1788462000000,
+        "until": 1788818400000,
+        "count": 100,
+        "first": 1788462000000,
+        "last": 1788818400000
+      },
+      {
+        "since": 1788818400000,
+        "until": 1789174800000,
+        "count": 100,
+        "first": 1788818400000,
+        "last": 1789174800000
+      },
+      {
+        "since": 1789174800000,
+        "until": 1789531200000,
+        "count": 100,
+        "first": 1789174800000,
+        "last": 1789531200000
+      },
+      {
+        "since": 1789531200000,
+        "until": 1789887600000,
+        "count": 100,
+        "first": 1789531200000,
+        "last": 1789887600000
+      },
+      {
+        "since": 1789887600000,
+        "until": 1790193600000,
+        "count": 86,
+        "first": 1789887600000,
+        "last": 1790193600000
+      }
+    ],
+    "first": {
+      "start": 1788462000000,
+      "open": 69831.14,
+      "high": 70330.5,
+      "low": 69769.46,
+      "close": 69815.13,
+      "volume": 30.23815847
+    },
+    "conflicting": {
+      "start": 1788462000000,
+      "open": 69831.14,
+      "high": 70330.5,
+      "low": 69769.46,
+      "close": 70302.03,
+      "volume": 30.07423833
+    }
+  },
   "records": [],
-  "sourceCommit": "3a8f2cfdfd1c955d99d5db5c53970be0d0c6f6d7",
-  "workflowRun": "https://github.com/Exxd00/mirsad-trading/actions/runs/35876564656"
+  "sourceCommit": "7fde9509e54f5ae05b2f4d98e8f09dd5c0b06305",
+  "workflowRun": "https://github.com/Exxd00/mirsad-trading/actions/runs/35914950340"
 }
