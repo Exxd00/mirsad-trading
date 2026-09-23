@@ -30,6 +30,12 @@ Updated 2026-09-22, Europe/Berlin. **This is the single requirements ledger.** S
 
 ## Preserved scope decisions
 
+### Independent paper research extension — 23 September 2026
+
+The owner authorized an isolated paper experiment, result logging and transfer to the existing Google Sheet, preserving all application environments and broker connections. `research/README.md` defines the exact benchmark, hypothetical costs, validation and output contract. The independent Node scripts do not import the app or execute broker orders. The workflow publishes public-price research reports on `mirsad-paper-results`; the ChatGPT review task is the Sheets transfer worker. A deployed workflow or populated report must be verified separately from local tests. Historical paper results are not live fills, prospective validation, or evidence of future profit.
+
+Twelve isolated Node tests cover validation, missing/gapped data, duplicate timestamps, deterministic IDs, next-open execution, no future leakage, fees, cash reconciliation and zero-volume handling. The source app, environment files, secrets and broker adapter are unchanged by this extension. Do not treat this extension as enabling unattended financial execution.
+
 - Next.js App Router/TypeScript, server-only official broker adapters, durable SQL state, one owner's password authentication.
 - No financial execution during build or testing. The site's future order path serves the user's manual decisions only; the user individually confirms each real order.
 - No false balances, positions, returns, FX totals, tradability or buying power. No promised low-risk profit or guaranteed outcome.

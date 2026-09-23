@@ -1,0 +1,32 @@
+name: Paper research journal
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 5 * * *'
+  push:
+    branches: [main]
+    paths: ['research/**', '.github/workflows/paper-research.yml']
+permissions:
+  contents: write
+concurrency:
+  group: paper-research
+  cancel-in-progress: false
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test isolated engine
+        run: node --test research/engine.test.mjs
+      - name: Collect public candles and calculate hypothetical results
+        run: node research/run.mjs
+      - name: Publish public research report
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node research/publish.mjs
