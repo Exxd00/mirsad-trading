@@ -82,7 +82,9 @@ ORDER BY closed_ms,id LIMIT 100;
 
 Before ingestion, match the exact batch, strategy, symbol, currency and configuration hash, verify a real `startedMs`, contiguous closed-candle cursor and a recent non-blocked run (at most 3 minutes old). Page by `(closed_ms,id)` and use exact record IDs for deduplication; conflicting IDs require review. Preserve Sheet formulas. Empty `results` with healthy recent runs means no completed simulated trade; blocked/stale operation is not a zero-profit result.
 
-At deployment handoff, the other browser account's one read-only D1 check failed because its connector required a non-empty `link_id`. Worker operation is verified, but unattended ingestion in that account is not yet proven. The task must report that access blocker and skip forward ingestion until its own authenticated D1 read succeeds. Updating a task prompt is not end-to-end ingestion evidence.
+After the user reconnected Cloudflare on 2026-09-24, an authenticated read from the other browser account succeeded. It returned state version 51, the exact expected batch and configuration hash, the original actual start, an `idle` run `PAPER-BTC-EUR-FWD-20260924-v1:29837537` with no error, zero closed results and zero rows written. A later independent read returned version 80 and another error-free idle run, confirming continued operation. Handoff `H-20260924-ACCESS-01` closes the account-access blocker M-011.
+
+The existing daily task retains 09:00 Europe/Berlin and validates fresh source evidence on every run. If the connector explicitly reports authentication accepted and asks for a retry, retry the read once; report any remaining access failure. Source access is now verified, but unattended execution after this update and ingestion of the first real closed result remain unobserved. A saved task prompt or successful read is not proof that a result was imported.
 
 ## Provenance and status
 
