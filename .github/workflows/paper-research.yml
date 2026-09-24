@@ -1,11 +1,6 @@
 name: Paper research journal
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '17 5 * * *'
-  push:
-    branches: [main]
-    paths: ['research/**', '.github/workflows/paper-research.yml']
 permissions:
   contents: write
 concurrency:
@@ -13,6 +8,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   research:
+    # Disabled by owner: use the existing site's account, not a separate simulation.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
