@@ -1,39 +1,41 @@
-# Mirsad scheduled monitoring
+# Mirsad educational execution
 
-This implements automatic public-market research, not automatic brokerage execution. The existing account integration and manual order routes are unchanged. No broker credentials, initial cash balance, simulated fills, equity curve, or profit are created here. The old paper-forward experiment remains stopped and its data is preserved.
+The current automation settles educational buy/sell operations only in the existing site's own ledger. It never submits financial orders. Existing broker integration, credentials, account APIs and manual order routes are unchanged and outside this component's scope.
 
 ## Running components
 
-- `mirsad-signal-monitor`: one Cron Trigger, `*/5 * * * *` UTC; rotates BTC-EUR, ETH-EUR and SOL-EUR. Each market is checked every 15 minutes, 24/7. The strategy uses completed one-hour candles only.
-- Existing D1 binding: separate `monitor_*` tables, an atomic 60-second lease, unique symbol/candle ideas, an atomic two-idea daily cap in Europe/Berlin, indexed queries, bounded daily retention cleanup at 90 days. No private account data is published.
-- `GET /report`: authenticated latest market observations, errors, last-24-hour scan counts and today's ideas. It never starts a run. POST/other routes are rejected. Requests without a valid signed token get 401.
-- `/automation` in the existing authenticated Next.js app shows this report and clearly identifies the disabled order execution. Its server generates 30-second, report-only Ed25519 tokens. An independent signing key is generated on the first authenticated production visit, stored encrypted in the existing database, and never exposed to the browser. The Worker obtains only the public verification key from the fixed production origin; it has no secrets or account access. Preview deployments cannot sign report requests.
-- Existing ChatGPT task at 09:00 Europe/Berlin: account-data transfer plus monitoring, recording and evidence-based review in the existing unified Sheet. It does not place orders or change strategy settings.
+- `mirsad-signal-monitor` now runs `education-scheduler.mjs` with one `*/5 * * * *` cron. It sends one signed POST to the fixed production `/api/education/tick` endpoint. It has no browser or market/account/order provider calls.
+- `EDUCATION_SCHEDULER_SIGNING_KEY_V1` is a dedicated Ed25519 application key in Cloudflare Secrets. Only its public verification key is in the repository. Preserve the secret on upload; never print, commit or expose its private value.
+- The site authenticates method, route, timestamp, body and five-minute slot before database access. Preview writes are disabled. Duplicate or old slots cannot settle twice.
+- `src/lib/education` reads only allowlisted public market GETs, then atomically settles balances, positions and fills in `app_settings` at `education:state:v1`. Market requests occur outside the database transaction. No broker client or credentials are used.
+- `/automation` uses the existing owner session and CSRF protection. It shows execution, balances, performance, 24-hour counts with UTC/retention coverage, and expandable full report data.
+- The current-account ChatGPT task runs daily at 09:00 Europe/Berlin, reads the visible report and updates the existing unified Sheet. It does not execute trades, change risk or use the old zen account.
 
-## Versioned experimental policy
+## Balances and policy
 
-`mirsad-hourly-breakout-v1` is an unvalidated starting hypothesis, not a claimed profitable/optimal strategy or individualized investment advice.
+Import one explicit existing snapshot with source, observation time and exact total/available/reserved decimals. There is no seeded money or reset. Identical imports are idempotent; a different replacement is rejected after initialization. Only available funds finance entries; imported holdings and reserves are preserved. Only new strategy-owned positions can be sold.
 
-0–2 entry ideas per day; no forced daily trading. Long spot only, no leverage, no averaging down. EMA20 > EMA50; last closed one-hour close above the preceding 20 candle highs; positive volume in the last 21 bars; first 15 minutes after the close; ask no more than 0.5 ATR above close; spread <= 0.2%; quote <= 60 seconds old. Candle gaps, duplicates, invalid OHLC, zero-volume synthetic candles or stale feeds block ideas.
+Capital anchors at the first complete valuation of opening available assets. Missing prices for a nonzero available asset block entries. The current feed supports BTC/ETH/SOL against EUR; other positive opening assets require an explicit valuation extension. Decimal accounting records both-side fees and net P&L from new strategy activity, not changes in imported holdings.
 
-Reference stop = ask − 2 ATR14; target = ask + 4 ATR14. Allowed stop distance 0.5%–5%. Exit-review rules are close below EMA20 or 48 hours maximum holding time. These are proposals; they are not resting orders or guaranteed stop protection. No position lifecycle is fabricated.
+- Scan all three markets every five minutes. Enter on completed hourly EMA20 > EMA50 and a close above the preceding 20 highs, in the first 15 minutes. Require fresh quotes, valid candles, positive recent volume, spread <=0.2%, and no chase beyond 0.5 ATR.
+- Zero to two entries per Berlin day, at most two open positions, no leverage. Risk 0.25%; position notional <=10%, aggregate exposure <=20%. Respect EUR availability, quantity steps and minimum orders.
+- Stop distance 2 ATR14; target distance 4 ATR14; exit on an hourly close below EMA20 or after 48 hours. Exits run before entry filters at the next fresh polled bid. Stops are not resting orders or guaranteed prices.
+- Educational costs are 0.09% fees and 0.05% adverse slippage per side, not statements of actual broker charges.
+- Reduce risk to 0.125% after two consecutive losses or 2% drawdown. Pause new risk at 1% daily loss, 3% weekly loss or 5% drawdown. Gates are re-evaluated every cycle. The owner toggle pauses entries only; exits continue.
+- A risk increase remains a proposal after >=100 closed trades and 56 days, positive net expectancy, profit factor >=1.2, maximum drawdown <3% and no loss streak. It is not applied automatically.
 
-Sizing function needs explicitly allocated capital, available cash, open-position exposure, instrument minimums/step, verified cost assumptions and reconciled performance. It does not read accounts or submit its output. Base loss budget 0.25%; maximum position notional 10%; combined exposure 20%; at most two positions. Quantity rounded down. Round-trip costs included. Initial cost assumptions: 0.09% fee plus 0.05% slippage each side; actual broker costs must be verified before sizing. No capital default.
+This is an unvalidated educational hypothesis, without a profitability claim. Keep 1,000 recent runs, 2,000 orders and 2,000 trades with lifetime aggregates; export earlier if detailed history must be retained indefinitely.
 
-Proposed risk reduction to 0.125% after two consecutive losses or 2% drawdown. Stop new risk at 1% daily loss, 3% weekly loss or 5% drawdown; no automatic resumption after a pause is implemented. Proposed increase only after >=30 days AND >=30 closed trades, net expectancy >0 R, profit factor >=1.2, drawdown <3%, no loss streak; +25% of prior risk, max 0.5%. Even eligible increases remain review proposals. The running monitor does not claim to enforce account loss limits: there is no verified performance/position feed or execution adapter. Deposits, transfers and balance changes are never interpreted as trading P&L.
+## Free-plan scope
 
-## Free-plan budget and limits
+The Worker makes 288 scheduled invocations/day and one outbound site request per invocation, with no D1 queries or paid AI calls. The site performs analysis and settlement under its own hosting/database quotas. Cloudflare Free allows 100,000 requests/day and 10 ms CPU per invocation, including cron; network waiting is not CPU.
 
-288 scheduled invocations/day, two public GETs per invocation, no paid AI calls, no browser inside Workers. Small bounded JSON payloads, up to 100 analysed candles per market, indexed D1 summaries, <=2 ideas/day. Expected normal D1 writes are a few thousand rows/day including indexes, below Free's 100,000; reads well below 5 million/day. These are estimates; account quotas are shared with other workloads. Free Workers allow 100,000 requests/day and 10 ms CPU per invocation, including Cron. Network wait is not CPU. A live deployment still needs runtime error/CPU monitoring: local functional tests alone do not prove CPU compliance. Quota exhaustion produces an error, not an automatic paid upgrade.
-
-Official limits checked 2026-09-24:
-- https://developers.cloudflare.com/workers/platform/limits/
-- https://developers.cloudflare.com/d1/platform/pricing/
+One live invocation of deployment `4b2556d8-20a7-4515-8b8f-8116c1853d18` at `2026-09-24T23:35:53.848Z` succeeded with 1 ms CPU and 3,000 ms wall time. This measures one invocation, not every future run. Official limits checked 2026-09-24: https://developers.cloudflare.com/workers/platform/limits/
 
 ## Deployment and verification
 
-The deployed Cron and D1 run privately. `workers_dev` remains false because enabling an HTTP address was blocked by automatic approval review, including after signature authentication was added. The authenticated app report route is prepared but cannot reach the Worker until this endpoint is explicitly authorized. No public report was enabled.
+Deploy the site first, explicitly import its existing snapshot and enable educational entries. Deploy the `main` module in `wrangler.jsonc`, preserving `secret_text` bindings and the existing cron. `workers_dev` and preview URLs remain disabled. The previously blocked Worker HTTP report endpoint was never enabled and is unnecessary for this outbound scheduler.
 
-Apply `migrations/0001_monitor.sql` to the existing D1. Deploy `worker.mjs` and `engine.mjs` as ES modules with the Wrangler configuration, then install the cron. Do not enable the old paper-forward cron. Do not add secrets: this component has no need for any.
+The old `worker.mjs`, `engine.mjs`, report-auth module, D1 binding and `monitor_*` data remain historical. They are not the current entry point or execution/performance source. Do not restart the old paper-forward experiment or rerun its migrations to operate this scheduler.
 
-`node --test automation/engine.test.mjs` tests rules and SQLite-backed dedupe, daily caps, leases, error persistence and report authentication. `npm run typecheck`, `npm test` and `npm run build` cover the application. The authenticated `/automation` page verifies real scheduled runs without triggering them. Direct unauthenticated report requests must return 401.
+Verify with `npm test`, `npm run typecheck`, `npm run build` and `wrangler deploy --dry-run --config automation/wrangler.jsonc`. Regenerate declarations with `wrangler types automation/env.d.ts --include-runtime=false --config automation/wrangler.jsonc`. Confirm a real scheduled invocation and its matching saved site run; configuration alone does not prove execution.
