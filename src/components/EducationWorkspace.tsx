@@ -124,6 +124,60 @@ function PanelHeading({ title, detail, count }: { title: string; detail?: string
   return <div className={styles.panelHeading}><div><h2>{title}</h2>{detail && <p className={styles.subtle}>{detail}</p>}</div>{count !== undefined && <span className={styles.count}>{count}</span>}</div>;
 }
 
+function ReportingAudit({ report, readAt }: { report: EducationReport; readAt: string | null }) {
+  const [showReport, setShowReport] = useState(false);
+  const asOf = Date.parse(report.updatedAt ?? '');
+  const hasWindow = Number.isFinite(asOf);
+  const windowStart = asOf - 24 * 60 * 60_000;
+  const inWindow = (value: string) => { const at = Date.parse(value); return hasWindow && Number.isFinite(at) && at > windowStart && at <= asOf; };
+  const runs = report.runs.filter(run => inWindow(run.at));
+  const orders = report.orders.filter(order => inWindow(order.filledAt));
+  const trades = report.trades.filter(trade => inWindow(trade.closedAt));
+  const runTimes = report.runs.map(run => Date.parse(run.at)).filter(Number.isFinite);
+  const firstRun = runTimes.length ? Math.min(...runTimes) : null;
+  const lastRunAt = Date.parse(report.lastRun?.at ?? '');
+  const watermarkConsistent = Number.isFinite(lastRunAt) && lastRunAt <= asOf
+    && runTimes.length > 0 && lastRunAt === Math.max(...runTimes)
+    && report.runs.some(run => run.id === report.lastRun?.id && run.at === report.lastRun?.at);
+  const historyMayBeTruncated = hasWindow && (
+    report.runs.length >= report.retention.recentRuns && firstRun !== null && firstRun > windowStart
+    || report.retention.archivedOrders > 0 && !report.orders.some(order => Date.parse(order.filledAt) <= windowStart)
+    || report.retention.archivedTrades > 0 && !report.trades.some(trade => Date.parse(trade.closedAt) <= windowStart)
+  );
+  const ageAtRead = Date.parse(readAt ?? '') - lastRunAt;
+  const freshnessLimit = report.policy.scanMinutes * 2 * 60_000;
+  const fresh = watermarkConsistent && Number.isFinite(ageAtRead) && ageAtRead >= -5000 && ageAtRead <= freshnessLimit;
+  const coverage = !hasWindow ? 'وقت تحديث التقرير غير متاح؛ تعذر تحديد نافذة القياس.'
+    : !report.lastRun ? 'بانتظار أول دورة محفوظة. لا تعني أعداد السجل أن المجدول قد عمل.'
+    : !watermarkConsistent ? 'تغطية غير مؤكدة: ختم الدورة الأخيرة لا يطابق نهاية سجل الدورات.'
+    : historyMayBeTruncated ? 'تغطية جزئية: قد يكون حد الاحتفاظ قد اقتطع سجلات من هذه النافذة. الأعداد أدناه حد أدنى من السجل المتاح.'
+    : firstRun !== null && firstRun > windowStart ? 'بدأ سجل الدورات المحفوظ داخل هذه النافذة؛ لم يكتمل يوم من السجل بعد. الأعداد تشمل الفترة المسجلة فقط.'
+    : 'سجل الدورات المحفوظ يمتد إلى بداية نافذة القياس. الأعداد تخص الدورات المحفوظة، ولا تثبت غياب انقطاعات بين الدورات.';
+  const count = (value: number) => hasWindow ? `${historyMayBeTruncated ? '≥ ' : ''}${value}` : 'غير متاح';
+
+  return <section className={styles.panel} aria-labelledby="education-audit-title">
+    <div className={styles.panelHeading}><div><h2 id="education-audit-title">ملخص آخر 24 ساعة</h2><p className={styles.subtle}>النافذة تنتهي عند آخر تحديث محفوظ للتقرير؛ تُستخدم الأوقات أدناه في المتابعة اليومية.</p></div></div>
+    <div className={`${styles.metrics} ${styles.auditMetrics}`}>
+      <Metric label="الدورات المسجلة" value={count(runs.length)} note="دورات حفظت نتائجها في الموقع" />
+      <Metric label="عمليات الشراء المنفذة" value={count(orders.filter(order => order.side === 'buy').length)} note="عمليات شراء داخل النافذة" />
+      <Metric label="عمليات البيع المنفذة" value={count(orders.filter(order => order.side === 'sell').length)} note="عمليات بيع داخل النافذة" />
+      <Metric label="الصفقات المغلقة" value={count(trades.length)} note="إغلاق المركز داخل النافذة" />
+    </div>
+    <div className={styles.body}><dl className={`${styles.details} ${styles.auditTimes}`}>
+      <dt>بداية النافذة · UTC · غير مشمولة</dt><dd><time className={styles.numeric} dateTime={hasWindow ? new Date(windowStart).toISOString() : undefined}>{hasWindow ? new Date(windowStart).toISOString() : 'غير متاح'}</time></dd>
+      <dt>نهاية النافذة · UTC · مشمولة</dt><dd><time className={styles.numeric} dateTime={report.updatedAt ?? undefined}>{report.updatedAt ?? 'غير متاح'}</time></dd>
+      <dt>ختم آخر دورة محفوظة · UTC</dt><dd><time className={styles.numeric} dateTime={report.lastRun?.at}>{report.lastRun?.at ?? 'غير متاح'}</time></dd>
+      <dt>وقت قراءة التقرير · UTC</dt><dd><time className={styles.numeric} dateTime={readAt ?? undefined}>{readAt ?? 'غير متاح'}</time></dd>
+      <dt>عدد الدورات المحفوظة / حد الاحتفاظ</dt><dd className={styles.numeric}>{report.runs.length} / {report.retention.recentRuns}</dd>
+      <dt>حداثة آخر دورة عند القراءة</dt><dd>{!report.lastRun ? 'بانتظار أول دورة' : !watermarkConsistent ? 'ختم غير متسق' : fresh ? `ضمن ${report.policy.scanMinutes * 2} دقائق` : 'الدورة متأخرة أو وقتها غير متسق مع القراءة'}</dd>
+    </dl><p className={`${styles.message} ${!watermarkConsistent || historyMayBeTruncated ? styles.warning : ''}`}>{coverage}</p></div>
+    <details className={styles.reportDetails} onToggle={event => setShowReport(event.currentTarget.open)}>
+      <summary>بيانات التقرير الكاملة</summary>
+      {showReport && <><p className={styles.subtle}>البيانات نفسها التي تعرضها هذه الصفحة، من آخر قراءة ناجحة. الأوقات بصيغة ISO والأرصدة دون اختصار الدقة.</p><pre id="education-report-json" className={styles.reportJson} dir="ltr" tabIndex={0} aria-label="تقرير الأتمتة الكامل بصيغة JSON">{JSON.stringify(report, null, 2)}</pre></>}
+    </details>
+  </section>;
+}
+
 export function EducationWorkspace({ csrfToken }: { csrfToken: string }) {
   const [report, setReport] = useState<EducationReport | null>(null);
   const [loading, setLoading] = useState(true);
@@ -309,6 +363,7 @@ export function EducationWorkspace({ csrfToken }: { csrfToken: string }) {
       {trades.length > 0 && <section className={styles.panel}><PanelHeading title="نتائج الصفقات المغلقة" detail="الأحدث أولًا؛ النتيجة تشمل رسوم الدخول والخروج" /><div className={styles.scroll}><table className={styles.table}><thead><tr><th scope="col">السوق</th><th scope="col">الإغلاق</th><th scope="col">صافي النتيجة · EUR</th><th scope="col">صافي R</th><th scope="col">سبب الخروج</th></tr></thead><tbody>{trades.map(trade => <tr key={trade.id}><td><bdi>{trade.symbol}</bdi></td><td>{dateText(trade.closedAt)}</td><td className={`${styles.numeric} ${pnlClass(trade.netPnl)}`}>{numberText(trade.netPnl, 4)}</td><td className={styles.numeric}>{numberText(trade.netR, 3)}</td><td className={styles.reasonCell}>{reasonText(trade.reason)}</td></tr>)}</tbody></table></div></section>}
     </>}
 
+    {report && <ReportingAudit report={report} readAt={readAt} />}
     {report && <section className={styles.panel}><PanelHeading title="قواعد التشغيل" detail={`الأسواق: ${report.policy.symbols.join(' · ')}`} /><div className={styles.rules}>
       <article><h3>الدخول عند اكتمال الشروط</h3><p>فحص كل {report.policy.scanMinutes} دقائق. يُقيّم الدخول بعد إغلاق شمعة الساعة: اتجاه EMA20 أعلى من EMA50 واختراق أعلى 20 شمعة سابقة، ضمن أول 15 دقيقة من الإغلاق. حد الدخول اليومي: {report.policy.maximumEntriesPerDay}؛ وقد يمر يوم كامل دون شراء.</p></article>
       <article><h3>الحجم والخروج</h3><p>المخاطرة الأساسية {percentText(report.policy.baseRiskFraction)}، وقيمة المركز حتى {percentText(report.policy.maximumPositionFraction)} من رأس المال والتعرض الكلي حتى {percentText(report.policy.maximumExposureFraction)}. وقف على بُعد 2×ATR14 وهدف على بُعد 4×ATR14، أو خروج اتجاه، أو انتهاء {report.policy.maximumHoldingHours} ساعة.</p></article>
