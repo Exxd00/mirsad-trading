@@ -1,0 +1,12 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "mirsad-paper-forward",
+  "main": "src/index.mts",
+  "compatibility_date": "2026-09-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "triggers": {"crons": ["* * * * *"]},
+  "observability": {"enabled": true, "head_sampling_rate": 0.1},
+  "d1_databases": [{"binding":"DB","database_name":"mirsad-paper-forward","database_id":"00000000-0000-0000-0000-000000000000","migrations_dir":"migrations"}]
+}
