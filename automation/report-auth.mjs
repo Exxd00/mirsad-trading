@@ -7,7 +7,7 @@ export async function authorizedReport(request,fetcher=fetch,now=Date.now()){
     const claims=JSON.parse(Buffer.from(payload,'base64url').toString('utf8'));
     const seconds=Math.floor(now/1000);
     if(claims.aud!=='mirsad-signal-monitor'||claims.path!==new URL(request.url).pathname||!Number.isInteger(claims.iat)||!Number.isInteger(claims.exp)||claims.exp<=seconds||claims.iat>seconds+5||claims.exp-claims.iat>30||claims.exp<=claims.iat||typeof claims.nonce!=='string')return false;
-    const response=await fetcher('https://mirsad-trading.vercel.app/api/automation/public-key',{method:'GET',redirect:'error',signal:AbortSignal.timeout(8_000)});
+    const response=await fetcher('https://mirsad-trading.vercel.app/api/automation/public-key',{method:'GET',redirect:'manual',signal:AbortSignal.timeout(8_000)});
     if(!response.ok)return false;
     const body=await response.text();if(body.length>1024)return false;
     const key=JSON.parse(body);

@@ -6,7 +6,7 @@ const json=(body,status=200)=>Response.json(body,{status,headers:{'Cache-Control
 async function publicJson(path,fetcher=fetch) {
   // Deliberately restricted to public market GETs. No account or order paths.
   if (!/^\/api\/1\.0\/public\/(tickers\?|candles\/(BTC|ETH|SOL)-EUR\?)/.test(path)) throw new Error('path_not_allowed');
-  const response=await fetcher(ORIGIN+path,{method:'GET',redirect:'error',headers:{Accept:'application/json'},signal:AbortSignal.timeout(12_000)});
+  const response=await fetcher(ORIGIN+path,{method:'GET',redirect:'manual',headers:{Accept:'application/json'},signal:AbortSignal.timeout(12_000)});
   if (!response.ok) throw new Error(response.status===429?'feed_rate_limited':'feed_unavailable');
   if (Number(response.headers.get('Content-Length')||0)>MAX_BYTES) {await response.body?.cancel();throw new Error('feed_too_large');}
   const reader=response.body?.getReader();if(!reader)throw new Error('feed_empty');
@@ -35,6 +35,7 @@ export async function runMonitor(env,scheduledTime=Date.now(),fetcher=fetch) {
       // All fetches above are public and carry no credentials. Persist only the
       // exception class to distinguish transport/format errors without bodies.
       report.errorClass=String(error?.name??'Unknown').slice(0,40);
+      if(error?.name==='TypeError')report.errorDetail=String(error.message).slice(0,160);
     }
     if(report.decision==='candidate') {
       const id=`${POLICY.version}:${symbol}:${report.candleEnd}`;
