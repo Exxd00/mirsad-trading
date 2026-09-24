@@ -2,7 +2,10 @@ import "server-only";
 import { createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
 import { query, transaction } from "./db";
 
-const SESSION_TTL_SECONDS = 8 * 60 * 60;
+// Persistent cookies are capped at 400 days by browsers. Renew active sessions
+// once a day so regular visits/automation do not require another password.
+const SESSION_TTL_SECONDS = 400 * 24 * 60 * 60;
+const SESSION_RENEW_AFTER_SECONDS = 24 * 60 * 60;
 const RATE_WINDOW_SECONDS = 15 * 60;
 const HASH_PATTERN = /^scrypt\$32768\$8\$1\$([a-f0-9]{32})\$([a-f0-9]{128})$/;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -165,6 +168,29 @@ export async function requireSession(request: Request): Promise<Session> {
   const session = await getSession(request);
   if (!session) throw new AuthError(401, "authentication_required", "سجّل الدخول للمتابعة.");
   return session;
+}
+export async function refreshSessionCookie(request: Request, session: Session): Promise<string> {
+  const token = cookie(request, sessionCookieName());
+  if (!token || !constantEqual(csrfForSession(token), session.csrfToken)) {
+    throw new AuthError(401, "authentication_required", "سجّل الدخول للمتابعة.");
+  }
+  if (session.expiresAt.getTime() <= Date.now() + (SESSION_TTL_SECONDS - SESSION_RENEW_AFTER_SECONDS) * 1000) {
+    // Update only an existing, unexpired, unrevoked session. In particular, a
+    // renewal racing logout/password change must never recreate a deleted row.
+    const result = await query<{ expires_at: Date | string }>(
+      `UPDATE app_sessions s SET expires_at = GREATEST(s.expires_at, $1::timestamptz)
+       FROM app_owner o
+       WHERE s.id = $2 AND s.token_hash = $3 AND s.csrf_hash = $4
+         AND s.auth_version = $5 AND o.id = 1 AND o.auth_version = s.auth_version
+         AND s.expires_at > NOW()
+       RETURNING s.expires_at`,
+      [new Date(Date.now() + SESSION_TTL_SECONDS * 1000), session.id, digest(token), digest(session.csrfToken), session.authVersion]);
+    if (!result.rows[0]) throw new AuthError(401, "authentication_required", "سجّل الدخول للمتابعة.");
+    session.expiresAt = new Date(result.rows[0].expires_at);
+  }
+  // Re-send even between renewals so a lost response or an old eight-hour
+  // browser cookie can catch up with the durable expiry without another login.
+  return sessionCookie(token, session.expiresAt);
 }
 export async function requireMutation(request: Request): Promise<Session> {
   verifyOrigin(request);
