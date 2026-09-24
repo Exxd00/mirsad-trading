@@ -1,0 +1,11 @@
+{
+  "$schema": "https://unpkg.com/wrangler@4.137.0/config-schema.json",
+  "name": "mirsad-signal-monitor",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-09-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 },
+  "d1_databases": [{ "binding": "DB", "database_name": "mirsad-paper-forward", "database_id": "a397c9cf-ad63-42a5-8756-9ddde726acb3", "migrations_dir": "migrations" }]
+}
