@@ -52,6 +52,8 @@ After the server is ready, the user can register an Ed25519 public key in their 
 
 Passwords use salted scrypt hashes. Session tokens are random, stored hashed, and transported in HttpOnly cookies with SameSite=Strict and Secure in production. Writes require an allowed origin and a session-bound CSRF token. Login and sensitive reauthentication are rate limited in the database. Broker secrets are encrypted server-side with AES-256-GCM and bound to the broker context. Password changes invalidate existing sessions.
 
+Login is persistent: a session and its cookie last 400 days, and authenticated API reads renew that window after a day of use. Normal workspace visits and scheduled reads keep it current without storing the password. Unexpired older eight-hour sessions upgrade on their next authenticated read. Expired or revoked sessions require login; logout revokes the current session, and changing the password revokes every session. Clearing browser cookies also requires login. A daily read must use the same browser profile; a separate profile needs its own initial login.
+
 | Environment variable | Purpose |
 |---|---|
 | `DATABASE_URL` | Durable production Postgres connection; server only |

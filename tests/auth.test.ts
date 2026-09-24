@@ -6,7 +6,7 @@ vi.mock("@/lib/services", () => ({
   audit: vi.fn(), connectRevolut: vi.fn(), createTradingPort: vi.fn(), dashboard: vi.fn(),
   instruments: vi.fn(), market: vi.fn(), setSetting: vi.fn(), settings: vi.fn(), toggleLive: vi.fn(),
 }));
-import { changePassword, clearSessionCookie, getSession, hashPassword, issueLoginCsrf, login, logout, requireMutation, requireSession, sessionCookie, sessionCookieName, verifyLoginCsrf, verifyOrigin, verifyPassword } from "../src/lib/auth";
+import { changePassword, clearSessionCookie, getSession, hashPassword, issueLoginCsrf, login, logout, refreshSessionCookie, requireMutation, requireSession, sessionCookie, sessionCookieName, verifyLoginCsrf, verifyOrigin, verifyPassword } from "../src/lib/auth";
 import { closeDatabase, ensureSchema, query } from "../src/lib/db";
 import { decryptSecret, encryptSecret } from "../src/lib/secrets";
 import { GET as apiGet, POST as apiPost } from "../src/app/api/[...path]/route";
@@ -94,7 +94,7 @@ describe("durable owner authentication", () => {
     const request = authenticatedRequest(first.sessionToken, first.csrfToken);
     const session = await requireMutation(request);
     expect(session.csrfToken).toBe(first.csrfToken);
-    expect(session.expiresAt.getTime() - Date.now()).toBeGreaterThan(7.9 * 60 * 60 * 1000);
+    expect(session.expiresAt.getTime() - Date.now()).toBeGreaterThan(399 * 24 * 60 * 60 * 1000);
     await expect(requireMutation(authenticatedRequest(first.sessionToken, second.csrfToken))).rejects.toMatchObject({ code: "csrf_rejected" });
     await expect(requireMutation(authenticatedRequest(first.sessionToken))).rejects.toMatchObject({ code: "csrf_rejected" });
     const stored = await query<{ token_hash: string; csrf_hash: string }>("SELECT token_hash, csrf_hash FROM app_sessions");
@@ -166,6 +166,78 @@ describe("credential vault", () => {
 });
 
 describe("HTTP authentication boundary", () => {
+  const context = (path: string) => ({ params: Promise.resolve({ path: path.split("/") }) });
+  const readRequest = (token: string, path = "session") => new Request(`http://localhost:3000/api/${path}`, {
+    headers: { cookie: `${sessionCookieName()}=${token}` },
+  });
+  it("issues a persistent cookie at login and remains authenticated beyond the old eight-hour limit", async () => {
+    const request = loginRequest();
+    request.headers.set("content-type", "application/json");
+    const response = await apiPost(new Request(request, { body: JSON.stringify({ password: TEST_PASSWORD }) }), context("auth/login"));
+    expect(response.status).toBe(200);
+    const serialized = response.headers.getSetCookie().find(value => value.startsWith(`${sessionCookieName()}=`))!;
+    expect(Number(/Max-Age=(\d+)/.exec(serialized)![1])).toBeGreaterThan(399 * 86400);
+    expect(serialized).toContain("Expires=");
+    const token = serialized.split(";")[0].split("=")[1];
+    // Age the stored session by a day, including its expiry, using the database
+    // clock. No live account or provider calls are made by this test.
+    await query("UPDATE app_sessions SET created_at = created_at - INTERVAL '1 day', expires_at = expires_at - INTERVAL '1 day'");
+    const read = await apiGet(readRequest(token), context("session"));
+    expect(read.status).toBe(200);
+    expect(read.headers.get("set-cookie")).toContain("HttpOnly; SameSite=Strict");
+    expect(new Date((await read.json()).expiresAt).getTime() - Date.now()).toBeGreaterThan(399 * 86400_000);
+  });
+  it("upgrades an unexpired eight-hour session and renews its durable expiry at most daily", async () => {
+    const loginResult = await login(TEST_PASSWORD, loginRequest());
+    await query("UPDATE app_sessions SET expires_at = NOW() + INTERVAL '8 hours'");
+    const first = await apiGet(readRequest(loginResult.sessionToken), context("session"));
+    const firstData = await first.json();
+    expect(first.status).toBe(200);
+    expect(new Date(firstData.expiresAt).getTime() - Date.now()).toBeGreaterThan(399 * 86400_000);
+    expect(Number(/Max-Age=(\d+)/.exec(first.headers.get("set-cookie")!)![1])).toBeGreaterThan(399 * 86400);
+    expect(firstData.csrfToken).toBe(loginResult.csrfToken);
+    const second = await apiGet(readRequest(loginResult.sessionToken), context("session"));
+    expect((await second.json()).expiresAt).toBe(firstData.expiresAt);
+    expect(second.headers.get("set-cookie")).toContain("Expires=");
+    const stored = await query<{ expires_at: Date }>("SELECT expires_at FROM app_sessions");
+    expect(new Date(stored.rows[0].expires_at).toISOString()).toBe(firstData.expiresAt);
+  });
+  it("retains renewal on provider failure, without replacing the error with account data", async () => {
+    const loginResult = await login(TEST_PASSWORD, loginRequest());
+    await query("UPDATE app_sessions SET expires_at = NOW() + INTERVAL '8 hours'");
+    vi.mocked(guardedServices.dashboard).mockRejectedValueOnce(new Error("provider unavailable"));
+    const response = await apiGet(readRequest(loginResult.sessionToken, "dashboard"), context("dashboard"));
+    expect(response.status).toBe(503);
+    expect(response.headers.get("set-cookie")).toContain("Expires=");
+    expect((await response.json()).code).toBe("SERVICE_UNAVAILABLE");
+    vi.mocked(guardedServices.dashboard).mockClear();
+  });
+  it.each(["expired", "logout", "password", "version"])("never revives a %s session during a late renewal", async reason => {
+    const loginResult = await login(TEST_PASSWORD, loginRequest());
+    await query("UPDATE app_sessions SET expires_at = NOW() + INTERVAL '8 hours'");
+    const request = authenticatedRequest(loginResult.sessionToken, loginResult.csrfToken);
+    const staleSession = await requireSession(request);
+    if (reason === "expired") await query("UPDATE app_sessions SET expires_at = NOW() - INTERVAL '1 second'");
+    if (reason === "logout") await logout(request);
+    if (reason === "password") await changePassword(request, TEST_PASSWORD, NEXT_PASSWORD);
+    if (reason === "version") await query("UPDATE app_owner SET auth_version = auth_version + 1");
+    await expect(refreshSessionCookie(request, staleSession)).rejects.toMatchObject({ status: 401 });
+    const response = await apiGet(readRequest(loginResult.sessionToken), context("session"));
+    expect(response.status).toBe(401);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(await getSession(request)).toBeNull();
+  });
+  it("clears the persistent cookie on logout and password change", async () => {
+    for (const path of ["auth/logout", "auth/password"]) {
+      const result = await login(TEST_PASSWORD, loginRequest());
+      const request = authenticatedRequest(result.sessionToken, result.csrfToken);
+      request.headers.set("content-type", "application/json");
+      const response = await apiPost(new Request(request, { body: JSON.stringify({ currentPassword: TEST_PASSWORD, newPassword: NEXT_PASSWORD }) }), context(path));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+      expect(await getSession(request)).toBeNull();
+    }
+  });
   it("protects every private GET endpoint, including direct market and account API URLs", async () => {
     for (const path of ["session", "dashboard", "market", "settings"]) {
       const response = await apiGet(new Request(`http://localhost:3000/api/${path}`), { params: Promise.resolve({ path: [path] }) });

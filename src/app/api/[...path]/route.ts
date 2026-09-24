@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AuthError, changePassword, clearLoginCsrfCookie, clearSessionCookie, issueLoginCsrf, login, logout, requireMutation, requireSession, sessionCookie, verifyCurrentPassword } from '@/lib/auth';
+import { AuthError, changePassword, clearLoginCsrfCookie, clearSessionCookie, issueLoginCsrf, login, logout, refreshSessionCookie, requireMutation, requireSession, sessionCookie, verifyCurrentPassword } from '@/lib/auth';
 import { json, failure, body } from '@/lib/http';
 import { AppError } from '@/lib/errors';
 import { audit, connectRevolut, createTradingPort, dashboard, instruments, market, setSetting, settings, toggleLive } from '@/lib/services';
@@ -10,19 +10,27 @@ export const runtime='nodejs';
 export const maxDuration=30;
 type Context={params:Promise<{path:string[]}>};
 export async function GET(request:Request,ctx:Context){
+ let refreshedCookie:string|undefined;
+ const respond=(response:Response)=>{
+  if(refreshedCookie)response.headers.append('Set-Cookie',refreshedCookie);
+  return response;
+ };
  try{
   const path=(await ctx.params).path.join('/');
   if(path==='auth/csrf'){const csrf=issueLoginCsrf();const response=json({csrfToken:csrf.csrfToken});response.headers.append('Set-Cookie',csrf.cookie);return response;}
   const session=await requireSession(request);
+  // Workspace reads and scheduled reads both keep the authenticated browser
+  // session alive, including when an unrelated data provider is unavailable.
+  refreshedCookie=await refreshSessionCookie(request,session);
   const url=new URL(request.url);
   switch(path){
-   case 'session':return json({csrfToken:session.csrfToken,expiresAt:session.expiresAt});
-   case 'dashboard':return json(await dashboard(url.searchParams.get('mode')==='simulation'?'simulation':'live'));
-   case 'market':return json(await market(url.searchParams.get('symbol')??'BTC-EUR',Number(url.searchParams.get('interval')??15)));
-   case 'settings':return json(await settings());
-   default:return json({error:'المسار غير موجود.'},404);
+   case 'session':return respond(json({csrfToken:session.csrfToken,expiresAt:session.expiresAt}));
+   case 'dashboard':return respond(json(await dashboard(url.searchParams.get('mode')==='simulation'?'simulation':'live')));
+   case 'market':return respond(json(await market(url.searchParams.get('symbol')??'BTC-EUR',Number(url.searchParams.get('interval')??15))));
+   case 'settings':return respond(json(await settings()));
+   default:return respond(json({error:'المسار غير موجود.'},404));
   }
- }catch(error){return failure(error);}
+ }catch(error){return respond(failure(error));}
 }
 export async function POST(request:Request,ctx:Context){
  try{
