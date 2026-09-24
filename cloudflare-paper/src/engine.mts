@@ -18,7 +18,7 @@ export async function digest(value: unknown): Promise<string> {
 export type Candle = {start: number; open: number; high: number; low: number; close: number; volume: number};
 type Quote = {bid: number; ask: number; sourceMs: number; observedMs: number};
 type Position = {entryId: string; executionMs: number; price: number; quantity: number; fee: number; slippage: number};
-type Run = {id: string; observedMs: number; finishedMs: number; scheduledMs: number; status: string; error: string | null; processed: number};
+type Run = {id: string; observedMs: number; finishedMs: number; scheduledMs: number; status: string; error: string | null; processed: number; diagnostic?: string};
 type State = {batchId: string; configHash: string; startedMs: number | null; lastClosed: number | null;
   cash: number; position: Position | null; closedCount: number; slot: number; reviewDue: boolean; lastRun: Run | null};
 type Event = {id: string; batchId: string; side: 'BUY' | 'SELL'; signalMs: number; observedMs: number;
@@ -49,8 +49,9 @@ function timestamp(value: unknown, now: number): number {
 }
 async function readJSON(url: URL, deps: Dependencies): Promise<unknown> {
   let response: Response;
-  try { response = await deps.fetch(url, {headers: {accept: 'application/json'}, redirect: 'error', signal: AbortSignal.timeout(10000)}); }
-  catch { return reject('SOURCE_NETWORK'); }
+  // Return redirects as non-success responses; never follow them to another source.
+  try { response = await deps.fetch(url, {headers: {accept: 'application/json'}, redirect: 'manual', signal: AbortSignal.timeout(10000)}); }
+  catch (cause) { throw new FeedError('SOURCE_NETWORK', {cause}); }
   if (!response.ok) return reject(`SOURCE_HTTP_${response.status}`);
   if (!response.headers.get('content-type')?.includes('application/json') || !response.body) return reject('SOURCE_NOT_JSON');
   const reader = response.body.getReader(), parts: Uint8Array[] = [];
@@ -205,6 +206,8 @@ export async function runTick(db: D1Database, scheduledMs: number, deps: Depende
     if (!(error instanceof FeedError)) throw error;
     state=structuredClone(original); bars=[]; sourceMs=null; events.length=0; results.length=0;
     run.status='blocked'; run.error=error.message; run.processed=0;
+    // Bounded network diagnostics stay in authenticated D1, never in /health.
+    if (error.cause instanceof Error) run.diagnostic=`${error.cause.name}: ${error.cause.message}`.replace(/[\u0000-\u001f]/g,' ').slice(0,240);
   }
   run.finishedMs=deps.clock(); state.slot=slot; state.lastRun=run;
   state.reviewDue=state.closedCount>=CONFIG.reviewTrades || (state.startedMs!==null && run.finishedMs-state.startedMs>=CONFIG.reviewDays*24*HOUR);

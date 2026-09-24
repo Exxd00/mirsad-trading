@@ -34,42 +34,61 @@ node --test research/engine.test.mjs
 
 Tests execute the engine against Miniflare D1, including real SQL transactions, rollback injection, concurrent calls, stalled calls, disk restart, gaps, source conflicts, outages, expiry, price/cost reconciliation and the public HTTP surface. Test fixtures stay local and are never inserted into remote D1. Runtime binding types are generated inside this package's ignored `node_modules/.cache` directory. `.mts` keeps the independent Worker outside the existing Next.js TypeScript include patterns.
 
-## Deploy and prove operation
+## Deployment and operation
 
-The zero UUID in `wrangler.jsonc` is a **non-deployable placeholder**, not an existing database. Before deployment, verify the connected Cloudflare account and its Workers Free plan without changing the subscription. Reconnect the Cloudflare app if it reports an expired connection. Then:
+Deployed on 2026-09-24 to the existing Workers Free plan, confirmed by the user's dashboard screenshots (Free / Active / $0; no payment method). No subscription change was made.
+
+| Resource | Verified value |
+| --- | --- |
+| Account | `61e259613cc3301fbf6ec781934ef976` |
+| Worker | `mirsad-paper-forward` |
+| D1, WEUR | `a397c9cf-ad63-42a5-8756-9ddde726acb3` |
+| Migration | `0001_initial.sql`, applied 2026-09-24 11:21:41 UTC |
+| Worker version | `56761480-3a33-4afb-86f8-ac706fef3fe4` |
+| Deployment | `cce9a9c4-ae57-4db1-b175-c2543ab50fbc`, 100%, 11:36:42 UTC |
+| Schedule | `* * * * *` |
+| Configuration SHA-256 | `3727d60fc10e48095665eb45094b98f5f2d04e29d6759a65003646200371beb8` |
+
+The first real cron wrote a blocked run at 11:26:53 UTC. After the second deployment, initialization succeeded at **2026-09-24T11:36:53.891Z**, storing 31 contiguous closed public EEA candles. D1 then recorded an `idle` run at 11:37:53 UTC with no error, no open position and no closed results. These are deployment observations, not test fixtures or performance claims. The ticker is validated when a timely trading signal needs a quote; live quote execution has not yet been observed.
+
+Network reads use `redirect: 'manual'`: redirects are rejected as explicit HTTP errors and are never followed. A bounded network exception description is retained only in authenticated D1 run records, never in the public health response.
+
+For later updates, reuse the existing database and account in `wrangler.jsonc`:
 
 ```sh
 cd cloudflare-paper
 npx wrangler whoami
-npx wrangler d1 create mirsad-paper-forward --location weur
-# Put the returned database UUID in wrangler.jsonc (not a secret).
-npx wrangler d1 migrations apply mirsad-paper-forward --remote
 npm run typecheck
+npm test
 npm run dry-run
 npm run deploy
 ```
 
-Use the authenticated Cloudflare connector equivalently if CLI authentication is unavailable. Do not create a duplicate database if one already exists. This first migration replaces an **undeployed prototype**; never apply it to a non-empty database without a separate migration review.
+Use the authenticated Cloudflare connector equivalently if CLI authentication is unavailable. Do not recreate D1 or rerun initial SQL against this populated database. Use a new reviewed migration for future schema changes. Never upgrade the subscription as part of deployment.
 
-After deployment, read back the Worker version, D1 binding and `* * * * *` schedule, then observe real cron-written `runs` rows. Cron configuration alone is not execution evidence. `/health` returns 503 until initialized, on a blocked pass, after 3 minutes without a run, or if D1 is unavailable. It returns 200 only for initialized recent operation. Source reachability must be checked from the deployed Worker; the current development environment returned non-JSON for the public ticker, so live source access has not been established here.
+After each deployment, read back the Worker version, D1 binding and schedule, then observe real cron-written `runs` rows. Cron configuration alone is not execution evidence. `https://mirsad-paper-forward.zenoura28.workers.dev/health` returns 503 until initialized, on a blocked pass, after 3 minutes without a run, or if D1 is unavailable. The handler returns 200 only for initialized recent operation. A local external probe received Cloudflare 403 / 1010, so public endpoint reachability is not established; authenticated D1 independently proves the running schedule and successful candle initialization.
 
 ## Daily Sheet ingestion
 
-The daily task uses authenticated D1 **read-only** queries, not a public report endpoint. All new writes belong to the canonical workbook `1I4sXWpg5oImDvuXVm0yw4tX_Rg6MpXs4zV38zx1_3RA`. Configure ingestion only after deployment and source verification:
+The daily task uses authenticated D1 **read-only** queries. All new writes belong to the canonical workbook `1I4sXWpg5oImDvuXVm0yw4tX_Rg6MpXs4zV38zx1_3RA`, in `تعريف المستقبل`, `نتائج المستقبل` and `قياسات المستقبل`. Historical BTC and archived SOL/MANUAL-001 retain their own definitions and ledgers. The existing 09:00 Europe/Berlin task remains authoritative; no duplicate task is needed.
 
 ```sql
 SELECT version,payload FROM state WHERE id=1;
 SELECT id,observed_ms,status,payload FROM runs ORDER BY observed_ms DESC LIMIT 5;
-SELECT id,batch_id,closed_ms,payload FROM results WHERE batch_id=? AND closed_ms>? ORDER BY closed_ms,id LIMIT 100;
+SELECT id,batch_id,closed_ms,payload FROM results
+WHERE batch_id=? AND (closed_ms>? OR (closed_ms=? AND id>?))
+ORDER BY closed_ms,id LIMIT 100;
 ```
 
-Use exact record IDs for deduplication; conflicting IDs require review. Keep forward results and their metrics separate from historical BTC and archived SOL/MANUAL-001. Preserve Sheet formulas. Empty `results` with healthy recent runs means no completed simulated trade; blocked/stale operation is not a zero-profit result. The existing 09:00 Europe/Berlin task remains authoritative; no duplicate task is needed.
+Before ingestion, match the exact batch, strategy, symbol, currency and configuration hash, verify a real `startedMs`, contiguous closed-candle cursor and a recent non-blocked run (at most 3 minutes old). Page by `(closed_ms,id)` and use exact record IDs for deduplication; conflicting IDs require review. Preserve Sheet formulas. Empty `results` with healthy recent runs means no completed simulated trade; blocked/stale operation is not a zero-profit result.
+
+At deployment handoff, the other browser account's one read-only D1 check failed because its connector required a non-empty `link_id`. Worker operation is verified, but unattended ingestion in that account is not yet proven. The task must report that access blocker and skip forward ingestion until its own authenticated D1 read succeeds. Updating a task prompt is not end-to-end ingestion evidence.
 
 ## Provenance and status
 
 Source ZIP supplied by the user: prototype commit `cd4b74848753b4e8e613e18de15b89993631bb41`, based on main `aee28ab0c232648fa52d10bafa78072a3d8ca720`. Its three original tests did not call Worker code. This revision replaces them with integration tests and fixes concurrency, missing closed-result accounting, quote freshness, actual slippage, incremental processing and real initialization.
 
-Local validation is separate from deployment verification. No remote Worker/D1/cron execution is claimed by this README.
+Local validation: 17 Worker integration tests, typecheck and dry-run passed for the deployed source. The unchanged research engine previously passed its 14 tests. Deployment observations above were read directly from authenticated Cloudflare APIs and D1; they are separate from local verification.
 
 Primary references:
 - https://developer.revolut.com/docs/api/revolut-x-crypto-exchange

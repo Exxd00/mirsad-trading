@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "mirsad-paper-forward",
+  "account_id": "61e259613cc3301fbf6ec781934ef976",
   "main": "src/index.mts",
   "compatibility_date": "2026-09-24",
   "compatibility_flags": ["nodejs_compat"],
@@ -8,5 +9,5 @@
   "preview_urls": false,
   "triggers": {"crons": ["* * * * *"]},
   "observability": {"enabled": true, "head_sampling_rate": 0.1},
-  "d1_databases": [{"binding":"DB","database_name":"mirsad-paper-forward","database_id":"00000000-0000-0000-0000-000000000000","migrations_dir":"migrations"}]
+  "d1_databases": [{"binding":"DB","database_name":"mirsad-paper-forward","database_id":"a397c9cf-ad63-42a5-8756-9ddde726acb3","migrations_dir":"migrations"}]
 }

@@ -18,7 +18,7 @@ function market(){
   const calls=[];
   const deps={clock:()=>now,fetch:async (input,init)=>{
     const url=new URL(input);calls.push(url.pathname);
-    assert.equal(init.redirect,'error');assert.equal(init.method??'GET','GET');
+    assert.equal(init.redirect,'manual');assert.equal(init.method??'GET','GET');
     assert.ok(url.pathname.startsWith('/api/1.0/public/'));
     if(failure) return new Response('{}',{status:failure});
     if(url.pathname.includes('/candles/')) {
@@ -94,6 +94,21 @@ test('fetch outage preserves cursor; recovery marks the expired entry missed',as
   const h=await setup(t);await h.tick();h.m.bars.set(START,candle(START,120));h.m.setNow(START+HOUR+1000);h.m.fail(503);
   assert.equal((await h.tick()).status,'blocked');assert.equal((await h.state()).lastClosed,START-HOUR);
   h.m.fail(null);h.m.setNow(START+HOUR+181000);await h.tick();assert.equal((await h.records('events'))[0].status,'missed_delay');
+});
+test('network failures retain bounded private diagnostics without creating market data',async t=>{
+  const h=await setup(t);
+  const deps={clock:h.m.deps.clock,fetch:async()=>{throw new TypeError('diagnostic '+ 'x'.repeat(500));}};
+  assert.equal((await runTick(h.db,h.m.getNow(),deps)).error,'SOURCE_NETWORK');
+  const s=await h.state();assert.equal(s.startedMs,null);assert.equal(s.lastClosed,null);
+  assert.equal(s.lastRun.diagnostic.length,240);assert.equal(await h.count('candles'),0);assert.equal(await h.count('events'),0);
+  const publicBody=await (await worker.fetch(new Request('https://worker/health'),{DB:h.db})).text();
+  assert.ok(!publicBody.includes('diagnostic'));assert.ok(publicBody.includes('SOURCE_NETWORK'));
+});
+test('source redirects are recorded without following or initializing the batch',async t=>{
+  const h=await setup(t);let calls=0;
+  const deps={clock:h.m.deps.clock,fetch:async(_,init)=>{calls++;assert.equal(init.redirect,'manual');return new Response(null,{status:302,headers:{location:'https://other-source.invalid/'}});}};
+  assert.equal((await runTick(h.db,h.m.getNow(),deps)).error,'SOURCE_HTTP_302');
+  assert.equal(calls,1);assert.equal((await h.state()).startedMs,null);assert.equal(await h.count('candles'),0);
 });
 test('missing/internal/leading/trailing bars and changed stored candles fail closed',async t=>{
   const h=await setup(t);await h.tick();h.m.setNow(START+HOUR+1000);
