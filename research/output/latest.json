@@ -3,7 +3,7 @@
   "status": "ok",
   "mode": "paper-research",
   "studyKind": "retrospective-expanding-baseline",
-  "generatedAt": "2026-09-23T20:19:33.381Z",
+  "generatedAt": "2026-09-24T10:05:43.866Z",
   "config": {
     "schemaVersion": 1,
     "mode": "paper-research",
@@ -27,9 +27,9 @@
   "source": "Revolut X public OHLCV EEA",
   "coverage": {
     "firstCandle": "2026-08-30T16:00:00.000Z",
-    "lastClosedCandle": "2026-09-23T19:00:00.000Z",
-    "candles": 580,
-    "candlesHash": "962ba153270e8b15432f70fa7e26926f8bf3fb404a6c4eadc3188a2455310ed7"
+    "lastClosedCandle": "2026-09-24T09:00:00.000Z",
+    "candles": 594,
+    "candlesHash": "42f29b43bc7100f6d216a6b5a54cabaea3fbfa19970ccff0e34134b38ce97cc5"
   },
   "records": [
     {
@@ -2415,8 +2415,64 @@
     {
       "time": 1790193600000,
       "equity": 1010.60838733
+    },
+    {
+      "time": 1790197200000,
+      "equity": 1010.60838733
+    },
+    {
+      "time": 1790200800000,
+      "equity": 1010.60838733
+    },
+    {
+      "time": 1790204400000,
+      "equity": 1010.60838733
+    },
+    {
+      "time": 1790208000000,
+      "equity": 1010.60838733
+    },
+    {
+      "time": 1790211600000,
+      "equity": 1010.60838733
+    },
+    {
+      "time": 1790215200000,
+      "equity": 1010.60838733
+    },
+    {
+      "time": 1790218800000,
+      "equity": 1010.60838733
+    },
+    {
+      "time": 1790222400000,
+      "equity": 1010.60838733
+    },
+    {
+      "time": 1790226000000,
+      "equity": 1010.60838733
+    },
+    {
+      "time": 1790229600000,
+      "equity": 1010.60838733
+    },
+    {
+      "time": 1790233200000,
+      "equity": 1010.60838733
+    },
+    {
+      "time": 1790236800000,
+      "equity": 1010.60838733
+    },
+    {
+      "time": 1790240400000,
+      "equity": 1010.60838733
+    },
+    {
+      "time": 1790244000000,
+      "equity": 1010.60838733
     }
   ],
   "sourceCommit": "aee28ab0c232648fa52d10bafa78072a3d8ca720",
-  "workflowRun": "https://github.com/Exxd00/mirsad-trading/actions/runs/35915161669"
+  "workflowRun": "https://github.com/Exxd00/mirsad-trading/actions/runs/35985208037"
 }
