@@ -252,6 +252,7 @@ describe('execution, exits and actual local performance', () => {
     await initializeEducation(opening()); await setEducationEnabled(true); await processEducationTick(tick());
     const gap = (await processEducationTick(tick(later, [market('BTC-EUR', later, { bid: '50', ask: '50.02' }), market('ETH-EUR', later)]))).report;
     expect(gap.performance?.riskReason).toBe('loss_limit'); expect(gap.performance?.riskFraction).toBe('0');
+    expect(gap.entryReadiness.allocationFraction).toBe('0.05');
     expect(gap.orders.filter(o => o.side === 'buy')).toHaveLength(1);
     expect(gap.performance?.dailyLoss && new Decimal(gap.performance.dailyLoss).gte('.01')).toBe(true);
   });
