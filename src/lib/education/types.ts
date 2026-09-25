@@ -10,6 +10,11 @@ export type EducationTick = { runId: string; now: string; markets: MarketSnapsho
 export type EducationPosition = {
   id: string; symbol: string; quantity: string; entryPrice: string; entryFee: string; entryCost: string;
   stopPrice: string; targetPrice: string; initialRisk: string; openedAt: string; entryCandleEnd: string;
+  policyVersion?: 'percentage-v2'; allocationBasisEur?: string; allocationFraction?: string;
+};
+export type EducationPortfolioValuation = {
+  observedAt: string; totalEur: string | null; availableAssetsEur: string | null; reservedAssetsEur: string | null;
+  missingCurrencies: string[]; prices: Record<string, { bid: string; quoteAt: string }>;
 };
 export type EducationOrder = {
   id: string; positionId: string; runId: string; symbol: string; side: 'buy' | 'sell'; quantity: string;
@@ -39,10 +44,14 @@ export type EducationReport = {
   opening: OpeningSnapshot | null; balances: EducationBalance[]; positions: EducationPosition[];
   orders: EducationOrder[]; trades: EducationTrade[]; runs: EducationRun[];
   capital: string | null; capitalBasisAt: string | null; valuationMissing: string[];
+  portfolioValuation: EducationPortfolioValuation | null;
   performance: EducationPerformance | null; lastRun: EducationRun | null;
-  entryReadiness: { availableEur: string | null; smallestSupportedOrder: string | null; reason: string };
+  entryReadiness: { availableEur: string | null; smallestSupportedOrder: string | null; reason: string;
+    allocationFraction?: string; allocationBudgetEur?: string | null };
   retention: { recentRuns: number; recentOrders: number; recentTrades: number; archivedOrders: number; archivedTrades: number };
   policy: { symbols: readonly string[]; scanMinutes: number; maximumEntriesPerDay: number; maximumPositions: number;
+    version: 'percentage-v2'; allocationBasis: 'available-eur-including-entry-fee';
+    entryAllocationFraction: string; reducedAllocationFraction: string; stopLossFraction: string; takeProfitFraction: string;
     baseRiskFraction: string; maximumPositionFraction: string; maximumExposureFraction: string;
     feeFractionPerSide: string; slippageFractionPerSide: string; maximumHoldingHours: number };
 };
@@ -51,6 +60,7 @@ export type EducationState = {
   balances: EducationBalance[]; positions: EducationPosition[]; orders: EducationOrder[]; trades: EducationTrade[];
   runs: EducationRun[]; lastSlot: number | null; capital: string | null; capitalBasisAt: string | null;
   valuationMissing: string[]; performance: EducationPerformance; dailyEntries: Record<string, number>;
+  portfolioValuation?: EducationPortfolioValuation;
   entryReadiness: EducationReport['entryReadiness'];
   equityCheckpoints: { day: Record<string, string>; week: Record<string, string> };
   lastEntryCandles: Record<string, string>; archivedOrders: number; archivedTrades: number;
