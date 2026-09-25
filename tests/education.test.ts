@@ -119,6 +119,63 @@ describe('atomic and idempotent settlement', () => {
 });
 
 describe('execution, exits and actual local performance', () => {
+  const fineInstrument = { quantityStep: '0.00000001', minQuantity: '0.00000001', minNotional: '0.01' };
+  it('allocates ten percent of then-available EUR including fees, with percentage stops and targets', () => {
+    const state = createEducationState(opening({ balances: [{ currency: 'EUR', total: '36.9', available: '16.9', reserved: '20' }] }));
+    state.enabled = true;
+    const report = runEducationTick(state, tick(NOW, [market('BTC-EUR', NOW, { instrument: fineInstrument }), market('ETH-EUR', NOW, { instrument: fineInstrument })])).state;
+    expect(report.positions).toHaveLength(2);
+    let cash = new Decimal('16.9');
+    for (const position of report.positions) {
+      expect(position.allocationBasisEur).toBe(cash.toString());
+      expect(position.allocationFraction).toBe('0.1');
+      const budget = cash.mul('.1'), cost = new Decimal(position.entryCost);
+      expect(cost.lte(budget)).toBe(true);
+      expect(budget.minus(cost).lt('.000002')).toBe(true);
+      expect(new Decimal(position.stopPrice).eq(new Decimal(position.entryPrice).mul('.98'))).toBe(true);
+      expect(new Decimal(position.targetPrice).eq(new Decimal(position.entryPrice).mul('1.04'))).toBe(true);
+      cash = cash.minus(cost);
+    }
+    expect(report.balances.find(b => b.currency === 'EUR')).toMatchObject({ available: cash.toString(), reserved: '20' });
+    expect(new Decimal(report.entryReadiness.allocationBudgetEur!).eq(cash.mul('.1').toDecimalPlaces(18, Decimal.ROUND_DOWN))).toBe(true);
+    const valued = report.portfolioValuation!;
+    const expected = report.balances.reduce((sum, b) => sum.plus(new Decimal(b.total).mul(b.currency === 'EUR' ? 1 : '104.7')), new Decimal(0));
+    expect(new Decimal(valued.totalEur!).eq(expected)).toBe(true);
+  });
+  it.each(['win', 'loss'] as const)('compounds the next entry from realized cash after a %s', outcome => {
+    const state = createEducationState(opening({ balances: [{ currency: 'EUR', total: '16.9', available: '16.9', reserved: '0' }] }));
+    state.enabled = true;
+    const entered = runEducationTick(state, tick(NOW, [market('BTC-EUR', NOW, { instrument: fineInstrument })])).state;
+    const position = entered.positions[0], exitAt = NOW + 20 * 60_000;
+    const bid = outcome === 'win' ? position.targetPrice : position.stopPrice;
+    const closed = runEducationTick(entered, tick(exitAt, [market('BTC-EUR', exitAt, { bid, ask: new Decimal(bid).plus('.01').toString() })])).state;
+    expect(closed.positions).toHaveLength(0);
+    const cash = closed.balances.find(b => b.currency === 'EUR')!.available;
+    expect(new Decimal(cash).minus('16.9').eq(closed.performance.realizedPnl)).toBe(true);
+    const nextAt = NOW + 24 * HOUR;
+    const next = runEducationTick(closed, tick(nextAt, [market('BTC-EUR', nextAt, { instrument: fineInstrument })])).state.positions[0];
+    expect(next.allocationBasisEur).toBe(cash);
+    expect(new Decimal(next.entryCost).lte(new Decimal(cash).mul('.1'))).toBe(true);
+    expect(new Decimal(next.entryCost).comparedTo(position.entryCost)).toBe(outcome === 'win' ? 1 : -1);
+  });
+  it('waits when cash covers the market minimum but its ten-percent allocation does not', () => {
+    const state = createEducationState(opening({ balances: [{ currency: 'EUR', total: '0.02', available: '0.02', reserved: '0' }] }));
+    state.enabled = true;
+    const result = runEducationTick(state, tick(NOW, [market('BTC-EUR', NOW, { instrument: fineInstrument })])).state;
+    expect(result.entryReadiness.allocationBudgetEur).toBe('0.002');
+    expect(new Decimal(result.entryReadiness.smallestSupportedOrder!).lt('.02')).toBe(true);
+    expect(result.entryReadiness.reason).toBe('insufficient_capital_or_minimum');
+    expect(result.orders).toHaveLength(0); expect(result.balances).toEqual(state.balances);
+  });
+  it('values reserved SOL separately and never treats missing reserved prices as cash or zero', () => {
+    const state = createEducationState(opening({ balances: [{ currency: 'EUR', total: '0.02', available: '0.02', reserved: '0' }, { currency: 'SOL', total: '0.16455', available: '0', reserved: '0.16455' }] }));
+    const valued = runEducationTick(state, tick(NOW, [market('SOL-EUR', NOW, { bid: '102.8', ask: '102.81' })])).state;
+    expect(valued.portfolioValuation).toMatchObject({ totalEur: '16.93574', availableAssetsEur: '0.02', reservedAssetsEur: '16.91574', missingCurrencies: [] });
+    expect(valued.capital).toBe('0.02');
+    const unknown = runEducationTick(valued, tick(NOW + 300_000, [])).state;
+    expect(unknown.portfolioValuation).toMatchObject({ totalEur: null, availableAssetsEur: '0.02', reservedAssetsEur: null, missingCurrencies: ['SOL'] });
+    expect(unknown.valuationMissing).toEqual([]); expect(unknown.balances).toEqual(state.balances);
+  });
   it('accounts for buy and sell slippage and fees using the observed executable sides', async () => {
     await initializeEducation(opening()); await setEducationEnabled(true);
     const buy = (await processEducationTick(tick())).report;
@@ -186,6 +243,11 @@ describe('execution, exits and actual local performance', () => {
     const stopped = first.positions.map(p => market(p.symbol, later, { bid: new Decimal(p.stopPrice).minus('.01').toString(), ask: new Decimal(p.stopPrice).toString() }));
     const losses = (await processEducationTick(tick(later, stopped))).report;
     expect(losses.performance?.lossStreak).toBe(2); expect(losses.performance?.riskFraction).toBe('.00125');
+    expect(losses.entryReadiness.allocationFraction).toBe('0.05');
+    const reducedAt = NOW + 24 * HOUR, cashAfterLosses = losses.balances.find(b => b.currency === 'EUR')!.available;
+    const reduced = (await processEducationTick(tick(reducedAt, [market('BTC-EUR', reducedAt, { instrument: fineInstrument })]))).report;
+    expect(reduced.positions[0].allocationFraction).toBe('0.05');
+    expect(new Decimal(reduced.positions[0].entryCost).lte(new Decimal(cashAfterLosses).mul('.05'))).toBe(true);
     await query('DELETE FROM app_settings WHERE key=$1', [EDUCATION_STORAGE_KEY]);
     await initializeEducation(opening()); await setEducationEnabled(true); await processEducationTick(tick());
     const gap = (await processEducationTick(tick(later, [market('BTC-EUR', later, { bid: '50', ask: '50.02' }), market('ETH-EUR', later)]))).report;

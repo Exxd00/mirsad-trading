@@ -10,6 +10,8 @@ const moneyUp = (value: Decimal.Value) => d(value).toDecimalPlaces(18, Decimal.R
 const moneyDown = (value: Decimal.Value) => d(value).toDecimalPlaces(18, Decimal.ROUND_DOWN);
 const FEE = '0.0009', SLIP = '0.0005', HOUR = 3_600_000, DAY = 86_400_000;
 export const EDUCATION_POLICY = Object.freeze({ symbols: ['BTC-EUR', 'ETH-EUR', 'SOL-EUR'] as readonly string[], scanMinutes: 5,
+  version: 'percentage-v2' as const, allocationBasis: 'available-eur-including-entry-fee' as const,
+  entryAllocationFraction: '0.1', reducedAllocationFraction: '0.05', stopLossFraction: '0.02', takeProfitFraction: '0.04',
   maximumEntriesPerDay: 2, maximumPositions: 2, baseRiskFraction: '0.0025', maximumPositionFraction: '0.1',
   maximumExposureFraction: '0.2', feeFractionPerSide: FEE, slippageFractionPerSide: SLIP, maximumHoldingHours: 48 });
 const decimal = /^(?:0|[1-9]\d{0,29})(?:\.\d{1,18})?$/;
@@ -57,6 +59,7 @@ export function educationReport(state: EducationState | null): EducationReport {
   return { version: 1, mode: 'site-educational', initialized: !!state, enabled: state?.enabled ?? false, updatedAt: state?.updatedAt ?? null,
     opening: state?.opening ?? null, balances: state?.balances ?? [], positions: state?.positions ?? [], orders: state?.orders ?? [], trades: state?.trades ?? [],
     runs: state?.runs ?? [], capital: state?.capital ?? null, capitalBasisAt: state?.capitalBasisAt ?? null, valuationMissing: state?.valuationMissing ?? [],
+    portfolioValuation: state?.portfolioValuation ?? null,
     performance: state?.performance ?? null, lastRun: state?.runs.at(-1) ?? null,
     entryReadiness: state?.entryReadiness ?? { availableEur: null, smallestSupportedOrder: null, reason: 'opening_snapshot_required' },
     retention: { recentRuns: 1000, recentOrders: 2000, recentTrades: 2000, archivedOrders: state?.archivedOrders ?? 0, archivedTrades: state?.archivedTrades ?? 0 },
@@ -151,6 +154,29 @@ function valueOpening(state: EducationState, markets: Map<string, MarketSnapshot
   state.valuationMissing = missing;
   if (!missing.length && state.capital === null) { state.capital = moneyDown(value).toString(); state.capitalBasisAt = iso(now); }
 }
+function valuePortfolio(state: EducationState, markets: Map<string, MarketSnapshot>, now: number) {
+  const totals = { total: d(0), available: d(0), reserved: d(0) };
+  const known = { total: true, available: true, reserved: true };
+  const missingCurrencies: string[] = [], prices: Record<string, { bid: string; quoteAt: string }> = {};
+  for (const balance of state.balances) {
+    if (d(balance.total).eq(0)) continue;
+    const quote = markets.get(`${balance.currency}-EUR`);
+    const price = balance.currency === 'EUR' ? d(1) : freshQuote(quote, now) ? d(quote.bid) : null;
+    if (price === null) missingCurrencies.push(balance.currency);
+    else if (quote && balance.currency !== 'EUR') prices[balance.currency] = { bid: quote.bid, quoteAt: quote.quoteAt };
+    for (const key of ['total', 'available', 'reserved'] as const) {
+      if (d(balance[key]).eq(0)) continue;
+      if (price === null) known[key] = false;
+      else totals[key] = totals[key].plus(d(balance[key]).mul(price));
+    }
+  }
+  // Informational bid valuation of the current site ledger, before costs. It
+  // never releases reserves, changes the opening basis or creates buying cash.
+  state.portfolioValuation = { observedAt: iso(now), prices, missingCurrencies,
+    totalEur: known.total ? moneyDown(totals.total).toString() : null,
+    availableAssetsEur: known.available ? moneyDown(totals.available).toString() : null,
+    reservedAssetsEur: known.reserved ? moneyDown(totals.reserved).toString() : null };
+}
 function updatePerformance(state: EducationState, markets: Map<string, MarketSnapshot>, now: number) {
   const p = state.performance, previousEquity = p.equity ?? [...state.runs].reverse().find(run => run.equity !== null)?.equity ?? null; let unrealized = d(0), known = true;
   for (const position of state.positions) {
@@ -205,8 +231,12 @@ function closePosition(state: EducationState, position: EducationPosition, marke
   else if (netPnl.lt(0)) { p.losses++; p.lossStreak++; p.grossLoss = d(p.grossLoss).minus(netPnl).toString(); }
   return orderId;
 }
+function allocationFraction(state: EducationState) {
+  return state.performance.riskReason === 'reduce_risk' ? EDUCATION_POLICY.reducedAllocationFraction : EDUCATION_POLICY.entryAllocationFraction;
+}
 function readiness(state: EducationState, markets: Map<string, MarketSnapshot>, now: number) {
   const cash = state.balances.find(b => b.currency === 'EUR')?.available ?? null;
+  const fraction = allocationFraction(state), budget = cash === null ? null : moneyDown(d(cash).mul(fraction));
   let smallest: Decimal | null = null;
   for (const symbol of EDUCATION_POLICY.symbols) {
     const m = markets.get(symbol); if (!freshQuote(m, now) || !instrumentValid(m)) continue;
@@ -215,7 +245,8 @@ function readiness(state: EducationState, markets: Map<string, MarketSnapshot>, 
     smallest = smallest === null ? cost : Money.min(smallest, cost);
   }
   state.entryReadiness = { availableEur: cash, smallestSupportedOrder: smallest?.toString() ?? null,
-    reason: cash === null || d(cash).lte(0) || smallest !== null && d(cash).lt(smallest) ? 'insufficient_capital_or_minimum' : state.valuationMissing.length ? 'valuation_unavailable' : smallest === null ? 'market_data_required' : 'funding_available' };
+    allocationFraction: fraction, allocationBudgetEur: budget?.toString() ?? null,
+    reason: budget === null || budget.lte(0) || smallest !== null && budget.lt(smallest) ? 'insufficient_capital_or_minimum' : state.valuationMissing.length ? 'valuation_unavailable' : smallest === null ? 'market_data_required' : 'funding_available' };
 }
 function openPosition(state: EducationState, m: MarketSnapshot, analysis: Analysis, tick: EducationTick, markets: Map<string, MarketSnapshot>, now: number): { reason: string; orderId?: string } {
   const p = state.performance, day = dayKey(now);
@@ -227,7 +258,7 @@ function openPosition(state: EducationState, m: MarketSnapshot, analysis: Analys
   if (!instrumentValid(m)) return { reason: 'instrument_unavailable' };
   if (state.entryReadiness.reason !== 'funding_available') return { reason: state.entryReadiness.reason };
   if (d(p.riskFraction).lte(0) || p.equity === null) return { reason: p.riskReason };
-  const price = entryPrice(m), distance = d(String(analysis.atr)).mul(2), stop = moneyDown(price.minus(distance)), target = moneyDown(price.plus(distance.mul(2)));
+  const price = entryPrice(m), stop = moneyDown(price.mul(d(1).minus(EDUCATION_POLICY.stopLossFraction))), target = moneyUp(price.mul(d(1).plus(EDUCATION_POLICY.takeProfitFraction)));
   if (stop.lte(0)) return { reason: 'volatility_outside_range' };
   // Loss budget includes purchase fee, planned sale fee and adverse sale slippage.
   const stopFill = stop.mul(d(1).minus(SLIP)), lossPerUnit = price.mul(d(1).plus(FEE)).minus(stopFill.mul(d(1).minus(FEE)));
@@ -237,16 +268,21 @@ function openPosition(state: EducationState, m: MarketSnapshot, analysis: Analys
     const quote = markets.get(position.symbol); if (!freshQuote(quote, now)) return { reason: 'valuation_unavailable' };
     exposure = exposure.plus(d(position.quantity).mul(quote.bid));
   }
-  const notionalBudget = Money.min(equity.mul('.1'), equity.mul('.2').minus(exposure), cash.div(d(1).plus(FEE)));
+  // Allocate from cash available immediately before this entry, including its
+  // fee. Realized results therefore compound automatically without a fixed EUR
+  // amount. Floor to the supported quantity; never round up to a minimum.
+  const fraction = allocationFraction(state), allocationBudget = moneyDown(cash.mul(fraction));
+  const notionalBudget = Money.min(equity.mul(EDUCATION_POLICY.maximumPositionFraction), equity.mul(EDUCATION_POLICY.maximumExposureFraction).minus(exposure), allocationBudget.div(d(1).plus(FEE)));
   const i = m.instrument!, qty = floorStep(Money.min(equity.mul(p.riskFraction).div(lossPerUnit), notionalBudget.div(price)), i.quantityStep);
   if (qty.lte(0) || qty.lt(i.minQuantity) || qty.mul(price).lt(i.minNotional)) return { reason: 'insufficient_capital_or_minimum' };
   const amount = moneyUp(qty.mul(price)), fee = moneyUp(amount.mul(FEE)), cost = amount.plus(fee);
-  if (cost.gt(cash)) return { reason: 'insufficient_capital_or_minimum' };
+  if (cost.gt(allocationBudget) || cost.gt(cash)) return { reason: 'insufficient_capital_or_minimum' };
   const initialRisk = cost.minus(exitProceeds(qty, moneyDown(stopFill)).proceeds);
   if (initialRisk.gt(equity.mul(p.riskFraction))) return { reason: 'insufficient_capital_or_minimum' };
   const id = `education:${m.symbol}:${Date.parse(analysis.candleEnd!)}`, orderId = `${id}:entry`;
   changeBalance(state, 'EUR', cost.negated()); changeBalance(state, m.symbol.split('-')[0], qty);
   state.positions.push({ id, symbol: m.symbol, quantity: qty.toString(), entryPrice: price.toString(), entryFee: fee.toString(), entryCost: cost.toString(),
+    policyVersion: 'percentage-v2', allocationBasisEur: cash.toString(), allocationFraction: fraction,
     stopPrice: stop.toString(), targetPrice: target.toString(), initialRisk: initialRisk.toString(), openedAt: tick.now, entryCandleEnd: analysis.candleEnd! });
   state.orders.push({ id: orderId, positionId: id, runId: tick.runId, symbol: m.symbol, side: 'buy', quantity: qty.toString(), price: price.toString(),
     fee: fee.toString(), feeCurrency: 'EUR', amount: amount.toString(), filledAt: tick.now, reason: 'hourly_trend_breakout', status: 'filled', executionVenue: 'site-educational' });
@@ -290,6 +326,7 @@ export function runEducationTick(original: EducationState, input: EducationTick)
     if (result.orderId) { updatePerformance(state, markets, now); readiness(state, markets, now); }
   }
   updatePerformance(state, markets, now);
+  valuePortfolio(state, markets, now);
   run.valuationMissing = [...state.valuationMissing]; run.equity = state.performance.equity; run.netPnl = state.performance.netPnl;
   if (!state.enabled && !run.decisions.some(decision => decision.orderId)) run.status = 'disabled';
   else if (state.valuationMissing.length || state.performance.equity === null) run.status = 'blocked';

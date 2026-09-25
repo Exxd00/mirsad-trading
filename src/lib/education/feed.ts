@@ -63,7 +63,7 @@ export async function fetchEducationMarkets(fetcher: typeof fetch = fetch): Prom
     const bars = result.status === 'fulfilled' ? candlesSchema.safeParse(result.value) : null;
     return [{ symbol, observedAt, quoteAt: new Date(tickers.data.metadata.timestamp).toISOString(), bid: ticker.bid, ask: ticker.ask,
       ...(bars?.success ? { candlesAt: new Date(bars.data.metadata.timestamp).toISOString(), candles: bars.data.data.map(c => ({ ...c, start: new Date(c.start).toISOString() })) } : {}),
-      ...(pair && new Decimal(pair.base_step).gt(0) ? { instrument: { quantityStep: pair.base_step, minQuantity: Decimal.max(pair.min_order_size, pair.base_step).toString(), minNotional: Decimal.max(pair.min_order_size_quote, '1').toString() } } : {}),
+      ...(pair && new Decimal(pair.base_step).gt(0) && new Decimal(pair.min_order_size_quote).gt(0) ? { instrument: { quantityStep: pair.base_step, minQuantity: Decimal.max(pair.min_order_size, pair.base_step).toString(), minNotional: pair.min_order_size_quote } } : {}),
     }];
   });
 }

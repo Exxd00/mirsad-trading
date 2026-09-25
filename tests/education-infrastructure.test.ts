@@ -72,7 +72,7 @@ describe('educational public market boundary', () => {
     expect(oversized).toHaveBeenCalledOnce();
   });
 
-  it('keeps valid quotes for exits when candle history fails, and drops ambiguous or non-EEA tickers', async () => {
+  it('preserves the published sub-euro minimum and quotes when candles fail, dropping ambiguous/non-EEA tickers', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async input => {
       const url = new URL(String(input));
       if (url.pathname.endsWith('/tickers')) return Response.json({
@@ -84,14 +84,14 @@ describe('educational public market boundary', () => {
         ],
       });
       if (url.pathname.endsWith('/configuration/pairs')) return Response.json({ btc: {
-        base: 'BTC', quote: 'EUR', base_step: '0.000001', min_order_size: '0.000001', min_order_size_quote: '1', status: 'active',
+        base: 'BTC', quote: 'EUR', base_step: '0.000001', min_order_size: '0.000001', min_order_size_quote: '0.01', status: 'active',
       } });
       return new Response('', { status: 503 });
     });
     const markets = await fetchEducationMarkets(fetcher);
     expect(fetcher).toHaveBeenCalledTimes(5);
     expect(markets).toHaveLength(1);
-    expect(markets[0]).toMatchObject({ symbol: 'BTC-EUR', bid: '50000', ask: '50010', quoteAt: new Date(NOW).toISOString(), instrument: { quantityStep: '0.000001', minQuantity: '0.000001', minNotional: '1' } });
+    expect(markets[0]).toMatchObject({ symbol: 'BTC-EUR', bid: '50000', ask: '50010', quoteAt: new Date(NOW).toISOString(), instrument: { quantityStep: '0.000001', minQuantity: '0.000001', minNotional: '0.01' } });
     expect(markets[0].candles).toBeUndefined();
     expect(fetcher.mock.calls.every(([input]) => new URL(String(input)).pathname.startsWith('/api/1.0/public/'))).toBe(true);
   });

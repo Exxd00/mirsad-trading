@@ -71,7 +71,7 @@ const reasonLabels: Record<string, string> = {
   valuation_unavailable: 'تنقص أسعار لتقييم رأس المال والمخاطرة',
   market_data_required: 'بانتظار أسعار السوق وقواعد حجم الأمر',
   opening_snapshot_required: 'بانتظار اعتماد الأرصدة الموجودة',
-  funding_available: 'السيولة تغطي الحد الأدنى للسوق؛ يبقى فحص شروط الدخول وحجم المخاطرة',
+  funding_available: 'ميزانية النسبة تغطي الحد الأدنى للسوق؛ يبقى فحص شروط الدخول وحجم المخاطرة',
   loss_limit: 'الدخول معلق بسبب بلوغ أحد حدود الخسارة',
   reduce_risk: 'مخاطرة مخفضة بعد خسائر متتالية أو تراجع',
   invalid_candles: 'فجوة أو بيانات غير صالحة في الشموع',
@@ -322,6 +322,16 @@ export function EducationWorkspace({ csrfToken }: { csrfToken: string }) {
         <Metric label="المراكز المفتوحة" value={`${report.positions.length} / ${report.policy.maximumPositions}`} note="مراكز فتحتها هذه الأتمتة داخل الموقع" />
         <Metric label="الصفقات المغلقة" value={performance?.closedTrades ?? 'غير متاح'} note={`المخاطرة الحالية: ${percentText(performance?.riskFraction)}`} />
       </section>
+      <section className={styles.panel} aria-labelledby="percentage-budget-title">
+        <div className={styles.panelHeading}><div><h2 id="percentage-budget-title">ميزانية الصفقة بالنسب</h2><p className={styles.subtle}>تُحسب من اليورو المتاح قبل كل دخول، وتكبر أو تصغر مع نتائج العمليات.</p></div></div>
+        <div className={`${styles.metrics} ${styles.auditMetrics}`}>
+          <Metric label="قيمة الأصول التقديرية" value={report.portfolioValuation?.totalEur == null ? 'غير متاح' : `${numberText(report.portfolioValuation.totalEur, 4)} EUR`} note="تشمل العملات وسولانا والمحجوز، بسعر آخر دورة" />
+          <Metric label="قيمة الأصول المحجوزة" value={report.portfolioValuation?.reservedAssetsEur == null ? 'غير متاح' : `${numberText(report.portfolioValuation.reservedAssetsEur, 4)} EUR`} note="تُعرض للمعلومة؛ لا تموّل دخولًا جديدًا" />
+          <Metric label="ميزانية الدخول التالية" value={report.entryReadiness.allocationBudgetEur == null ? 'بانتظار الدورة' : `${numberText(report.entryReadiness.allocationBudgetEur, 8)} EUR`} note={`${percentText(report.entryReadiness.allocationFraction)} من اليورو المتاح، شاملة رسوم الدخول؛ تُقرب الكمية للأسفل`} />
+          <Metric label="وقف الخسارة / هدف الربح" value={`${percentText(report.policy.stopLossFraction)} / ${percentText(report.policy.takeProfitFraction)}`} note="انخفاض / ارتفاع عن سعر الدخول؛ قبل رسوم البيع والانزلاق" />
+        </div>
+        <p className={styles.sectionNote}>حجم الدخول الأساسي {percentText(report.policy.entryAllocationFraction)}، ويقل إلى {percentText(report.policy.reducedAllocationFraction)} بعد خسارتين متتاليتين أو تراجع 2%. إذا كانت ميزانية النسبة أقل من الحد الأدنى، ينتظر النظام ولا يزيدها تلقائيًا. التقييم يخص أرصدة سجل الموقع بسعر الطلب المرجعي قبل التكاليف، ولا يحوّل قيمة سولانا إلى يورو متاح. آخر تقييم: {dateText(report.portfolioValuation?.observedAt)}.</p>
+      </section>
 
       <section className={styles.panel}><PanelHeading title="قرار الدورة الأخيرة" detail={report.lastRun ? `الدورة ${dateText(report.lastRun.at)} · ${report.lastRun.status === 'completed' ? 'اكتملت المعالجة' : report.lastRun.status === 'disabled' ? 'الدخول متوقف' : 'تعذر استكمال الدورة'}` : 'بانتظار أول دورة'} />
         {latestDecisions.length ? <div className={styles.scroll}><table className={styles.table}><thead><tr><th scope="col">السوق</th><th scope="col">القرار والسبب</th><th scope="col">نتيجة التنفيذ</th></tr></thead><tbody>{latestDecisions.map((decision, index) => <tr key={`${decision.symbol}-${index}`}><td><bdi className={styles.numeric}>{decision.symbol}</bdi></td><td className={styles.reasonCell}>{reasonText(decision.reason)}</td><td>{decision.orderId ? <><span className={decision.side === 'buy' ? styles.buy : styles.sell}>{decision.side === 'buy' ? 'شراء منفّذ' : 'بيع منفّذ'}</span><details><summary>معرّف الأمر</summary><code dir="ltr">{decision.orderId}</code></details></> : 'لم يُنفّذ أمر'}</td></tr>)}</tbody></table></div> : <p className={styles.empty}>لا توجد قرارات مسجلة بعد. تشغيل الدورة يقيّم الشروط؛ لا يفرض صفقة.</p>}
@@ -366,7 +376,7 @@ export function EducationWorkspace({ csrfToken }: { csrfToken: string }) {
     {report && <ReportingAudit report={report} readAt={readAt} />}
     {report && <section className={styles.panel}><PanelHeading title="قواعد التشغيل" detail={`الأسواق: ${report.policy.symbols.join(' · ')}`} /><div className={styles.rules}>
       <article><h3>الدخول عند اكتمال الشروط</h3><p>فحص كل {report.policy.scanMinutes} دقائق. يُقيّم الدخول بعد إغلاق شمعة الساعة: اتجاه EMA20 أعلى من EMA50 واختراق أعلى 20 شمعة سابقة، ضمن أول 15 دقيقة من الإغلاق. حد الدخول اليومي: {report.policy.maximumEntriesPerDay}؛ وقد يمر يوم كامل دون شراء.</p></article>
-      <article><h3>الحجم والخروج</h3><p>المخاطرة الأساسية {percentText(report.policy.baseRiskFraction)}، وقيمة المركز حتى {percentText(report.policy.maximumPositionFraction)} من رأس المال والتعرض الكلي حتى {percentText(report.policy.maximumExposureFraction)}. وقف على بُعد 2×ATR14 وهدف على بُعد 4×ATR14، أو خروج اتجاه، أو انتهاء {report.policy.maximumHoldingHours} ساعة.</p></article>
+      <article><h3>الحجم والخروج</h3><p>ميزانية الدخول {percentText(report.policy.entryAllocationFraction)} من اليورو المتاح شاملة رسوم الدخول، ضمن سقف مخاطرة مخططة {percentText(report.policy.baseRiskFraction)} والتعرض الكلي {percentText(report.policy.maximumExposureFraction)}. وقف عند انخفاض {percentText(report.policy.stopLossFraction)} وهدف عند ارتفاع {percentText(report.policy.takeProfitFraction)} عن سعر الدخول، أو خروج اتجاه، أو انتهاء {report.policy.maximumHoldingHours} ساعة. تتغير قيمة الميزانية تلقائيًا مع الرصيد؛ لا يوجد وعد بربح أو مضاعفة.</p></article>
       <article><h3>التكاليف والمتابعة</h3><p>رسوم تعليمية {percentText(report.policy.feeFractionPerSide)} وانزلاق {percentText(report.policy.slippageFractionPerSide)} لكل اتجاه. التنفيذ يسجل الأوامر والأرصدة معًا؛ المهمة اليومية عند 09:00 برلين تقرأ النتائج وتحدّث الشيت وتقترح التحسينات.</p></article>
     </div></section>}
     <footer className={styles.footer}><span>التنفيذ التعليمي داخل الموقع · تتحدث هذه الصفحة كل دقيقة أثناء فتحها</span><a href={SHEET_URL} target="_blank" rel="noreferrer">فتح سجل المتابعة الموحد ↗</a></footer>
