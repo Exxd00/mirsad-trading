@@ -232,7 +232,8 @@ function closePosition(state: EducationState, position: EducationPosition, marke
   return orderId;
 }
 function allocationFraction(state: EducationState) {
-  return state.performance.riskReason === 'reduce_risk' ? EDUCATION_POLICY.reducedAllocationFraction : EDUCATION_POLICY.entryAllocationFraction;
+  const p = state.performance;
+  return p.lossStreak >= 2 || p.drawdown !== null && d(p.drawdown).gte('.02') ? EDUCATION_POLICY.reducedAllocationFraction : EDUCATION_POLICY.entryAllocationFraction;
 }
 function readiness(state: EducationState, markets: Map<string, MarketSnapshot>, now: number) {
   const cash = state.balances.find(b => b.currency === 'EUR')?.available ?? null;
