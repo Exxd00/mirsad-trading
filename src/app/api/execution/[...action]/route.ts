@@ -31,7 +31,10 @@ export async function POST(request: Request, context: Context) {
       if (!schedulerAuthorized(request)) return json({ error: 'authentication_required' }, 401);
     } else await requireMutation(request);
     const data = await body(request);
-    if (action === 'settings') return json(await entrySwitch(z.object({ entriesEnabled: z.boolean() }).strict().parse(data).entriesEnabled));
+    if (action === 'settings') {
+      const result = await entrySwitch(z.object({ entriesEnabled: z.boolean() }).strict().parse(data).entriesEnabled);
+      return json(result, 'status' in result && result.status === 'blocked' ? 409 : 200);
+    }
     if (action === 'deadline') {
       const parsed = z.object({ key: z.string().regex(/^[a-f0-9]{64}$/) }).strict().parse(data);
       const result = await handleDeadline(parsed.key); return json(result, result.status === 'blocked' ? 409 : 200);

@@ -36,24 +36,29 @@ export function ExecutionWorkspace() {
     </nav>
     <header className={styles.hero}>
       <div><p className={styles.kicker}>محرك التنفيذ · 1.0.0</p><h1>حالة الأتمتة</h1>
-        <p className={styles.description}>يحسب المحرك تقاطعات EMA من الشموع المكتملة، ويعتمد على حساب مرصاد التعليمي لتنفيذ الأوامر.</p></div>
-      {report && <span className={`${styles.state} ${styles.paused}`}>{report.enabled ? 'المحرك مفعّل' : report.account_connected ? 'بيانات الحساب محفوظة — التنفيذ متوقف' : 'بانتظار بيانات الحساب التعليمي'}</span>}
+        <p className={styles.description}>يقرأ المحرك الحساب المتصل في الصفحة الرئيسية ويحسب تقاطعات EMA من الشموع المكتملة.</p></div>
+      {report && <span className={`${styles.state} ${styles.paused}`}>{report.enabled ? 'المحرك مفعّل' : report.account_connected ? 'الحساب متصل · إرسال الأوامر متوقف' : 'بانتظار اتصال الحساب'}</span>}
     </header>
     <div className={styles.controls}><button className={styles.button} disabled={loading} onClick={() => void refresh()}>{loading ? 'جارٍ التحديث…' : 'تحديث الحالة'}</button></div>
     {error && <p role="alert" className={`${styles.message} ${styles.error}`}>{error}</p>}
     {!report && loading && <p className={styles.loading}>جارٍ تحميل الحالة…</p>}
     {report && <>
       <p role="status" className={`${styles.message} ${styles.warning}`}>{report.account_connected
-        ? 'تُعرض بيانات حساب مرصاد التعليمي المحفوظة. استراتيجية التقاطع جاهزة في الكود؛ تنفيذ الأوامر متوقف لحين توصيل واجهة أوامر الحساب وقدراتها.'
-        : 'لم يُعثر على بيانات حساب مرصاد التعليمي المحفوظة. لن يُنشأ رصيد ابتدائي تلقائيًا.'}</p>
+        ? 'تُقرأ الأرصدة والأوامر من اتصال Revolut X الموجود. إرسال الأوامر متوقف: واجهة إنشاء الأوامر الموثقة لا توفر الحماية المترابطة المطلوبة. المراكز القائمة تبقى خارج إدارة هذا الإصدار.'
+        : 'تعذر العثور على اتصال الحساب الموجود. راجع اتصال الحساب في الصفحة الرئيسية.'}</p>
       {report.account_connected && <section className={styles.panel}>
-        <div className={styles.panelHeading}><div><h2>{report.account_name}</h2><p className={styles.subtle}>آخر تحديث محفوظ: {report.source_at === null ? 'غير متاح' : new Date(report.source_at * 1000).toISOString()}</p></div></div>
+        <div className={styles.panelHeading}><div><h2>{report.account_name}</h2><p className={styles.subtle}>آخر قراءة من الحساب: {report.source_at === null ? 'غير متاح' : new Date(report.source_at * 1000).toISOString()}</p></div></div>
         <div className={styles.scroll}><table className={styles.table}>
           <thead><tr><th>العملة</th><th>الإجمالي</th><th>المتاح</th><th>المحجوز</th></tr></thead>
           <tbody>{report.balances?.map(balance => <tr key={balance.currency}><td>{balance.currency}</td><td className={styles.numeric}>{balance.total}</td><td className={styles.numeric}>{balance.available}</td><td className={styles.numeric}>{balance.reserved}</td></tr>)}</tbody>
         </table></div>
-        <p className={styles.sectionNote}>المراكز المسجلة: {report.positions?.length ?? 0} · الأوامر المحفوظة: {report.orders?.length ?? 0}. هذه سجلات الحساب التعليمي وليست تنفيذات جديدة للمحرك.</p>
+        <p className={styles.sectionNote}>الحيازات في المصدر: {report.positions?.length ?? 0} · أوامر المصدر: {report.orders?.length ?? 0}. لا تُنسب الأوامر السابقة إلى أداء هذا الإصدار.</p>
       </section>}
+      <section className={styles.panel}>
+        <div className={styles.panelHeading}><h2>آخر دورة للمشغّل</h2></div>
+        <p className={styles.sectionNote}>{typeof report.last_cycle?.at === 'number' ? new Date(report.last_cycle.at * 1000).toISOString() : 'لم تُسجل دورة بعد.'}</p>
+        {report.last_cycle && <p className={styles.sectionNote}>الحالة: {String(report.last_cycle.status ?? 'غير متاحة')}</p>}
+      </section>
       <div className={styles.metrics}>
         {[["ميزانية الدخول", report.policy.allocation, 'من اليورو المتاح، شاملة رسوم الدخول'],
           ['الميزانية المخفضة', report.policy.reduced_allocation, 'بعد خسارتين أو تراجع 2%؛ العودة بعد 3 أرباح وتراجع أقل من 1%'],

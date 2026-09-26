@@ -27,6 +27,7 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
   if (!lease) return { ...result, status: 'busy' };
   try {
     const caps = await port.capabilities(), state = await journal.state(lease);
+    if (Object.values(caps).some(value => !value)) result.blocks.push({ reason: 'execution_capabilities_missing' });
     await port.reconcile();
     let account = await port.account();
     const validateAccount = (a: Account) => {
@@ -148,6 +149,9 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
           await journal.result(lease, intent.key, 'unknown', null); result.status = 'unknown'; result.intent = intent;
         }
       }
+    }
+    if (result.status === 'waiting' && result.blocks.some(b => b.reason === 'execution_capabilities_missing')) {
+      result.status = 'blocked'; result.reason = 'execution_capabilities_missing';
     }
     await journal.event(lease, { type: 'cycle', version: VERSION, ...result });
     return result;

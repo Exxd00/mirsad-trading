@@ -67,7 +67,7 @@ export function rankEntries(entries: BuyIntent[]) {
 export function planExit(account: Account, signals: Signal[], quotes: Quote[], now: number): SellIntent | null {
   for (const p of account.positions.filter(p => p.managed && decimal(p.quantity).gt(0)).sort((a, b) => a.id.localeCompare(b.id))) {
     if (account.orders.some(o => o.symbol === p.symbol && o.side === 'sell' && o.purpose !== 'protection' && !terminal(o))) continue;
-    const reverse = signals.find(s => s.side === 'sell' && s.version === CONFIG.strategyVersion && s.symbol === p.symbol && s.at > p.openedAt && s.at <= now);
+    const reverse = signals.find(s => s.side === 'sell' && s.version === CONFIG.strategyVersion && s.symbol === p.symbol && p.openedAt !== null && s.at > p.openedAt && s.at <= now);
     const q = quotes.find(q => q.symbol === p.symbol && fresh(q.sourceAt, now, CONFIG.quoteMaxAgeSeconds) && fresh(q.readAt, now, CONFIG.quoteMaxAgeSeconds));
     const trigger = q && p.stop !== null && decimal(q.bid).lte(p.stop) ? 'stop' : q && p.target !== null && decimal(q.bid).gte(p.target) ? 'target' : reverse ? 'reverse_cross' : null;
     if (!trigger) continue;

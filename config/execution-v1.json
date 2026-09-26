@@ -1,6 +1,6 @@
 {
   "strategyVersion": "mirsad-ema-15m-v1.0.0",
-  "accountId": "mirsad-education",
+  "accountId": "revolut-x",
   "symbols": [],
   "candleSource": "Revolut X public EEA",
   "timeframeSeconds": 900,
@@ -24,6 +24,6 @@
   "timezone": "Europe/Berlin",
   "sheetUrl": "https://docs.google.com/spreadsheets/d/1I4sXWpg5oImDvuXVm0yw4tX_Rg6MpXs4zV38zx1_3RA/edit",
   "platformUrl": "https://mirsad-trading.vercel.app",
-  "orderApiDocumentation": null,
+  "orderApiDocumentation": "https://developer.revolut.com/docs/api/revolut-x-crypto-exchange",
   "entriesEnabled": false
 }

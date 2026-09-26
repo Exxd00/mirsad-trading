@@ -10,3 +10,4 @@ playwright-report/
 *.tsbuildinfo
 *.log
 scratch/
+.vercel

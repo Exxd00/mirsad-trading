@@ -7,6 +7,7 @@ import { encryptSecret, decryptSecret } from './secrets';
 import { AppError, fail } from './errors';
 import { getPublicInstruments, getPublicMarket, RevolutXClient, BrokerApiError, type RevolutMarket, type RevolutInstrument, type RevolutOrder } from './brokers/revolut';
 import type { Draft, NormalOrder, TradingPort } from './trading';
+import { loadCandles } from './execution/v1/feed';
 
 export async function setting<T>(key:string,fallback:T):Promise<T>{const r=await query<{value:T}>('SELECT value FROM app_settings WHERE key=$1',[key]);return r.rows[0]?.value??fallback;}
 export async function setSetting(key:string,value:unknown){await query('INSERT INTO app_settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=NOW()',[key,JSON.stringify(value)]);}
@@ -31,16 +32,23 @@ async function cached<T>(key:string,ttl:number,load:()=>Promise<T>):Promise<T>{
  });
 }
 export const instruments=()=>cached<RevolutInstrument[]>('instruments',600000,()=>getPublicInstruments());
+// Preserve source decimal strings for the execution adapter; share the existing
+// durable public-feed pacing with the dashboard instead of adding another feed.
+export const sourceMarket=(symbol:string,interval=15)=>cached<RevolutMarket>(`market:${symbol}:${interval}`,3000,()=>getPublicMarket(symbol,interval));
+export const sourceExecutionCandles=(symbol:string,after:number|null)=>{
+ const now=Math.floor(Date.now()/1000),end=Math.floor(now/900)*900;
+ return cached(`execution-candles:${symbol}:${after??'warmup'}:${end}`,300000,()=>loadCandles(symbol,now,after));
+};
 export async function market(symbol:string,interval:number){
  if(!/^[A-Z0-9]{2,16}-[A-Z0-9]{2,12}$/.test(symbol)||![1,5,15,60].includes(interval))fail('INVALID_MARKET',400,'الأداة أو الفاصل غير صالح.');
  const list=await instruments();if(!list.some(i=>i.symbol===symbol&&i.status==='active'))fail('UNKNOWN_MARKET',404,'الأداة غير متاحة ضمن أسواق EEA.');
- const m=await cached<RevolutMarket>(`market:${symbol}:${interval}`,3000,()=>getPublicMarket(symbol,interval));
+ const m=await sourceMarket(symbol,interval);
  const age=Date.now()-m.sourceTimestamp;
  const status=age<=15000?'current':age<=60000?'delayed':'stale';
  return {quote:{symbol:m.symbol,last:Number(m.last),bid:Number(m.bid),ask:Number(m.ask),spread:new Decimal(m.ask).sub(m.bid).toNumber(),updatedAt:new Date(m.sourceTimestamp).toISOString(),receivedAt:m.observedAt,source:m.source,status,change24h:Number(m.change24h),low24h:Number(m.low24h),high24h:Number(m.high24h)},candles:m.candles.slice(-200).map(c=>({time:c.start/1000,open:Number(c.open),high:Number(c.high),low:Number(c.low),close:Number(c.close),volume:Number(c.volume),complete:c.complete,mayBeMidPrice:c.mayBeMidPrice})),instruments:list.map(i=>({symbol:i.symbol,base:i.base,quote:i.quote,status:i.status,minQuantity:i.minOrderSize,quantityStep:i.baseStep,priceStep:i.quoteStep,minNotional:Decimal.max(i.minOrderSizeQuote,'1').toString(),maxQuantity:i.maxOrderSize})),source:'Revolut X · EEA · بيانات سوق عامة',interval,polled:true,candleTimestamp:new Date(m.candleSourceTimestamp).toISOString()};
 }
 type CredentialMeta={version:string;verifiedAt:string;readVerified:boolean;tradePermissionAcknowledged:boolean;regionConfirmed:boolean};
-async function credentials(){
+export async function credentials(){
  if(isPreview())return null;
  const row=(await query<{ciphertext:string;metadata:CredentialMeta}>('SELECT ciphertext,metadata FROM broker_credentials WHERE broker=$1',['revolut-x'])).rows[0];
  if(!row)return null;

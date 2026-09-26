@@ -1,6 +1,7 @@
 {
   "$schema": "https://unpkg.com/wrangler@4.137.0/config-schema.json",
   "name": "mirsad-signal-monitor",
+  "account_id": "433c0d5bb11c9ab464f03d7773bc01d1",
   "main": "execution-v1-worker.mjs",
   "compatibility_date": "2026-09-26",
   "workers_dev": true,

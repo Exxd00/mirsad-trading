@@ -2,6 +2,7 @@ import 'server-only';
 import { randomUUID } from 'node:crypto';
 import { query } from '../../db';
 import { getPublicInstruments } from '../../brokers/revolut';
+import { credentials, instruments, sourceMarket, sourceExecutionCandles } from '../../services';
 import { CONFIG, VERSION } from './model';
 import { SqlJournal } from './journal';
 import { processCandles } from './strategy';
@@ -9,18 +10,21 @@ import { loadCandles } from './feed';
 import { cycle } from './runner';
 import { cancelDeadline, type CancellationPort } from './deadline';
 import { dailyReport } from './reporting';
+import { ConnectedRevolutVenue } from './revolut-venue';
 export const journal = new SqlJournal();
-/** Integration point: supply the documented Mirsad ACCOUNT ORDER implementation.
- * The old stored account is not an order API, and the separate simulation wallet
- * and Revolut credential path must never be substituted here. */
-export function connectedVenue(): CancellationPort | null { return null; }
+/** Owner-selected connection: the account already connected on the main page.
+ * Credentials stay on the existing host; the scheduler receives no broker keys. */
+export async function connectedVenue(): Promise<CancellationPort | null> {
+  const connection = await credentials();
+  return connection ? new ConnectedRevolutVenue({ client: connection.client, instruments, market: sourceMarket, candles: sourceExecutionCandles }) : null;
+}
 export async function configuredSymbols() {
   const result = await query<{ value: unknown }>('SELECT value FROM app_settings WHERE key=$1', ['watchlist']);
   const selected = CONFIG.symbols.length ? CONFIG.symbols : result.rows[0]?.value;
   return Array.isArray(selected) ? [...new Set(selected.filter((s): s is string => typeof s === 'string' && /^[A-Z0-9]{2,16}-EUR$/.test(s)))] : [];
 }
 export async function runHost() {
-  const port = connectedVenue(), symbols = await configuredSymbols();
+  const port = await connectedVenue(), symbols = await configuredSymbols();
   if (port) return cycle(port, journal, symbols);
   // Complete the market-analysis path while clearly retaining the missing order
   // API as a blocker. This writes audit/indicator data only, never account balances.
@@ -62,20 +66,26 @@ export async function runHost() {
   } finally { await journal.release(lease); }
 }
 export async function handleDeadline(key: string) {
-  const port = connectedVenue();
+  const port = await connectedVenue();
   if (!port) return { status: 'blocked', reason: 'order_api_not_connected' };
   return cancelDeadline(port, journal, key, Math.floor(Date.now() / 1000));
 }
 export async function entrySwitch(enabled: boolean) {
+  if (enabled) {
+    const port = await connectedVenue();
+    if (!port || Object.values(await port.capabilities()).some(value => !value)) {
+      return { status: 'blocked', reason: 'execution_capabilities_missing', entriesEnabled: false, orderApiConnected: false };
+    }
+  }
   const lease = await journal.acquire(CONFIG.accountId);
   if (!lease) return { status: 'busy' };
   try { const state = await journal.state(lease); state.entriesEnabled = enabled; await journal.save(lease, state);
     await journal.event(lease, { type: 'entries_setting', enabled, at: Math.floor(Date.now() / 1000) });
-    return { entriesEnabled: enabled, orderApiConnected: connectedVenue() !== null };
+    return { entriesEnabled: enabled };
   } finally { await journal.release(lease); }
 }
 export async function runTick() {
   const execution = await runHost();
-  const report = await dailyReport(connectedVenue(), journal, Math.floor(Date.now() / 1000));
+  const report = await dailyReport(await connectedVenue(), journal, Math.floor(Date.now() / 1000));
   return { ...execution, report };
 }

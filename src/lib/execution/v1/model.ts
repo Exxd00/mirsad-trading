@@ -21,14 +21,14 @@ export type Costs = { buyFeeRate: string; sellFeeRate: string; buyFixedEur: stri
 export type Instrument = { symbol: string; active: boolean; quoteCurrency: string;
   quantityStep: string; priceStep: string; minimumQuantity: string; minimumNotional: string;
   maximumQuantity: string | null; costs: Costs | null };
-export type Position = { id: string; symbol: string; managed: boolean; openedAt: number; quantity: string; available: string;
+export type Position = { id: string; symbol: string; managed: boolean; openedAt: number | null; quantity: string; available: string;
   reserved: string; averageFillPrice: string | null; originalStop: string | null;
   stop: string | null; target: string | null; marketValueEur: string | null;
   valuationAt: number | null; unrealizedNetPnlEur: string | null;
   protectionState: 'active' | 'missing' | 'unknown'; protectionIds: string[] };
 export type SourceOrder = { id: string; clientKey: string; symbol: string; side: 'buy' | 'sell';
   status: 'open' | 'partial' | 'filled' | 'cancelled' | 'rejected' | 'expired' | 'unknown';
-  quantity: string; filledQuantity: string; remainingBudgetEur: string | null;
+  quantity: string | null; filledQuantity: string; remainingBudgetEur: string | null;
   submittedAt: number; sourceAt: number; managed: boolean; purpose: 'entry' | 'exit' | 'protection';
   averageFillPrice: string | null; feeEur: string | null };
 export type ClosedTrade = { id: string; symbol: string; version: string; sourceConfirmed: boolean;
