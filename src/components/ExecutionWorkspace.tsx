@@ -37,13 +37,23 @@ export function ExecutionWorkspace() {
     <header className={styles.hero}>
       <div><p className={styles.kicker}>محرك التنفيذ · 0.1</p><h1>حالة الأتمتة</h1>
         <p className={styles.description}>يعتمد المحرك على بيانات الحساب وإشارة دخول معتمدة من المصدر المتصل.</p></div>
-      {report && <span className={`${styles.state} ${styles.paused}`}>متوقف — الربط غير مكتمل</span>}
+      {report && <span className={`${styles.state} ${styles.paused}`}>{report.account_connected ? 'الحساب متصل — التنفيذ متوقف' : 'بانتظار بيانات الحساب التعليمي'}</span>}
     </header>
     <div className={styles.controls}><button className={styles.button} disabled={loading} onClick={() => void refresh()}>{loading ? 'جارٍ التحديث…' : 'تحديث الحالة'}</button></div>
     {error && <p role="alert" className={`${styles.message} ${styles.error}`}>{error}</p>}
     {!report && loading && <p className={styles.loading}>جارٍ تحميل الحالة…</p>}
     {report && <>
-      <p role="status" className={`${styles.message} ${styles.warning}`}>يلزم ربط الحساب ومصدر إشارات الدخول قبل التشغيل. بيانات الأرصدة والمراكز والنتائج غير متاحة حاليًا.</p>
+      <p role="status" className={`${styles.message} ${styles.warning}`}>{report.account_connected
+        ? 'تُعرض بيانات حساب مرصاد التعليمي المحفوظة. تنفيذ الأوامر متوقف إلى حين استكمال مصدر إشارات الدخول وموصل التنفيذ.'
+        : 'لم يُعثر على بيانات حساب مرصاد التعليمي المحفوظة. لن يُنشأ رصيد ابتدائي تلقائيًا.'}</p>
+      {report.account_connected && <section className={styles.panel}>
+        <div className={styles.panelHeading}><div><h2>{report.account_name}</h2><p className={styles.subtle}>آخر تحديث محفوظ: {report.source_at === null ? 'غير متاح' : new Date(report.source_at * 1000).toISOString()}</p></div></div>
+        <div className={styles.scroll}><table className={styles.table}>
+          <thead><tr><th>العملة</th><th>الإجمالي</th><th>المتاح</th><th>المحجوز</th></tr></thead>
+          <tbody>{report.balances?.map(balance => <tr key={balance.currency}><td>{balance.currency}</td><td className={styles.numeric}>{balance.total}</td><td className={styles.numeric}>{balance.available}</td><td className={styles.numeric}>{balance.reserved}</td></tr>)}</tbody>
+        </table></div>
+        <p className={styles.sectionNote}>المراكز المسجلة: {report.positions?.length ?? 0} · الأوامر المحفوظة: {report.orders?.length ?? 0}. هذه سجلات الحساب التعليمي وليست تنفيذات جديدة للمحرك.</p>
+      </section>}
       <div className={styles.metrics}>
         {[["ميزانية الدخول", report.policy.allocation, 'من اليورو المتاح، شاملة رسوم الدخول'],
           ['الميزانية المخفضة', report.policy.reduced_allocation, 'بعد خسارتين متتاليتين أو تراجع 2%'],

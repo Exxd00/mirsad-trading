@@ -1,4 +1,4 @@
-> **Current automatic execution engine (2026-09-26):** the supplied Execution Core 0.1 now lives in `src/lib/execution/`. The former education/monitor/research engines have been removed. Execution is disabled until a real provider adapter and signal source are supplied. See [the current integration contract](docs/execution-core.md). Older automation descriptions below are historical.
+> **Current automatic execution engine (2026-09-26):** the supplied Execution Core 0.1 now lives in `src/lib/execution/`. The former education/monitor/research engines have been removed. The existing Mirsad educational account is connected as the data source. Execution remains disabled until the order adapter and signal source are completed. See [the current integration contract](docs/execution-core.md). Older automation descriptions below are historical.
 
 # مرصاد | Mirsad
 
