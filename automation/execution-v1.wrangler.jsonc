@@ -1,0 +1,12 @@
+{
+  "$schema": "https://unpkg.com/wrangler@4.137.0/config-schema.json",
+  "name": "mirsad-signal-monitor",
+  "main": "execution-v1-worker.mjs",
+  "compatibility_date": "2026-09-26",
+  "workers_dev": true,
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "secrets": { "required": ["EXECUTION_SCHEDULER_TOKEN"] },
+  "durable_objects": { "bindings": [{ "name": "DEADLINES", "class_name": "OrderDeadline" }] },
+  "migrations": [{ "tag": "execution-v1-deadlines", "new_sqlite_classes": ["OrderDeadline"] }],
+  "observability": { "enabled": true }
+}

@@ -16,7 +16,7 @@ export function ExecutionWorkspace() {
       if (response.status === 401) throw new Error('انتهت جلسة الدخول. افتح الصفحة الرئيسية ثم سجّل الدخول مجددًا.');
       if (!response.ok) throw new Error('تعذر تحديث حالة المحرك.');
       const data = await response.json();
-      if (data?.mode !== 'execution-core' || data?.version !== '0.1' || !data?.policy) throw new Error('تقرير المحرك غير مكتمل.');
+      if (data?.mode !== 'execution-core' || data?.version !== '1.0.0' || !data?.policy) throw new Error('تقرير المحرك غير مكتمل.');
       if (!signal?.aborted) { setReport(data); setError(''); }
     } catch (failure) {
       if (!signal?.aborted) setError(failure instanceof Error ? failure.message : 'تعذر تحديث الحالة.');
@@ -35,16 +35,16 @@ export function ExecutionWorkspace() {
       <div className={styles.navLinks}><Link href="/">الحسابات</Link><Link href="/automation">الأتمتة</Link></div>
     </nav>
     <header className={styles.hero}>
-      <div><p className={styles.kicker}>محرك التنفيذ · 0.1</p><h1>حالة الأتمتة</h1>
-        <p className={styles.description}>يعتمد المحرك على بيانات الحساب وإشارة دخول معتمدة من المصدر المتصل.</p></div>
-      {report && <span className={`${styles.state} ${styles.paused}`}>{report.account_connected ? 'الحساب متصل — التنفيذ متوقف' : 'بانتظار بيانات الحساب التعليمي'}</span>}
+      <div><p className={styles.kicker}>محرك التنفيذ · 1.0.0</p><h1>حالة الأتمتة</h1>
+        <p className={styles.description}>يحسب المحرك تقاطعات EMA من الشموع المكتملة، ويعتمد على حساب مرصاد التعليمي لتنفيذ الأوامر.</p></div>
+      {report && <span className={`${styles.state} ${styles.paused}`}>{report.enabled ? 'المحرك مفعّل' : report.account_connected ? 'بيانات الحساب محفوظة — التنفيذ متوقف' : 'بانتظار بيانات الحساب التعليمي'}</span>}
     </header>
     <div className={styles.controls}><button className={styles.button} disabled={loading} onClick={() => void refresh()}>{loading ? 'جارٍ التحديث…' : 'تحديث الحالة'}</button></div>
     {error && <p role="alert" className={`${styles.message} ${styles.error}`}>{error}</p>}
     {!report && loading && <p className={styles.loading}>جارٍ تحميل الحالة…</p>}
     {report && <>
       <p role="status" className={`${styles.message} ${styles.warning}`}>{report.account_connected
-        ? 'تُعرض بيانات حساب مرصاد التعليمي المحفوظة. تنفيذ الأوامر متوقف إلى حين استكمال مصدر إشارات الدخول وموصل التنفيذ.'
+        ? 'تُعرض بيانات حساب مرصاد التعليمي المحفوظة. استراتيجية التقاطع جاهزة في الكود؛ تنفيذ الأوامر متوقف لحين توصيل واجهة أوامر الحساب وقدراتها.'
         : 'لم يُعثر على بيانات حساب مرصاد التعليمي المحفوظة. لن يُنشأ رصيد ابتدائي تلقائيًا.'}</p>
       {report.account_connected && <section className={styles.panel}>
         <div className={styles.panelHeading}><div><h2>{report.account_name}</h2><p className={styles.subtle}>آخر تحديث محفوظ: {report.source_at === null ? 'غير متاح' : new Date(report.source_at * 1000).toISOString()}</p></div></div>
@@ -56,7 +56,7 @@ export function ExecutionWorkspace() {
       </section>}
       <div className={styles.metrics}>
         {[["ميزانية الدخول", report.policy.allocation, 'من اليورو المتاح، شاملة رسوم الدخول'],
-          ['الميزانية المخفضة', report.policy.reduced_allocation, 'بعد خسارتين متتاليتين أو تراجع 2%'],
+          ['الميزانية المخفضة', report.policy.reduced_allocation, 'بعد خسارتين أو تراجع 2%؛ العودة بعد 3 أرباح وتراجع أقل من 1%'],
           ['وقف الخسارة', report.policy.stop, 'من سعر التنفيذ الفعلي'],
           ['هدف الربح', report.policy.target, 'من سعر التنفيذ الفعلي']].map(([label, value, note]) =>
           <section className={styles.metric} key={label}><span>{label}</span><strong className={styles.numeric}>{percent(value)}</strong><small>{note}</small></section>)}
@@ -65,8 +65,8 @@ export function ExecutionWorkspace() {
         <div className={styles.panelHeading}><h2>قواعد التنفيذ</h2></div>
         <div className={styles.rules}>
           <div><h3>أولوية الخروج</h3><p>الخروج عند مستويات الحماية المسجلة يسبق الدخول، ويقتصر على الكمية المتاحة من المراكز المُدارة.</p></div>
-          <div><h3>بيانات حديثة</h3><p>ينتظر المحرك إذا تجاوز عمر البيانات خمس دقائق أو بقيت أوامر معلقة تحتاج إلى تسوية.</p></div>
-          <div><h3>منع تكرار الطلب</h3><p>قرار واحد في الدورة، مع قفل للحساب ومفتاح ثابت للطلب. إرسال الأمر لا يعني تأكيد تنفيذه.</p></div>
+          <div><h3>بيانات حديثة</h3><p>شموع مكتملة كل 15 دقيقة، وإشارة دخول صالحة لخمس دقائق. الأوامر غير المحسومة تُسوّى قبل أي دخول متعارض.</p></div>
+          <div><h3>منع تكرار الطلب</h3><p>نية أمر واحدة في الدورة. حتى 3 مراكز وتعريض 30%، وتوقف الدخول عند خسارة يومية 1%.</p></div>
         </div>
       </section>
     </>}

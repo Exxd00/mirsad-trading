@@ -1,84 +1,122 @@
-# Execution core 0.1
+# مرصاد — محرك EMA النسخة الأولى
 
-The owner's `Educational-Execution-Core-0.1(2).zip` is adapted to this repository's
-Node/TypeScript runtime in `src/lib/execution/engine.ts`. There is one current
-automatic execution engine. No Python process is assumed inside a Next.js route.
+الإصدار: `mirsad-ema-15m-v1.0.0`. هذه قواعد المالك للتنفيذ وليست إثبات تشغيل أو ربحية.
 
-## Current state
+## حالة التسليم
 
-- `/automation` and authenticated `GET /api/execution/report` show the new core.
-- The owner selected **Mirsad's existing educational account**. Its source
-  connector in `src/lib/execution/education-account.ts` reads `education:state:v1`
-  from the existing database. It never selects Revolut credentials or the
-  separately seeded `simulation:balances` wallet.
-- Reports expose the saved balances, positions, orders and metrics with their
-  original timestamp. Missing accounts remain uninitialized; invalid data or
-  database failures are not replaced with generated zeroes or starter balances.
-- The source-to-core mapping preserves available/reserved quantities, quote age
-  and prior levels. Existing holdings remain unmanaged by the new core.
-- **Source connection is implemented; order execution is not activated.** A
-  documented entry-signal source and an execution adapter meeting the five
-  guarantees below remain required. These are separate from reading the account.
-- Authenticated `POST /api/execution/run` evaluates the available source and
-  returns HTTP 409 with its blocker (for example `no_entry_signal`,
-  `stale_source` or `education_account_not_initialized`); an HTTP body cannot
-  enable execution. No account records are written by this connector.
-- The former education, Cloudflare monitor and paper-research engines and their
-  execution entry points were removed. Old `/api/education/*` actions return 410
-  after site deployment; even signed legacy ticks cannot run the former engine.
-- The Cloudflare config has no cron triggers and points to an inert retirement
-  worker. Updating Git alone does not redeploy an already running Cloudflare
-  worker: redeploy `automation/wrangler.jsonc` to remove its installed triggers.
-  No external scheduler deployment or account mutation is performed by this PR.
-- Existing stored records and database migrations are retained. The owner-selected
-  educational account is read directly, without resetting or copying it to another wallet.
+- أضيفت الاستراتيجية والمخاطر والتخزين الدائم وتنسيق الأوامر ومؤقت الإلغاء والتقارير، مع اختبارات معزولة.
+- **واجهة أوامر حساب مرصاد التعليمي غير موصولة.** `connectedVenue()` في `src/lib/execution/v1/host.ts` يعيد `null` عمدًا. لا توجد أوامر تداول فعلية أو نتائج حساب مؤكدة لهذا الإصدار.
+- قارئ `education:state:v1` يحافظ على السجل المحفوظ ولا يزرع أرصدة أو يمس المراكز والأوامر. هذا السجل لا يوفّر واجهة إرسال/استعلام/إلغاء/حماية. لا تُستبدل به محفظة أخرى أو مسار `simulation:balances` أو حساب Revolut.
+- أزيل المحرك القديم من الكود في العمل السابق. مسارات `/api/education/*` متقاعدة (410 بعد نشر الموقع). لم يُؤكد نشر النسخة الجديدة للموقع أو Worker، ولا إيقاف نسخة Cloudflare البعيدة في هذا التسليم.
+- ملف الجدولة الجديد جاهز لكنه لم يُنشر. لا مهمة ChatGPT جديدة ولا نقل أو استئناف للمهمة القديمة. المعرّف التاريخي الموجود في الشيت لم يظهر في قائمة المهام المتاحة.
+- التقرير التاريخي الكامل للأداء والتكاليف غير مكتمل دون أرشيف سوقي وقواعد تعبئة ورسوم موثقة. اختبارات الاتجاهات الاصطناعية تتحقق من الحساب فقط، ولا تمثل نتائج تداول.
 
-## Preserved policy
+[الموقع](https://mirsad-trading.vercel.app/automation) · [المستودع](https://github.com/Exxd00/mirsad-trading) · [الشيت](https://docs.google.com/spreadsheets/d/1I4sXWpg5oImDvuXVm0yw4tX_Rg6MpXs4zV38zx1_3RA/edit)
 
-10% of available EUR including entry fees; 5% after two consecutive losses or
-drawdown >= 2%. Stop 2% and target 4% relative to actual fill price. Existing
-positions keep their source-recorded levels. Exits precede entries and only
-available quantities of managed positions can be sold. There is one intent per
-cycle, no arbitrary daily trade cap and no entry on an already held symbol.
-Snapshot and signal age must be between 0 and 300 seconds.
+## مواضع التنفيذ
 
-## Adapter contract
+| الملف داخل `src/lib/execution/v1/` | الوظيفة |
+| --- | --- |
+| `model.ts` + `config/execution-v1.json` | الأنواع، الإصدار، قيم عشرية، الإعدادات دون أسرار |
+| `strategy.ts` | 1000 شمعة مكتملة، EMA20/50/200 ببذرة SMA، التقاطع والاتجاه وهوية الإشارة |
+| `feed.ts` | المصدر العام الموثق للشموع، فترة 15 دقيقة، دون تعويض الفجوات |
+| `planner.ts` | صلاحية 5 دقائق، مطاردة 0.3%، ميزانية شاملة الرسوم، السعة والتعرض وفلتر 0.4% وترتيب الإشارات والخروج |
+| `risk.ts` | تراجع محايد للتحويلات، 10%/5%، الاستعادة، خسارة اليوم في برلين والتوقيت الصيفي |
+| `protection.ts` | مستويات التعبئات المؤكدة وتحديث كميتها دون إبعاد الوقف |
+| `journal.ts` | قفل SQL للحساب، ملكية وتجديد، نوايا دائمة، سجل تدقيق محفوظ |
+| `runner.ts` | التسوية والحماية ثم نية واحدة، تحديث البيانات قبل الإرسال، عدم تكرار القرار |
+| `deadline.ts` + `scheduler.ts` | إلغاء المتبقي واستعلام النتيجة وحماية الجزء المنفذ؛ تأكيد المؤقت قبل إرسال الدخول |
+| `metrics.ts` + `reporting.ts` | المقاييس وR ومعامل الربح، 24 ساعة ويوم برلين، الأحد، حفظ آخر لقطة ناجحة |
+| `historical.ts` | إعادة الإشارات بالحساب نفسه وفصل المعايرة والتقييم وتسجيل غموض الوقف/الهدف |
+| `host.ts` | الربط بالموقع، تحليل السوق عند غياب موصل الأوامر، إعداد تشغيل الدخول |
 
-Implement `Adapter` using the selected provider's documented API. Times are UTC
-epoch seconds; monetary values and quantities are decimal strings. `snapshotSchema`
-defines the full boundary. Null risk data blocks entries. Boolean strings are
-rejected rather than interpreted as approval. The account ID must match capabilities.
+## القواعد المثبتة
 
-All five capabilities must be **implemented and tested**, not just set to true:
-`idempotent_orders`, `atomic_execution_lock`, `fee_inclusive_budget`,
-`attached_exit_levels`, `persistent_order_lookup`.
+شراء فوري وبيع المملوك فقط. تقاطع EMA20 صعودًا فوق EMA50 في شمعة مكتملة جديدة، مع إغلاق أعلى EMA200 وارتفاع EMA200 عن أربع شموع سابقة. لا دخول عند استمرار التقاطع دون حدث جديد. الهوية SHA-256 للإصدار والرمز والإطار ووقت الإغلاق والاتجاه؛ مفتاح القرار يضم الحساب. تُحفظ الهوية حتى الرفض أو الإلغاء، ولا يُعاد استخدام الإشارة بعد الإغلاق.
 
-- `claim`/`release` own a durable, account-wide execution lock shared with every
-  process. The adapter must renew/fence its lease and reject writes after loss
-  of ownership. An in-memory lock is insufficient.
-- `order_by_key` and `submit` use the same persistent provider idempotency key.
-  Timeouts are unknown outcomes; reconcile them before another snapshot/intent.
-  Neither rejection nor cancellation silently produces a different order key.
-- `submit` revalidates account, current quantities, tick/lot size, fees, funds and
-  lock ownership. Entry cost must not exceed `total_budget_eur`. Attach protection
-  to actual fills; reconcile partial fills and remaining protection at the provider.
-- `record` is an audit log, never an account ledger. `submitted` only means a
-  response to submission; `reconciled` only means a stored order was found. Neither
-  status asserts a fill. Terminal rejected/cancelled orders return `blocked` and
-  require a documented resolution; the core does not blindly retry them.
-- As in the supplied core, **any** item in `pending_orders` blocks all new intents.
-  Persistent protective orders need an explicitly reviewed provider mapping;
-  do not hide unresolved orders or claim this integration is already ready.
+تُحسب المؤشرات من الإغلاق فقط وبالترتيب نفسه في التشغيل والإعادة. معامل EMA هو `2/(N+1)`، والبذرة متوسط أول N إغلاقات. دقة الحساب 80 رقمًا معنويًا، والمبالغ في حدود المنصة سلاسل عشرية؛ الكمية للأسفل والسعر إلى خطوة المنصة. أي فجوة أو مصدر مخالف يمنع تحليل تلك السلسلة.
 
-Once the provider integration and signal source are actually ready, replace the
-unconfigured host and test its durable concurrency/reconciliation guarantees.
-Never run the former and new engines on the same account concurrently. The
-original percentages are configuration supplied by the owner, not a profitability
-claim. Attached stops do not guarantee execution at their trigger price.
+الدخول خلال أقل من 300 ثانية من الإغلاق. سعر حد الشراء لا يزيد عن الإغلاق × 1.003، ويستخدم عرضًا حديثًا. الميزانية = اليورو المتاح × النسبة، شاملة رسوم الدخول، ومقيدة بمساحة التعرض. لا رفع للنسبة عند صغر الحد الأدنى. الأقرب إلى الأقل تكلفة ثم الأقدم إشارة ثم الرمز يفوز عند تزاحم السعة. الأصول من `symbols` إن حُددت وإلا `watchlist` الحالية. تُستخدم أزواج EUR مباشرة؛ أزواج بعملة تسعير أخرى تحتاج مسار تحويل موثق لم يُخمن.
 
-## Verification
+السعة ثلاث عملات لها مركز أو شراء معلق. التعرض هو القيمة الموثقة للمراكز المدارة + ميزانية **الجزء غير المنفذ** من الشراء المعلق، بحد 30% من قيمة الحساب. لا إعادة عد الكمية المحجوزة. حيازة سابقة تمنع شراء إضافي للعملة، لكنها لا تُدار تلقائيًا.
 
-`pnpm exec vitest run tests/execution-core.test.ts tests/execution-integration.test.ts`
+التكلفة التقديرية = رسوم الدخول + رسوم الخروج + الفرق بين حد الشراء وbid مرة واحدة + انزلاق إضافي متوقع + الرسوم الثابتة. حدود `buyFeeRate` و`sellFeeRate` يجب أن تغطي taker عند إمكان حدوثه. الانزلاق الإضافي لا يشمل الفارق مرة أخرى. المجهول ليس صفرًا؛ يُمنع الدخول فوق 0.4%. التقدير محفوظ مع القرار، و`costComparison()` يعرض الفرق عند وصول عناصر تكلفة فعلية متسقة.
 
-`pnpm typecheck` and `pnpm build` validate integration with the site. Unit-test
-fixtures are test-only and are not balances or provider adapters used by the app.
+وقف الجديد متوسط التعبئة ×0.98 والهدف ×1.04 قبل تكاليف الخروج. الحماية مترابطة لدى المصدر وعلى الكمية المملوكة المنفذة فقط. عند التعبئات الإضافية من الأمر نفسه يعاد حساب المستوى مع عدم خفض الوقف السابق. لا يُفترض تنفيذ الوقف عند سعره، ولا تُعاد تعبئة النقص بأمر كامل جديد. المراكز السابقة تحتفظ بمستوياتها ولا تُتبنى دون تعيين صريح.
+
+التقاطع المعاكس بعد فتح المركز يولد خروجًا إضافيًا. الخروج أولًا، حتى مع إيقاف الدخول أو حد الخسارة اليومية. يجب حسم إلغاء الحماية وتحديث المتاح من المصدر قبل البيع. الاستجابة للإرسال ليست تعبئة، ولا يُغلق المركز في السجل دون تأكيد المصدر.
+
+## المخاطرة والتحويلات
+
+النسبة 10%، وتنخفض إلى 5% بعد خسارتين صافيتين متتاليتين أو تراجع 2%. لا تعود إلا بعد ثلاث صفقات صافية رابحة وتراجع أقل من 1%. التعادل يقطع التسلسل، والبيانات الناقصة تمنع استنتاج النتيجة. صفقات الإصدارات القديمة لا تُنقل إلى سلسلة نتائج v1.
+
+لكل فترة بلا تحويل: `I(t) = I(t-1) × V(t)/V(t-1)`. عند تحويل خارجي نحتاج تقييمًا قبل التحويل وبعده فورًا: `Vبعد = Vقبل + التدفق`، ويستبدل `V(t)` في العائد بقيمة ما قبل التحويل. هذه سلسلة عائد مرتبطة محايدة للتدفقات؛ لا تخمين لتوقيت التحويل. التراجع = `1 − I/أعلى I`. يلزم خط أساس معروف، لا قيمة مفقودة تتحول إلى صفر.
+
+يوم برلين من منتصف الليل المحلي إلى منتصف الليل التالي، وقد يكون 23 أو 25 ساعة. يتطلب حد اليوم تقييم بدايته وبيانات التحويلات. خسارة 1% من البداية توقف الدخول إلى اليوم التالي حتى لو تعافت القيمة خلال اليوم. يتضمن التقييم المراكز المفتوحة. حالات البيانات الناقصة تُوثق ولا توقف الحماية.
+
+## عقد موصل الحساب — الجزء الناقص
+
+المطلوب المحدد: **توثيق واجهة أوامر حساب مرصاد التعليمي** وعنوانها وطريقة مصادقتها وحقول المصدر التالية. لا حاجة لإعادة إرسال رابط المستودع أو الموقع، ولا كلمة مرور في المحادثة أو الشيت. عند الحاجة يُستخدم تسجيل الدخول في واجهة الخدمة.
+
+طبّق `CancellationPort` في `runner.ts` و`deadline.ts` على الواجهة الموثقة، ثم صِله في `connectedVenue()`. لم يُنشأ مسار API افتراضي للمنصة. جميع الأوقات UTC epoch seconds، والأسعار والكميات سلاسل عشرية. لا تُستبدل `null` بصفر.
+
+| عملية الموصل | الضمان المطلوب من المصدر |
+| --- | --- |
+| `account()` | الحساب نفسه، EUR المتاح والمحجوز، إجمالي العملات بلا عد مزدوج، مراكز وأوامر وتعبئات ومعرّفاتها وأوقاتها، صفقات v1 المغلقة وتكاليفها، تقييمات وتحويلات وتغطية الأرشيف |
+| `instruments()/quotes()` | الأصول المسموح بها، lot/tick/minimum/maximum ورسوم موثقة، bid/ask حديثان ووقت المصدر منفصل عن القراءة |
+| `candles()` | المصدر الثابت و1000 شمعة متتابعة في البداية، ثم الجزء الجديد؛ احترام طلب واحد/ثانية للمصدر العام |
+| `lookup(key)` | مصدر دائم للمفتاح نفسه؛ `authoritative=true` عند إثبات النتيجة أو الغياب النهائي، لا عند timeout أو تأخر الفهرسة |
+| `submit(intent, lease)` | عدم تكرار لدى المصدر، التحقق من ملكية القفل عند الأثر الخارجي، قيود الكمية والأرصدة والميزانية، حد السعر، حماية فعلية للتعبئات، وعدم اعتبار الاستجابة تعبئة |
+| `ensureProtection()` | حماية مترابطة للكمية الفعلية، تحديثها عند كل تعبئة، لا انتظار خمس دقائق؛ سريانها عند توقف المضيف |
+| `prepareExit()` | إلغاء/تنسيق الحماية قبل أمر متعارض، انتظار تأكيد المصدر وتحديث الحجز والكمية؛ تأخر الإلغاء يعيد `ready=false` |
+| `armCancellation()` | تفويض إلى `scheduleCancellation()` بعد نشر المؤقت؛ تأكيد تخزين الموعد قبل دخول الشراء |
+| `cancelRemainder()` | إلغاء غير المنفذ فقط مع إعادة الاستعلام، إبقاء المنفذ وحمايته |
+
+قدرات `idempotentOrders/fencedWrites/attachedProtection/coordinatedExits/cancelRemainder/cancellationTimer` تعكس وظائف موصلة فعلاً، وليست علامات لإعلان الجاهزية. القدرة الناقصة تسجل عائقًا. لا يُخترع بديل تنفيذ. القفل المحلي وحده لا يستطيع منع طلب شبكة قديم من التأثير بعد انتهاء ملكيته؛ يلزم ضمان fencing في موصل المصدر أو خدمة تنفيذ مسلسلة موثقة.
+
+`originalStop` وتكلفة الدخول وصافي النتيجة ومعرّفات المصدر تتبع المركز الفعلي. قيم R تستخدم الكمية المنفذة × (متوسط الدخول − الوقف الأصلي). المقام الصفري أو المعلومة الناقصة تعطي غير متاح مع السبب. الانزلاق الفعلي يحتاج مرجع السعر عند الإرسال، ولا يطرح مرة ثانية من صافي نتيجة شاملة تكاليف التنفيذ.
+
+## التشغيل والإيقاف
+
+1. ثبّت الحزمة المعتادة للمشروع: `pnpm install --frozen-lockfile`. استخدم قاعدة البيانات الدائمة الموجودة. لم تُضف جداول أرصدة، ولم تُمس أسرارها.
+2. ضع الأصول في `config/execution-v1.json` أو إعداد `watchlist` الحالي. لا ترفع نسب المخاطرة. **ملف الإعدادات لا يحتوي أسرارًا.**
+3. بعد توفر الواجهة، طبّق العقد أعلاه وصِل الموصل. لا تعلّم الحيازات القديمة `managed=true` تلقائيًا. أول قراءة تسوّي الأوامر غير المحسومة وتؤكد الحماية الموجودة.
+4. سجّل الدخول من الموقع. `GET /api/execution/report` يقرأ الحالة. `POST /api/execution/run` بجسم `{}` ومصادقة/CSRF الموقع يجري دورة واحدة. عند غياب الموصل يعيد 409 مع `order_api_not_connected`، ويمكنه توثيق تحليل الشموع دون أوامر أو أرصدة.
+5. `POST /api/execution/settings` بجسم `{"entriesEnabled":true}` يسمح بالدخول بعد الربط. القيمة false توقف **الدخول فقط**؛ تبقى التسوية والخروج والحماية. لا حذف للسجل أو إعادة توليد مفاتيح القرارات عند الاستئناف.
+6. قبل تفعيل البديل، أوقف المشغّل السابق للحساب نفسه، مع إبقاء أوامر الحماية والتعبئات والمراكز والأوامر غير المحسومة. تقاعد مسار الموقع القديم لا يثبت إيقاف نسخة Worker أخرى منشورة.
+7. على المضيف: سر `EXECUTION_SCHEDULER_TOKEN` يطابق سر Worker. `EXECUTION_DEADLINE_URL` هو عنوان HTTPS الفعلي للمؤقت المنتهي بـ`/schedule`؛ لا كلمات مرور أو مفاتيح في الواجهة أو Git أو الشيت.
+8. انشر ملف `automation/execution-v1.wrangler.jsonc` باسم المشغّل السابق `mirsad-signal-monitor`، دون إنشاء محرك موازٍ أو ترقية خطة. أمر النشر عند توفر جلسة Cloudflare: `pnpm dlx wrangler@4.137.0 deploy --config automation/execution-v1.wrangler.jsonc`. لم يُنفذ هذا الأمر في التسليم.
+9. بعد النشر، وثّق أول tick وحالة الحساب ومعرّفات مصدره والمؤقت، قبل وصف النظام بأنه متصل أو ينفذ. لا يكفي نجاح البناء لإثباتها.
+
+التوقف العادي: `entriesEnabled=false` مع استمرار المجدول لحماية المراكز وإدارة الخروج. للإيقاف الكامل، تؤكد الحماية لدى المصدر وتحسم الأوامر المعلقة أولًا ثم تلغي cron على المشغّل نفسه. **لا تحذف Durable Objects أو مهام الإلغاء التي تخص أوامر لم تُحسم.** لا تستخدم ملف التقاعد القديم لإزالة موارد مؤقتات لازالت لازمة.
+
+## الاستضافة والحدود
+
+المحرك TypeScript/Node على مضيف Next.js الحالي، وليس Python داخل Worker. Worker ينادي المضيف كل خمس دقائق؛ Durable Object SQLite يحفظ موعد الإلغاء. لا انتظار 60 ثانية داخل دورة. عند تكرار الإنذار يُستخدم مفتاح القرار والقفل نفسه؛ تأخر الشبكة/الإلغاء يعاد استعلامه بمؤقت قصير. زمن التنفيذ ليس ضمانًا لتعبئة أو إلغاء لحظي أثناء تعطل المصدر.
+
+راجعت وثائق Cloudflare عند إعداد الكود: Free يتيح Durable Objects SQLite فقط، 100000 طلب/يوم و13000 GB-s/يوم؛ قراءات التخزين 5 ملايين/يوم وكتاباته 100000/يوم وإجمالي 5GB. تجاوز الحد يفشل ولا يرقّي الخطة تلقائيًا. نبضة الخمس دقائق وحدها 288/يوم، وتضاف إنذارات وإعادات بحسب الأوامر. CPU والتخزين الفعليان لم يُقاسا على حساب المضيف. إنذارات DO تعمل على الأقل مرة؛ دقة التوقيت لا تعني ضمانًا لحظيًا. حالة النشر الفعلية غير مؤكدة.
+
+المصادر الرسمية:
+- [شموع Revolut X العامة](https://developer.revolut.com/docs/api/revolut-x-crypto-exchange): `GET /1.0/public/candles/{symbol}`, `interval=15`, `since/until` بالميلي ثانية، `region=EEA`. مصدر المنصة قد يبني شموعًا بلا حجم من mid؛ لا يصنع المحرك شموعًا من نفسه.
+- [أسعار وحدود DO](https://developers.cloudflare.com/durable-objects/platform/pricing/).
+- [إنذارات DO](https://developers.cloudflare.com/durable-objects/api/alarms/).
+
+## الشيت والتقارير
+
+أُعدت تبويبات النسخة الأولى التسعة في الشيت المرتبط أعلاه. بقي التاريخ القديم محفوظًا. السجلات التشغيلية الجديدة فارغة إلى أن تصل بيانات فعلية؛ المقاييس غير المتاحة موسومة بسببها وليست أصفارًا.
+
+`reporting.ts` يحسب آخر24ساعة ويوم برلين منفصلًا، ويضيف مقارنة الأسبوع يوم الأحد من صفقات فريدة وسبعة أيام مكتملة متجاورة. يعد الشراء والبيع من أوقات التعبئات الفعلية، لا آخر تحديث أمر. يميز الصفقات المغلقة والأوامر والمراكز المفتوحة. إجمالي صافي فترة يحتاج لقطتي غير المحقق عند حدودها؛ لا تضاف قيمة غير محققة حالية إلى فترة قديمة.
+
+نبضة المضيف نفسها تستدعي التقرير مرة واحدة عند 09:00–09:04 Europe/Berlin، مع منع التكرار لليوم والإصدار. وقت التقرير يتحرك مع التوقيت الصيفي دون cron UTC منفصل. نتيجة تعذر القراءة لا تمحو آخر تقرير ناجح. التقرير محفوظ في السجل الدائم ويظهر في `daily_report` و`last_successful_report` داخل التقرير المصادق عليه. **هذه الجدولة مكتوبة ولم تُنشر.** لم يُفعّل نقل الشيت تلقائيًا؛ يلزم ربط قارئ التقرير ومهمة المتابعة القائمة أو موصل Sheets المصرح له بعد تحديدها، دون تكرار أو نقل المهمة القديمة تلقائيًا.
+
+الأحد لا يغير الاستراتيجية أو المخاطرة. لا توجد نتائج تسمح باقتراح تحسين أداء الآن. يثبت v1 أولًا؛ ثم متغير واحد لكل إصدار، وفترات متطابقة واختبار مستقل عن اختيار الإعدادات. `historical.ts` لا يختلق تعبئات: إذا لم تتوفر بيانات أدق لترتيب وقف وهدف في شمعة واحدة، فالنتيجة غامضة وليست الربح الأعلى.
+
+## التحقق
+
+`pnpm exec vitest run tests/execution-core.test.ts tests/execution-integration.test.ts tests/execution-runtime.test.ts`
+
+`pnpm typecheck`
+
+`pnpm build`
+
+الاختبارات تغطي الحساب المتسلسل، حداثة البيانات، التكاليف والتقريب والتعرض، التحويلات ويومي التوقيت الصيفي، القفل الحقيقي في SQL، فقد الملكية، نتائج الشبكة غير المؤكدة، استهلاك الإشارة، أولوية الخروج والحجز، إلغاء جزئي مستقل، تقارير الأحد وآخر لقطة ناجحة. بيانات الاختبار داخل اختبارات معزولة، ولا تدخل حساب المنصة. لا يُعد نجاحها إثباتًا لواجهة لم تُوصل.

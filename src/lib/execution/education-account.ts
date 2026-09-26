@@ -2,7 +2,6 @@ import 'server-only';
 import Decimal from 'decimal.js';
 import { z } from 'zod';
 import { query } from '../db';
-import type { Snapshot } from './engine';
 
 export const EDUCATION_ACCOUNT_ID = 'mirsad-education';
 export const EDUCATION_STORAGE_KEY = 'education:state:v1';
@@ -35,33 +34,4 @@ export async function readEducationAccount(): Promise<EducationAccount | null> {
   const result = await query<{ value: unknown }>('SELECT value FROM app_settings WHERE key=$1', [EDUCATION_STORAGE_KEY]);
   if (!result.rows.length) return null;
   return accountSchema.parse(result.rows[0].value);
-}
-
-/** Map source records without adopting old holdings or manufacturing fresh prices. */
-export function educationSnapshot(account: EducationAccount): Snapshot | null {
-  const eur = account.balances.find(row => row.currency === 'EUR');
-  if (!eur) return null;
-  const sourceTimes = [Math.floor(Date.parse(account.updatedAt) / 1000)];
-  const positions: Snapshot['positions'] = [];
-  for (const holding of account.balances.filter(row => row.currency !== 'EUR' && new Decimal(row.total).gt(0))) {
-    const symbol = `${holding.currency}-EUR`, existing = account.positions.find(row => row.symbol === symbol);
-    const quote = account.portfolioValuation?.prices[holding.currency];
-    if (!quote || !new Decimal(quote.bid).gt(0)) return null;
-    sourceTimes.push(Math.floor(Date.parse(quote.quoteAt) / 1000));
-    positions.push({ id: existing?.id ?? `holding:${holding.currency}`, symbol, managed: false,
-      price: quote.bid, stop_price: existing?.stopPrice ?? null, target_price: existing?.targetPrice ?? null,
-      available_quantity: holding.available });
-  }
-  // Inconsistent holdings cannot be silently dropped when mapping the account.
-  if (account.positions.some(position => !positions.some(holding => holding.symbol === position.symbol))) return null;
-  const performance = account.performance;
-  const equity = performance?.equity == null ? null : new Decimal(performance.equity);
-  const peak = performance?.equityPeak == null ? null : new Decimal(performance.equityPeak);
-  return {
-    account_id: EDUCATION_ACCOUNT_ID, as_of: Math.min(...sourceTimes), available_eur: eur.available,
-    consecutive_losses: performance?.lossStreak ?? null,
-    drawdown_fraction: equity && peak?.gt(0) ? Decimal.max(0, peak.sub(equity).div(peak)).toFixed() : null,
-    pending_orders: account.orders.filter(order => !['filled', 'rejected', 'cancelled', 'canceled', 'expired'].includes(order.status.toLowerCase())),
-    positions, entry_signal: null,
-  };
 }
