@@ -1,3 +1,5 @@
+> **Current automatic execution engine (2026-09-26):** the supplied Execution Core 0.1 now lives in `src/lib/execution/`. The former education/monitor/research engines have been removed. Execution is disabled until a real provider adapter and signal source are supplied. See [the current integration contract](docs/execution-core.md). Older automation descriptions below are historical.
+
 # مرصاد | Mirsad
 
 **Production storage verified:** Supabase is connected. Cloud login/logout, durable simulation, private API protection and table RLS were verified on 22 September 2026. 69 isolated tests pass. Private brokerage accounts are still not connected.

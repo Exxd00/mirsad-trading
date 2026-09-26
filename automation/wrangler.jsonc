@@ -1,12 +1,11 @@
 {
   "$schema": "https://unpkg.com/wrangler@4.137.0/config-schema.json",
   "name": "mirsad-signal-monitor",
-  "main": "education-scheduler.mjs",
+  "main": "retired-scheduler.mjs",
   "compatibility_date": "2026-09-24",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
-  "secrets": { "required": ["EDUCATION_SCHEDULER_SIGNING_KEY_V1"] },
-  "triggers": { "crons": ["*/5 * * * *"] },
+  "triggers": { "crons": [] },
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "d1_databases": [{ "binding": "DB", "database_name": "mirsad-paper-forward", "database_id": "a397c9cf-ad63-42a5-8756-9ddde726acb3", "migrations_dir": "migrations" }]
 }
