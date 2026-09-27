@@ -9,13 +9,18 @@ async function authorized(request, env) {
 }
 async function dispatch(env, action, payload = {}) {
   if (!env.EXECUTION_SCHEDULER_TOKEN) throw new Error('scheduler_auth_not_configured');
-  const response = await fetch(`https://mirsad-trading.vercel.app/api/execution/${action}`, {
-    method: 'POST', redirect: 'error', signal: AbortSignal.timeout(55000),
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.EXECUTION_SCHEDULER_TOKEN}` }, body: JSON.stringify(payload),
-  });
-  const result = await response.json();
-  if (!response.ok && response.status !== 409) throw new Error(`scheduler_http_${response.status}`);
-  return result;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(new Error('scheduler_timeout')), 55000);
+  try {
+    const response = await fetch(`https://mirsad-trading.vercel.app/api/execution/${action}`, {
+      // workerd supports manual/follow; reject redirects so the credential
+      // never follows a different destination.
+      method: 'POST', redirect: 'manual', signal: controller.signal,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.EXECUTION_SCHEDULER_TOKEN}` }, body: JSON.stringify(payload),
+    });
+    if (!response.ok && response.status !== 409) throw new Error(`scheduler_http_${response.status}`);
+    return await response.json();
+  } finally { clearTimeout(timeout); }
 }
 export default {
   async scheduled(_event, env) {
@@ -46,9 +51,13 @@ export class OrderDeadline {
     const job = await this.ctx.storage.get('job'); if (!job) return;
     try {
       const result = await dispatch(this.env, 'deadline', { key: job.key });
+      console.log(JSON.stringify({ type: 'execution.v1.deadline', status: result.status, reason: result.reason ?? null, retryAt: result.retryAt ?? null }));
       if (result.retryAt) await this.ctx.storage.setAlarm(Math.max(Date.now() + 1000, result.retryAt * 1000));
       else if (result.reason === 'order_api_not_connected') await this.ctx.storage.setAlarm(Date.now() + 60000);
       else await this.ctx.storage.delete('job');
-    } catch { await this.ctx.storage.setAlarm(Date.now() + 5000); }
+    } catch (error) {
+      console.warn(JSON.stringify({ type: 'execution.v1.deadline_retry', error: error instanceof Error ? error.name : 'unknown', reason: error instanceof Error ? error.message.slice(0, 200) : 'deadline_dispatch_failed' }));
+      await this.ctx.storage.setAlarm(Date.now() + 5000);
+    }
   }
 }

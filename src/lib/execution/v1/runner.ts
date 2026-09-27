@@ -63,6 +63,7 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
     await journal.event(lease, { type: 'risk', at: clock(), risk: initialRisk });
     const instruments = await port.instruments();
     const configured = [...new Set(symbols)].filter(s => instruments.some(i => i.symbol === s && i.active));
+    if (!configured.length) result.blocks.push({ reason: 'configured_symbols_missing' });
     const allSymbols = [...new Set([...configured, ...account.positions.filter(p => p.managed).map(p => p.symbol)])];
     for (const symbol of allSymbols) {
       await journal.renew(lease);

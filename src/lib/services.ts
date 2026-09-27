@@ -11,6 +11,7 @@ import { loadCandles } from './execution/v1/feed';
 
 export async function setting<T>(key:string,fallback:T):Promise<T>{const r=await query<{value:T}>('SELECT value FROM app_settings WHERE key=$1',[key]);return r.rows[0]?.value??fallback;}
 export async function setSetting(key:string,value:unknown){await query('INSERT INTO app_settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=NOW()',[key,JSON.stringify(value)]);}
+export const configuredWatchlist=()=>setting<string[]>('watchlist',['BTC-EUR','ETH-EUR','SOL-EUR']);
 export const isPreview=()=>!!process.env.VERCEL_ENV&&process.env.VERCEL_ENV!=='production';
 export async function audit(event:string,detail:Record<string,unknown>={}){await query('INSERT INTO audit_events(event,detail) VALUES($1,$2)',[event,JSON.stringify(detail)]);}
 
@@ -78,7 +79,7 @@ export async function connectRevolut(raw:unknown){
 const emptyAccount=(id:string,name:string,reason:string)=>({id,broker:id,name,status:'disconnected',reason,permissions:{read:false,trade:false},balances:[],positions:[],orders:[],fills:[],updatedAt:null});
 function normalized(order:RevolutOrder):NormalOrder{return {...order,status:({pending_new:'PENDING',new:'OPEN',partially_filled:'PARTIALLY_FILLED',filled:'FILLED',cancelled:'CANCELLED',rejected:'REJECTED',replaced:'REPLACED'} as const)[order.status]};}
 export async function dashboard(mode='live'){
- const watchlist=await setting<string[]>('watchlist',['BTC-EUR','ETH-EUR','SOL-EUR']);
+ const watchlist=await configuredWatchlist();
  if(mode==='simulation'){
   const orders=(await query<{id:string;response:NormalOrder|null;state:string;request:{draft:Draft}}>("SELECT id,response,state,request FROM order_intents WHERE broker='simulation' AND state<>'PREVIEW' ORDER BY created_at DESC LIMIT 100")).rows.map(r=>r.response??{id:r.id,clientOrderId:r.id,symbol:r.request.draft.symbol,side:r.request.draft.side,type:r.request.draft.type,quantity:r.request.draft.quantity,filledQuantity:'0',status:r.state,createdAt:new Date().toISOString()});
   const balances=await simulationBalances();

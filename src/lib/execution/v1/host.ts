@@ -1,8 +1,7 @@
 import 'server-only';
 import { randomUUID } from 'node:crypto';
-import { query } from '../../db';
 import { getPublicInstruments } from '../../brokers/revolut';
-import { credentials, instruments, sourceMarket, sourceExecutionCandles } from '../../services';
+import { credentials, configuredWatchlist, instruments, sourceMarket, sourceExecutionCandles } from '../../services';
 import { CONFIG, VERSION } from './model';
 import { SqlJournal } from './journal';
 import { processCandles } from './strategy';
@@ -19,8 +18,7 @@ export async function connectedVenue(): Promise<CancellationPort | null> {
   return connection ? new ConnectedRevolutVenue({ client: connection.client, instruments, market: sourceMarket, candles: sourceExecutionCandles }) : null;
 }
 export async function configuredSymbols() {
-  const result = await query<{ value: unknown }>('SELECT value FROM app_settings WHERE key=$1', ['watchlist']);
-  const selected = CONFIG.symbols.length ? CONFIG.symbols : result.rows[0]?.value;
+  const selected = CONFIG.symbols.length ? CONFIG.symbols : await configuredWatchlist();
   return Array.isArray(selected) ? [...new Set(selected.filter((s): s is string => typeof s === 'string' && /^[A-Z0-9]{2,16}-EUR$/.test(s)))] : [];
 }
 export async function runHost() {

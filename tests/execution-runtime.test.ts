@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, query } from '../src/lib/db';
 import { SqlJournal, initialState } from '../src/lib/execution/v1/journal';
+import { configuredSymbols } from '../src/lib/execution/v1/host';
+import { configuredWatchlist, setSetting } from '../src/lib/services';
 import { CONFIG, type Intent, type SourceOrder } from '../src/lib/execution/v1/model';
 import { cycle } from '../src/lib/execution/v1/runner';
 import { cancelDeadline, type CancellationPort } from '../src/lib/execution/v1/deadline';
@@ -34,8 +36,15 @@ async function seed(j: SqlJournal, symbols = ['AAA-EUR'], entriesEnabled = true)
 beforeEach(async () => {
   await closeDatabase(); vi.stubEnv('DATABASE_URL', ''); vi.stubEnv('VERCEL', ''); vi.stubEnv('NODE_ENV', 'test'); vi.stubEnv('LOCAL_DATABASE_PATH', 'memory://');
 });
-afterEach(async () => { await closeDatabase(); vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(async () => { vi.useRealTimers(); await closeDatabase(); vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 describe('durable SQL ownership and orchestration', () => {
+  it('uses the dashboard watchlist including its defaults and preserves an explicitly empty selection', async () => {
+    expect(await configuredSymbols()).toEqual(await configuredWatchlist());
+    expect(await configuredSymbols()).toEqual(['BTC-EUR', 'ETH-EUR', 'SOL-EUR']);
+    await setSetting('watchlist', ['SOL-EUR', 'SOL-EUR', 'BTC-USD']);
+    expect(await configuredSymbols()).toEqual(['SOL-EUR']);
+    await setSetting('watchlist', []); expect(await configuredSymbols()).toEqual([]);
+  });
   it('grants one concurrent lock and fences stale owners without releasing another owner', async () => {
     const j = new SqlJournal(); const locks = await Promise.all([j.acquire(CONFIG.accountId), j.acquire(CONFIG.accountId)]); const one = locks.find(Boolean)!;
     expect(locks.filter(Boolean)).toHaveLength(1); await j.release({ ...one, owner: 'wrong' }); expect(await j.acquire(CONFIG.accountId)).toBeNull();
@@ -142,5 +151,22 @@ describe('public candle contract and durable timer', () => {
     await timer.alarm(); expect(data.has('job')).toBe(true); expect(storage.setAlarm).toHaveBeenCalledTimes(3);
     fetcher.mockResolvedValueOnce(Response.json({ status: 'cancelled', retryAt: null })); await timer.alarm(); expect(data.has('job')).toBe(false);
     expect((await worker.fetch(new Request('https://worker.test/schedule', { method: 'POST' }), { EXECUTION_SCHEDULER_TOKEN: 'test' })).status).toBe(401);
+  });
+  it.each([401, 302])('retains a deadline on HTTP %i without following redirects or parsing an error page', async status => {
+    vi.useFakeTimers();
+    const data = new Map<string, unknown>([['job', { key: 'b'.repeat(64), expiresAt: NOW }]]);
+    const storage = { get: vi.fn(async (k: string) => data.get(k)), setAlarm: vi.fn(async () => undefined), delete: vi.fn(async (k: string) => { data.delete(k); }) };
+    const fetcher = vi.fn(async (_input: string | URL | Request, options?: RequestInit) => {
+      if (options?.redirect !== 'manual') throw new TypeError('unsupported_redirect_mode');
+      return new Response('Host rejected request', { status, headers: status === 302 ? { Location: 'https://different.test/' } : {} });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await new OrderDeadline({ storage }, { EXECUTION_SCHEDULER_TOKEN: 'test-secret' }).alarm();
+    expect(data.has('job')).toBe(true); expect(storage.setAlarm).toHaveBeenCalledOnce(); expect(storage.delete).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(JSON.parse(warning.mock.calls[0][0])).toMatchObject({ type: 'execution.v1.deadline_retry', reason: `scheduler_http_${status}` });
+    expect(JSON.stringify(warning.mock.calls)).not.toContain('test-secret');
   });
 });
