@@ -84,6 +84,7 @@ export function ExecutionWorkspace() {
           accounting_balance_changed_during_read: 'تغيّر الرصيد أثناء الفحص؛ أعد الفحص بعد استقرار المعاملات.',
           accounting_transaction_details_incomplete: 'تفاصيل بعض معاملات المصدر لم تكتمل.',
           accounting_transaction_coverage_incomplete: 'قراءة جميع صفحات المعاملات لم تكتمل.',
+          accounting_trade_coverage_incomplete: 'توجد تعبئات تداول لم تُطابق بعد مع سجل حركات الحساب.',
           accounting_read_budget: 'استغرقت قراءة المصدر وقتًا أطول من المهلة؛ أعد الفحص.',
           accounting_backfill_required: 'توجد فجوة في سجل المصدر تحتاج استكمالًا قبل الدخول.',
           accounting_source_unavailable: 'تعذر الوصول إلى بيانات المصدر الآن.',

@@ -90,7 +90,7 @@ export class ConnectedRevolutVenue implements CancellationPort {
         try { await this.lookup(write.decisionKey, lease); } catch { /* retain uncertainty; other symbols can still be protected */ }
       }
       for (const decision of await this.source.journal.accountDecisions(this.accountId)) {
-        if (decision.source && (!terminal(decision.source) || (decimal(decision.source.filledQuantity).gt(0) && decision.source.feeEur === null))) {
+        if (decision.source && (!terminal(decision.source) || (options.transactions && decimal(decision.source.filledQuantity).gt(0) && decision.source.feeEur === null))) {
           try { await this.lookup(decision.key, lease); } catch { /* preserved; submitting against uncertainty is blocked */ }
         }
       }
@@ -178,6 +178,14 @@ export class ConnectedRevolutVenue implements CancellationPort {
     if (options.protectionOnly || !this.source.client.getOrderBook || !this.source.journal) return account;
     const evidence = await this.source.journal.accounting(this.accountId);
     const blockers: string[] = [];
+    // A balances snapshot cannot establish today's opening holdings when a
+    // source trade from that period is absent from the transaction evidence.
+    // Status updates can be later than fills, so uncertainty blocks entry.
+    const historyStart = evidence?.observations[0]?.at;
+    if (historyStart !== undefined && rawOrders.some(o => decimal(o.filledQuantity).gt(0)
+      && seconds(o.updatedAt) >= historyStart && !evidence!.transactions.some(t => t.orderId === o.id && t.status === 'completed'))) {
+      blockers.push('accounting_trade_coverage_incomplete');
+    }
     try {
       const amounts = sourceAmounts(balances);
       const quotes = await this.quotes(positions.map(p => p.symbol));

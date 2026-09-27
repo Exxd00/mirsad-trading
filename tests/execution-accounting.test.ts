@@ -146,6 +146,17 @@ describe('durable read-only accounting collector', () => {
     const blocked = (await j.accounting(CONFIG.accountId))!;
     expect(blocked.lastError).toBe('accounting_cursor_repeated'); expect(blocked.anchor).toEqual(saved.anchor); expect(blocked.observations).toEqual(saved.observations);
   });
+  it('does not certify opening holdings when a recent filled source order is missing from movement coverage', async () => {
+    const j = new SqlJournal(), c = client(); await refreshSourceAccounting(c, j, () => NOW);
+    const venue = new ConnectedRevolutVenue({ journal: j, client: { ...c, getOrders: async () => [{ id: 'manual-source-trade',
+      accountId: 'revolut-x', clientOrderId: 'manual', symbol: 'AAA-EUR', side: 'sell', type: 'market', status: 'filled',
+      quantity: '1', filledQuantity: '1', averageFillPrice: '100', fee: '0', feeCurrency: 'EUR',
+      createdAt: new Date((NOW - 60) * 1000).toISOString(), updatedAt: new Date(NOW * 1000).toISOString() }] },
+      instruments: async () => [], candles: async () => [], market: vi.fn() }, () => NOW);
+    const snapshot = await venue.account();
+    expect(snapshot.dataBlockers).toContain('accounting_trade_coverage_incomplete');
+    expect(evaluateRisk(initialState().risk, snapshot.trades, snapshot.equityHistory, snapshot.tradeHistoryComplete, NOW).entryBlocked).toBe('valuation_or_transfers_missing');
+  });
   it('preflights a newly allocated buy without classifying that unsent intent as missing trade history, then submits only once', async () => {
     vi.stubEnv('EXECUTION_DEADLINE_URL', 'https://unit-test.invalid/schedule'); vi.stubEnv('EXECUTION_SCHEDULER_TOKEN', 'unit-test-only');
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ scheduled: true, mode: 'mirsad', intervalSeconds: 10 })));
