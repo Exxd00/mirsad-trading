@@ -142,6 +142,11 @@ function parse<T>(schema: z.ZodType<T>, value: unknown, context?: 'transaction_p
         ? (node as Record<PropertyKey, unknown>)[key] : undefined, value);
       let kind: string = received === null ? 'null' : Array.isArray(received) ? 'array' : typeof received;
       if (typeof received === 'string' && /^-?\d+(?:\.\d+)?[eE][+-]?\d+$/.test(received)) kind = 'exponential_decimal';
+      if (typeof received === 'string' && issue.path.at(-1) === 'id') {
+        kind = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(received)
+          ? `guid_version_${received[14]}_variant_${received[19]}`
+          : `identifier_length_${received.length}_hyphens_${(received.match(/-/g) ?? []).length}`;
+      }
       const field = issue.path.map(part => typeof part === 'number' ? 'item' : String(part)).join('.');
       return `${field}:${issue.code}:${kind}`;
     }).join(';')}` : undefined;
