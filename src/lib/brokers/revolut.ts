@@ -24,6 +24,17 @@ const orderSchema = z.object({
 });
 const pageSchema = z.object({ data: z.array(orderSchema), metadata: z.object({ next_cursor: z.string().nullish() }) });
 const balanceSchema = z.object({ currency: z.string(), available: DECIMAL, reserved: DECIMAL, total: DECIMAL, staked: DECIMAL.optional() });
+const transactionLegSchema = z.object({
+  amount: DECIMAL, currency: z.string(),
+  account: z.object({ type: z.string() }).optional(),
+  fee: DECIMAL.optional(), fee_currency: z.string().optional(),
+});
+const transactionSchema = z.object({
+  id: UUID, status: z.enum(['pending', 'completed', 'cancelled', 'failed', 'reverted']),
+  type: z.enum(['buy', 'sell', 'receive', 'send', 'stake', 'un_stake', 'reward']),
+  source: transactionLegSchema.optional(), destination: transactionLegSchema.optional(),
+  created_date: z.number().int(), processed_date: z.number().int().optional(), order_id: UUID.optional(),
+});
 
 export interface RevolutOrder {
   id: string; clientOrderId: string; accountId: 'revolut-x'; symbol: string;
@@ -47,6 +58,24 @@ export interface RevolutFill {
 export interface RevolutSubmitOrder {
   clientOrderId: string; symbol: string; side: 'buy' | 'sell';
   type: 'market' | 'limit'; quantity: string; limitPrice?: string;
+}
+export interface RevolutCancellation {
+  order: RevolutOrder;
+  cancellationAcknowledged: boolean;
+  // The original order can fill while cancellation is in flight. Inspect the
+  // returned status and filled quantity; an acknowledgment alone is not final.
+  settled: boolean;
+}
+export interface RevolutTransactionLeg {
+  netAmount: string; currency: string; accountType: string | null;
+  fee: string | null; feeCurrency: string | null;
+}
+export interface RevolutTransaction {
+  id: string; accountId: 'revolut-x';
+  status: z.infer<typeof transactionSchema>['status'];
+  type: z.infer<typeof transactionSchema>['type'];
+  source: RevolutTransactionLeg | null; destination: RevolutTransactionLeg | null;
+  createdAt: string; processedAt: string | null; orderId: string | null;
 }
 export interface RevolutInstrument {
   symbol: string; base: string; quote: string; baseStep: string; quoteStep: string;
@@ -84,6 +113,17 @@ export class BrokerUnknownOutcomeError extends BrokerApiError {
     this.venueOrderId = venueOrderId; this.acknowledged = acknowledged;
   }
 }
+export class BrokerCancellationUnknownOutcomeError extends BrokerApiError {
+  constructor(readonly venueOrderId: string, readonly acknowledged = false) {
+    super('The cancellation outcome needs reconciliation. Preserve the order and its fills.', { code: 'UNKNOWN' });
+    this.name = 'BrokerCancellationUnknownOutcomeError';
+  }
+}
+type MutationIdentity = { clientOrderId: string } | { venueOrderId: string };
+const unknownMutation = (identity: MutationIdentity) => 'venueOrderId' in identity
+  ? new BrokerCancellationUnknownOutcomeError(identity.venueOrderId)
+  : new BrokerUnknownOutcomeError(identity.clientOrderId);
+const settledOrder = (order: RevolutOrder) => ['filled', 'cancelled', 'rejected'].includes(order.status);
 
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
@@ -107,13 +147,22 @@ function normalizeOrder(raw: z.infer<typeof orderSchema>): RevolutOrder {
     previousOrderId: raw.previous_order_id, rejectReason: raw.reject_reason,
   };
 }
+function normalizeTransaction(raw: z.infer<typeof transactionSchema>): RevolutTransaction {
+  const leg = (value: z.infer<typeof transactionLegSchema> | undefined): RevolutTransactionLeg | null => value ? {
+    netAmount: value.amount, currency: value.currency, accountType: value.account?.type ?? null,
+    fee: value.fee ?? null, feeCurrency: value.fee_currency ?? null,
+  } : null;
+  return { id: raw.id, accountId: 'revolut-x', status: raw.status, type: raw.type,
+    source: leg(raw.source), destination: leg(raw.destination), createdAt: iso(raw.created_date),
+    processedAt: raw.processed_date === undefined ? null : iso(raw.processed_date), orderId: raw.order_id ?? null };
+}
 
 // Retry only GETs for transport/temporary server failures. 429 is explicit and
 // carries Revolut's Retry-After in MILLISECONDS; callers control scheduling.
 async function requestJson(
   fetchImpl: typeof fetch, path: string, query: URLSearchParams,
-  method: 'GET' | 'POST', body: string,
-  makeHeaders: () => Record<string, string>, clientOrderId?: string, getAttempts = 3,
+  method: 'GET' | 'POST' | 'DELETE', body: string,
+  makeHeaders: () => Record<string, string>, identity?: MutationIdentity, getAttempts = 3,
 ): Promise<unknown> {
   const suffix = query.toString();
   const url = `${ORIGIN}${path}${suffix ? `?${suffix}` : ''}`;
@@ -132,22 +181,27 @@ async function requestJson(
           const delay = raw !== null && /^\d+(?:\.\d+)?$/.test(raw) ? Number(raw) : undefined;
           throw new BrokerApiError('Broker rate limit reached.', { code: 'RATE_LIMIT', status: 429, retryAfterMs: delay });
         }
-        if (method === 'POST' && (response.status >= 500 || [408, 409].includes(response.status))) {
-          throw new BrokerUnknownOutcomeError(clientOrderId!);
+        if (method !== 'GET' && (response.status >= 500 || [408, 409].includes(response.status)
+          || (method === 'DELETE' && response.status === 404))) {
+          throw unknownMutation(identity!);
         }
         if (method === 'GET' && [408, 500, 502, 503, 504].includes(response.status) && attempt < getAttempts - 1) {
           await pause(200 * 2 ** attempt); continue;
         }
         throw new BrokerApiError(`Broker request returned HTTP ${response.status}.`, { status: response.status });
       }
+      if (method === 'DELETE') {
+        if (response.status !== 204) throw unknownMutation(identity!);
+        return undefined;
+      }
       try { return await response.json(); }
       catch {
-        if (method === 'POST') throw new BrokerUnknownOutcomeError(clientOrderId!);
+        if (method === 'POST') throw unknownMutation(identity!);
         throw new BrokerApiError('Broker returned invalid JSON.', { code: 'INVALID_RESPONSE' });
       }
     } catch (error) {
       if (error instanceof BrokerApiError) throw error;
-      if (method === 'POST') throw new BrokerUnknownOutcomeError(clientOrderId!);
+      if (method !== 'GET') throw unknownMutation(identity!);
       if (attempt === getAttempts - 1) throw new BrokerApiError('Broker request timed out or could not connect.', { code: 'CONNECTION_ERROR' });
       await pause(200 * 2 ** attempt);
     } finally { clearTimeout(timeout); }
@@ -168,8 +222,8 @@ export class RevolutXClient {
       if (this.#privateKey.asymmetricKeyType !== 'ed25519') throw new Error('wrong key type');
     } catch { throw new BrokerApiError('An Ed25519 PEM private key is required.', { code: 'CONFIGURATION' }); }
   }
-  #request(path: string, query = new URLSearchParams(), body?: object, clientOrderId?: string): Promise<unknown> {
-    const method = body ? 'POST' : 'GET';
+  #request(path: string, query = new URLSearchParams(), body?: object, identity?: MutationIdentity): Promise<unknown> {
+    const method = identity && 'venueOrderId' in identity ? 'DELETE' : body ? 'POST' : 'GET';
     const bytes = body ? JSON.stringify(body) : '';
     return requestJson(this.#fetch, path, query, method, bytes, () => {
       const timestamp = Date.now().toString();
@@ -177,7 +231,7 @@ export class RevolutXClient {
       const signature = sign(null, Buffer.from(message, 'utf8'), this.#privateKey).toString('base64');
       return { 'Content-Type': 'application/json', 'X-Revx-API-Key': this.#apiKey,
         'X-Revx-Timestamp': timestamp, 'X-Revx-Signature': signature };
-    }, clientOrderId);
+    }, identity);
   }
   async getBalances(): Promise<RevolutBalance[]> {
     const raw = parse(z.array(balanceSchema), await this.#request('/api/1.0/balances'));
@@ -213,7 +267,49 @@ export class RevolutXClient {
   async getOrder(id: string): Promise<RevolutOrder> {
     UUID.parse(id);
     const result = parse(z.object({ data: orderSchema }), await this.#request(`/api/1.0/orders/${id}`));
+    if (result.data.id !== id) throw new BrokerApiError('Broker returned a different order.', { code: 'INVALID_RESPONSE' });
     return normalizeOrder(result.data);
+  }
+  async cancelOrder(id: string): Promise<RevolutCancellation> {
+    UUID.parse(id);
+    // The caller must establish ownership and coordinate protection before
+    // invoking this method. This adapter never cancels all account orders.
+    const before = await this.getOrder(id);
+    if (settledOrder(before)) return { order: before, cancellationAcknowledged: false, settled: true };
+    if (before.status === 'replaced') throw new BrokerCancellationUnknownOutcomeError(id);
+    await this.#request(`/api/1.0/orders/${id}`, new URLSearchParams(), undefined, { venueOrderId: id });
+    try {
+      const order = await this.getOrder(id);
+      return { order, cancellationAcknowledged: true, settled: settledOrder(order) };
+    } catch { throw new BrokerCancellationUnknownOutcomeError(id, true); }
+  }
+  async getTransactionsPage(input: { startDate: number; endDate: number; cursor?: string; limit?: number }): Promise<{
+    transactions: RevolutTransaction[]; nextCursor: string | null; sourceAt: string;
+  }> {
+    // One explicit page and a bounded time window let the host pace and persist
+    // its own archive. Reaching the last page does not create historical equity.
+    const range = z.object({ startDate: z.number().int().nonnegative().safe(), endDate: z.number().int().nonnegative().safe(),
+      cursor: z.string().min(1).optional(), limit: z.number().int().min(1).max(1900).default(1000),
+    }).strict().parse(input);
+    if (range.endDate <= range.startDate || range.endDate - range.startDate > 86_400_000) {
+      throw new BrokerApiError('Transaction windows must be positive and at most one day.', { code: 'VALIDATION' });
+    }
+    const query = new URLSearchParams({ start_date: String(range.startDate), end_date: String(range.endDate), limit: String(range.limit) });
+    if (range.cursor) query.set('cursor', range.cursor);
+    const result = parse(z.object({ data: z.array(transactionSchema), metadata: z.object({
+      timestamp: z.number().int(), next_cursor: z.string().nullish(),
+    }) }), await this.#request('/api/1.0/transactions', query));
+    if (range.cursor && result.metadata.next_cursor === range.cursor) {
+      throw new BrokerApiError('Broker repeated a pagination cursor.', { code: 'INCOMPLETE_HISTORY' });
+    }
+    return { transactions: result.data.map(normalizeTransaction), nextCursor: result.metadata.next_cursor || null,
+      sourceAt: iso(result.metadata.timestamp) };
+  }
+  async getTransaction(id: string): Promise<RevolutTransaction> {
+    UUID.parse(id);
+    const result = parse(transactionSchema, await this.#request(`/api/1.0/transactions/${id}`));
+    if (result.id !== id) throw new BrokerApiError('Broker returned a different transaction.', { code: 'INVALID_RESPONSE' });
+    return normalizeTransaction(result);
   }
   async findOrderByClientId(clientId: string): Promise<RevolutOrder | null> {
     UUID.parse(clientId);
@@ -251,7 +347,7 @@ export class RevolutXClient {
     return [...unique.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
   async submitOrder(input: RevolutSubmitOrder): Promise<RevolutOrder> {
-    // Caller must persist/review the exact order and one-time user confirmation.
+    // Caller must persist the exact authorized intent and enforce its execution guards.
     // quantity is BASE units, never an inferred quote-currency budget.
     const payload = z.object({ clientOrderId: UUID, symbol: SYMBOL, side: sideSchema,
       type: z.enum(['market', 'limit']), quantity: POSITIVE, limitPrice: POSITIVE.optional(),
@@ -265,12 +361,20 @@ export class RevolutXClient {
     const result = await this.#request('/api/1.0/orders', new URLSearchParams(), {
       client_order_id: payload.clientOrderId, symbol: payload.symbol, side: payload.side,
       order_configuration: configuration,
-    }, payload.clientOrderId);
+    }, { clientOrderId: payload.clientOrderId });
     const ack = z.object({ data: z.object({ venue_order_id: UUID, client_order_id: UUID, state: statusSchema }) }).safeParse(result);
     if (!ack.success || ack.data.data.client_order_id !== payload.clientOrderId) {
       throw new BrokerUnknownOutcomeError(payload.clientOrderId);
     }
-    try { return await this.getOrder(ack.data.data.venue_order_id); }
+    try {
+      const order = await this.getOrder(ack.data.data.venue_order_id);
+      if (order.clientOrderId !== payload.clientOrderId || order.symbol !== payload.symbol || order.side !== payload.side
+        || order.type !== payload.type || order.quantity === null || !new Decimal(order.quantity).eq(payload.quantity)
+        || (payload.type === 'limit' && (order.price === undefined || !new Decimal(order.price).eq(payload.limitPrice!)))) {
+        throw new BrokerApiError('Broker order does not match the submitted intent.', { code: 'INVALID_RESPONSE' });
+      }
+      return order;
+    }
     catch { throw new BrokerUnknownOutcomeError(payload.clientOrderId, ack.data.data.venue_order_id, true); }
   }
 }

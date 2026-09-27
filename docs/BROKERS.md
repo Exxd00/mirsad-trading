@@ -1,6 +1,6 @@
 # Broker integration contracts
 
-Verified against official documentation on 22 September 2026, Europe/Berlin. This document describes API contracts and application safeguards; it is not evidence of account access, broker approval, a fill, or a profitable strategy. A local Ed25519 key pair has been prepared, but no broker API credential has been issued or registered. No order was placed, modified, cancelled, or confirmed during this work.
+Initially verified against official documentation on 22 September 2026, Europe/Berlin; the Revolut cancellation and transaction contracts were rechecked on 27 September. This document describes API contracts and application safeguards; it is not evidence of a fill or a profitable strategy. The existing Mirsad connection is now confirmed, including enabled View and Trade permissions in the owner's Revolut X session. Current execution readiness and deployment evidence are recorded in [execution-core.md](execution-core.md). No order was placed, modified, or cancelled during this integration work.
 
 ## Capability boundaries
 
@@ -79,6 +79,7 @@ The user later supplies their private PEM securely; only its public key belongs 
 | `GET /api/1.0/orders/fills/{venueOrderId}` | `{data:[clientTrade]}` |
 | `GET /api/1.0/trades/private/{symbol}` | Paginated executions for one pair; time/cursor filters |
 | `GET /api/1.0/transactions` | Paginated account transactions; preserve their statuses and currencies |
+| `GET /api/1.0/transactions/{transactionId}` | Bare transaction object with optional order ID and leg fees; not a `{data:...}` wrapper |
 
 Public data is explicitly regional: always request EEA for this integration. Configuration/tickers without a region can include more than one region. Public candle intervals, in minutes: `1,5,15,30,60,240,1440,2880,5760,10080,20160,40320`. `since`/`until` are milliseconds; without `since`, at most 1000 public candles preceding `until` are returned. A zero-volume candle can use midprices. Compute period completion from the interval ending before both server snapshot time and observation time; a quoted price is not itself a completed candle. Source: [public endpoint schemas](https://developer.revolut.com/docs/api/revolut-x-crypto-exchange.yml).
 
@@ -107,13 +108,15 @@ Validate current pair `status`, `base_step`, `quote_step`, `min_order_size` (bas
 }
 ```
 
-For market orders the configuration is, for example, `{"market":{"base_size":"0.0001"}}`. Create-limit `time_in_force` supports `gtc` or `ioc`; optional `execution_instructions` can include `post_only`. Do not infer that all read-order TIFs or TP/SL/TWAP types are creatable. The adapter exposes only market and GTC limit using **base quantity**. It does not implement post-only, quote-sized submission, replacement, cancellation, TP/SL creation, or autonomous exits.
+For market orders the configuration is, for example, `{"market":{"base_size":"0.0001"}}`. Create-limit `time_in_force` supports `gtc` or `ioc`; optional `execution_instructions` can include `post_only`. Do not infer that all read-order TIFs or TP/SL/TWAP types are creatable. The adapter exposes only market and GTC limit using **base quantity**. It also implements individual cancellation with a fresh result read, but does not implement post-only, quote-sized submission, replacement, TP/SL creation, or autonomous exits.
 
 **Lifetime wording audit:** `MarketOrderConfiguration` has only `base_size`/`quote_size`; it neither accepts `time_in_force` nor establishes an IOC default in the reviewed schema. Market summaries therefore say **broker default** instead of asserting IOC. Limit summaries remain GTC because the adapter explicitly sends `time_in_force:"gtc"`. The German rules explain immediate matching and possible execution across several book levels, but that does not establish a specific market-order TIF. Sources: [current configuration schema](https://developer.revolut.com/docs/api/revolut-x-crypto-exchange.yml), [German order rules, sections 9–12](https://www.revolut.com/en-DE/legal/crypto-exchange-trading-rules/).
 
 The successful submission body is `{data:{venue_order_id,client_order_id,state}}`; an acknowledgment is not an execution. Order states are `pending_new`, `new`, `partially_filled`, `filled`, `cancelled`, `rejected`, `replaced`. Read details report `filled_quantity`, `filled_amount`, `average_fill_price`, and optional `total_fee`/`fee_currency`. Quantity can be absent for some buy-TWAP orders. Partial fills remain real after cancellation. Source: [create and order schemas](https://developer.revolut.com/docs/api/revolut-x-crypto-exchange.yml).
 
-Other documented mutations, deliberately absent from this adapter: `PUT /api/1.0/orders/{venueOrderId}` replaces an order and changes the venue ID; `DELETE /api/1.0/orders/{venueOrderId}` cancels one; `DELETE /api/1.0/orders` cancels all. These are consequential actions and are not connection tests.
+`DELETE /api/1.0/orders/{venueOrderId}` cancels one order and returns HTTP 204 without JSON. `cancelOrder(id)` first reads that exact ID, skips mutation if it is already filled/cancelled/rejected, then sends one signed DELETE and re-reads the same order. It returns `cancellationAcknowledged` separately from `settled`; an open or partial result remains unresolved. Fills received during the cancellation race are retained. A replaced order is unresolved and is never followed into another cancellation. Uncertain DELETE outcomes retain the venue ID and are never silently retried. The engine must still establish ownership, fencing, and protection coordination before calling this low-level method. It is not wired into the v1 automatic deadline while those capabilities are incomplete.
+
+Other documented mutations remain absent: `PUT /api/1.0/orders/{venueOrderId}` replaces an order and changes the venue ID; `DELETE /api/1.0/orders` cancels all. These are consequential actions and are not connection tests.
 
 ### Reconciliation and pacing
 
@@ -137,6 +140,9 @@ client.getFillsForOrders(orders: RevolutOrder[], maxOrders = 20): Promise<{fills
 client.getOrder(id: string): Promise<RevolutOrder>
 client.findOrderByClientId(clientId: string): Promise<RevolutOrder | null>
 client.submitOrder({clientOrderId, symbol, side, type, quantity, limitPrice?}): Promise<RevolutOrder>
+client.cancelOrder(id: string): Promise<RevolutCancellation>
+client.getTransactionsPage({startDate, endDate, cursor?, limit?}): Promise<{transactions: RevolutTransaction[]; nextCursor: string | null; sourceAt: string}>
+client.getTransaction(id: string): Promise<RevolutTransaction>
 getPublicInstruments(fetchImpl?): Promise<RevolutInstrument[]>
 getPublicMarket(symbol, interval = 15, fetchImpl?): Promise<RevolutMarket>
 ```
@@ -145,7 +151,9 @@ Decimal values stay strings. `RevolutOrder.quantity` is nullable; ISO `createdAt
 
 The dashboard should call `getFillsForOrders` with its already-fetched orders. This avoids repeating order scans and reads only the latest 20 filled orders by `updatedAt` by default. `truncated=true` explicitly means partial coverage. Do not calculate lifetime average cost or realized P&L from that partial set. A request bound does not guarantee a latency bound if the broker is slow; show unavailable/pending history rather than fabricated fills.
 
-Each request attempt has a 10-second timeout. Private GETs retry temporary transport/server failures at most twice; public GETs do not retry rapidly. HTTP 429 is explicit `BrokerApiError` with `code='RATE_LIMIT'` and optional `retryAfterMs`. POST never retries. `BrokerUnknownOutcomeError` has `code='UNKNOWN'`, `clientOrderId`, optional `venueOrderId`, and `acknowledged`. If POST was acknowledged but details cannot be fetched, it preserves the venue ID and `acknowledged=true` without fabricating a filled quantity. It does not enforce app authentication, available funds, instrument limits, or user confirmation: those belong to the calling engine.
+Each request attempt has a 10-second timeout. Private GETs retry temporary transport/server failures at most twice; public GETs do not retry rapidly. HTTP 429 is explicit `BrokerApiError` with `code='RATE_LIMIT'` and optional `retryAfterMs`. POST and DELETE never retry. `BrokerUnknownOutcomeError` has `code='UNKNOWN'`, `clientOrderId`, optional `venueOrderId`, and `acknowledged`. If POST was acknowledged but details cannot be fetched or do not match the submitted ID, client ID, symbol, side, type, quantity, or limit price, it preserves the venue ID and `acknowledged=true` without fabricating a filled quantity. `BrokerCancellationUnknownOutcomeError` similarly retains `venueOrderId` and whether HTTP 204 was acknowledged. It does not enforce app authentication, available funds, instrument limits, or user confirmation: those belong to the calling engine.
+
+Transaction reads preserve net amounts as decimal strings, source/destination account types, status, and the actual processing timestamp. Missing legs, processing times, fees, and fee currencies stay `null`. Fees from transaction details are not subtracted from net legs again and are not converted to EUR without valuation evidence. Names, wallet addresses, descriptions, and other counterparty details are excluded. A page requires explicit millisecond bounds spanning at most 24 hours, returns its cursor without following it automatically, and rejects an immediately repeated cursor. The host must retain visited cursors, pace requests, handle day boundaries and overlap, and persist archive coverage. These methods do not establish a transfer-neutral equity history by themselves and are not yet scheduled to read a live account archive.
 
 ## IBKR: architecture and authentication
 

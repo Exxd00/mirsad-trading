@@ -1,7 +1,7 @@
 import { generateKeyPairSync, verify } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  BrokerApiError, BrokerUnknownOutcomeError, RevolutXClient,
+  BrokerApiError, BrokerUnknownOutcomeError, BrokerCancellationUnknownOutcomeError, RevolutXClient,
   getPublicInstruments, getPublicMarket, type RevolutOrder,
 } from '../src/lib/brokers/revolut';
 
@@ -93,6 +93,159 @@ describe('Revolut X adapter with isolated mocked transport', () => {
       code: 'UNKNOWN', acknowledged: true, clientOrderId: clientId, venueOrderId: orderId,
     });
     expect(transport.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
+
+  it.each(['id', 'client_order_id', 'symbol', 'side', 'quantity', 'price', 'type'])('does not reconcile a mismatched submitted order: %s', async (field) => {
+    const replacements: Record<string, unknown> = { id: clientId, client_order_id: orderId, symbol: 'ETH-EUR',
+      side: 'sell', quantity: '0.0002', price: '75001', type: 'market' };
+    const transport = vi.fn<typeof fetch>(async (_url, init) => init?.method === 'POST'
+      ? Response.json({ data: { venue_order_id: orderId, client_order_id: clientId, state: 'new' } })
+      : Response.json({ data: { ...baseOrder, [field]: replacements[field] } }));
+    await expect(makeClient(transport).submitOrder(input)).rejects.toMatchObject({ code: 'UNKNOWN',
+      acknowledged: true, venueOrderId: orderId, clientOrderId: clientId });
+    expect(transport.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
+
+  it('cancels only the named order, signs DELETE with an empty body, and retains confirmed partial fills', async () => {
+    let reads = 0;
+    const transport = vi.fn<typeof fetch>(async (url, init) => {
+      assertSigned(url, init);
+      expect(String(url)).toBe(`https://revx.revolut.com/api/1.0/orders/${orderId}`);
+      expect(init?.body).toBeUndefined();
+      if (init?.method === 'DELETE') return new Response(null, { status: 204 });
+      return Response.json({ data: { ...baseOrder, status: ++reads === 1 ? 'partially_filled' : 'cancelled' } });
+    });
+    const result = await makeClient(transport).cancelOrder(orderId);
+    expect(result).toMatchObject({ cancellationAcknowledged: true, settled: true,
+      order: { id: orderId, status: 'cancelled', filledQuantity: '0.00005', quantity: '0.0001' } });
+    expect(transport.mock.calls.map(([, init]) => init?.method)).toEqual(['GET', 'DELETE', 'GET']);
+  });
+
+  it.each(['new', 'partially_filled', 'filled'])('uses the source result after a cancellation race: %s', async (status) => {
+    let reads = 0;
+    const transport = vi.fn<typeof fetch>(async (_url, init) => init?.method === 'DELETE'
+      ? new Response(null, { status: 204 })
+      : Response.json({ data: ++reads === 1 ? baseOrder : { ...baseOrder, status,
+        filled_quantity: status === 'filled' ? '0.0001' : '0.00005' } }));
+    const result = await makeClient(transport).cancelOrder(orderId);
+    expect(result.cancellationAcknowledged).toBe(true);
+    expect(result.settled).toBe(status === 'filled');
+    expect(result.order.status).toBe(status);
+    expect(result.order.filledQuantity).toBe(status === 'filled' ? '0.0001' : '0.00005');
+  });
+
+  it.each(['filled', 'cancelled', 'rejected'])('does not send DELETE for an already settled order: %s', async (status) => {
+    const transport = vi.fn<typeof fetch>(async () => Response.json({ data: { ...baseOrder, status } }));
+    expect(await makeClient(transport).cancelOrder(orderId)).toMatchObject({ settled: true, cancellationAcknowledged: false });
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport.mock.calls[0][1]?.method).toBe('GET');
+  });
+
+  it.each(['transport', '404', '408', '409', '503', 'unexpected-200'])('preserves an uncertain cancellation without retrying DELETE: %s', async (mode) => {
+    const transport = vi.fn<typeof fetch>(async (_url, init) => {
+      if (init?.method === 'GET') return Response.json({ data: baseOrder });
+      if (mode === 'transport') throw new TypeError('network failed');
+      return new Response(null, { status: mode === 'unexpected-200' ? 200 : Number(mode) });
+    });
+    await expect(makeClient(transport).cancelOrder(orderId)).rejects.toMatchObject({
+      name: 'BrokerCancellationUnknownOutcomeError', code: 'UNKNOWN', venueOrderId: orderId, acknowledged: false,
+    });
+    expect(transport.mock.calls.map(([, init]) => init?.method)).toEqual(['GET', 'DELETE']);
+  });
+
+  it('retains the cancellation acknowledgment when its follow-up read fails', async () => {
+    let reads = 0;
+    const transport = vi.fn<typeof fetch>(async (_url, init) => init?.method === 'DELETE'
+      ? new Response(null, { status: 204 })
+      : ++reads === 1 ? Response.json({ data: baseOrder }) : new Response('private broker body', { status: 403 }));
+    await expect(makeClient(transport).cancelOrder(orderId)).rejects.toMatchObject({ code: 'UNKNOWN',
+      venueOrderId: orderId, acknowledged: true });
+    expect(transport.mock.calls.map(([, init]) => init?.method)).toEqual(['GET', 'DELETE', 'GET']);
+  });
+
+  it('leaves a replaced order unresolved and never follows its replacement into cancellation', async () => {
+    const transport = vi.fn<typeof fetch>(async () => Response.json({ data: { ...baseOrder, status: 'replaced' } }));
+    await expect(makeClient(transport).cancelOrder(orderId)).rejects.toBeInstanceOf(BrokerCancellationUnknownOutcomeError);
+    expect(transport.mock.calls.map(([, init]) => init?.method)).toEqual(['GET']);
+  });
+
+  it('returns explicit cancellation rate limits without retries or exposing broker bodies', async () => {
+    const transport = vi.fn<typeof fetch>(async (_url, init) => init?.method === 'GET'
+      ? Response.json({ data: baseOrder })
+      : new Response('private broker body', { status: 429, headers: { 'Retry-After': '1250' } }));
+    await expect(makeClient(transport).cancelOrder(orderId)).rejects.toMatchObject({
+      code: 'RATE_LIMIT', status: 429, retryAfterMs: 1250, message: 'Broker rate limit reached.',
+    });
+    expect(transport.mock.calls.map(([, init]) => init?.method)).toEqual(['GET', 'DELETE']);
+  });
+
+  it('reads one signed transaction page with precise net legs, missing fields, and an explicit next cursor', async () => {
+    const at = 1_790_000_000_000;
+    const transport = vi.fn<typeof fetch>(async (url, init) => {
+      assertSigned(url, init);
+      expect(init?.method).toBe('GET');
+      expect(String(url)).toBe(`https://revx.revolut.com/api/1.0/transactions?start_date=${at}&end_date=${at + 1000}&limit=10&cursor=a%2B%2F%3D`);
+      return Response.json({ data: [{ id: clientId, type: 'receive', status: 'pending', created_date: at,
+        source: { amount: '17.320000', currency: 'EUR', account: { type: 'revolut' } },
+        destination: { amount: '17.320000', currency: 'EUR', account: { type: 'revolut_x' } },
+      }], metadata: { timestamp: at + 1000, next_cursor: 'next-page' } });
+    });
+    const result = await makeClient(transport).getTransactionsPage({ startDate: at, endDate: at + 1000, cursor: 'a+/=', limit: 10 });
+    expect(result).toMatchObject({ nextCursor: 'next-page', sourceAt: new Date(at + 1000).toISOString(), transactions: [{
+      accountId: 'revolut-x', status: 'pending', type: 'receive', processedAt: null, orderId: null,
+      source: { netAmount: '17.320000', accountType: 'revolut', fee: null, feeCurrency: null },
+      destination: { netAmount: '17.320000', accountType: 'revolut_x', fee: null },
+    }] });
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps transaction fees in their source currency without subtracting them from net legs again', async () => {
+    const at = 1_790_000_000_000;
+    const transport = vi.fn<typeof fetch>(async (url, init) => {
+      assertSigned(url, init);
+      expect(String(url)).toBe(`https://revx.revolut.com/api/1.0/transactions/${clientId}`);
+      return Response.json({ id: clientId, type: 'buy', status: 'completed', created_date: at, processed_date: at + 20,
+        order_id: orderId, source: { amount: '10.0000', currency: 'EUR', account: { type: 'revolut_x', display_name: 'private name' } },
+        destination: { amount: '0.00009991', currency: 'BTC', fee: '0.00000009', fee_currency: 'BTC' },
+      });
+    });
+    const result = await makeClient(transport).getTransaction(clientId);
+    expect(result).toMatchObject({ orderId, processedAt: new Date(at + 20).toISOString(),
+      source: { netAmount: '10.0000', fee: null },
+      destination: { netAmount: '0.00009991', fee: '0.00000009', feeCurrency: 'BTC', accountType: null } });
+    expect(JSON.stringify(result)).not.toContain('private name');
+  });
+
+  it('does not invent a source leg or processed time for a reward', async () => {
+    const at = 1_790_000_000_000;
+    const transport = vi.fn<typeof fetch>(async () => Response.json({ data: [{ id: clientId, type: 'reward', status: 'completed',
+      created_date: at, destination: { amount: '0.005', currency: 'ETH' } }], metadata: { timestamp: at, next_cursor: '' } }));
+    expect(await makeClient(transport).getTransactionsPage({ startDate: at - 1000, endDate: at })).toMatchObject({ nextCursor: null,
+      transactions: [{ source: null, processedAt: null, destination: { netAmount: '0.005', accountType: null, fee: null } }] });
+  });
+
+  it('rejects a repeated transaction cursor and incomplete transaction fields', async () => {
+    const range = { startDate: 1_790_000_000_000, endDate: 1_790_000_001_000, cursor: 'same' };
+    const transport = vi.fn<typeof fetch>(async () => Response.json({ data: [], metadata: { timestamp: range.endDate, next_cursor: 'same' } }));
+    await expect(makeClient(transport).getTransactionsPage(range)).rejects.toMatchObject({ code: 'INCOMPLETE_HISTORY' });
+    transport.mockResolvedValueOnce(Response.json({ data: [{ id: clientId }], metadata: { timestamp: range.endDate } }));
+    await expect(makeClient(transport).getTransactionsPage(range)).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+  });
+
+  it('rejects a transaction response for a different ID', async () => {
+    const transport = vi.fn<typeof fetch>(async () => Response.json({ id: orderId, type: 'reward', status: 'completed',
+      created_date: 1_790_000_000_000 }));
+    await expect(makeClient(transport).getTransaction(clientId)).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+  });
+
+  it('validates mutation IDs and transaction ranges before any transport call', async () => {
+    const transport = vi.fn<typeof fetch>(); const client = makeClient(transport);
+    await expect(client.cancelOrder('not-a-uuid')).rejects.toThrow();
+    await expect(client.getTransaction('not-a-uuid')).rejects.toThrow();
+    await expect(client.getTransactionsPage({ startDate: 1000, endDate: 1000 })).rejects.toMatchObject({ code: 'VALIDATION' });
+    await expect(client.getTransactionsPage({ startDate: 1000, endDate: 1000 + 86_400_001 })).rejects.toMatchObject({ code: 'VALIDATION' });
+    await expect(client.getTransactionsPage({ startDate: 1000, endDate: 2000, limit: 1901 })).rejects.toThrow();
+    expect(transport).not.toHaveBeenCalled();
   });
 
   it('reports 429 and its millisecond delay without a hidden retry', async () => {
