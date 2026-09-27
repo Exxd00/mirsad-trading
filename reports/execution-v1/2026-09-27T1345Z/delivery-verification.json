@@ -1,0 +1,10 @@
+{
+  "uniqueSignals": 204,
+  "buySignals": 70,
+  "validatedSummaryGroups": 27,
+  "completed24hBuySignals": 56,
+  "typecheck": "passed (scoped TypeScript, Node types)",
+  "collectorSyntax": "passed",
+  "sourceCalculationChecks": "passed for all 9 symbols",
+  "scope": "research files only; live core/configuration unchanged"
+}

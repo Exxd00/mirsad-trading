@@ -1,0 +1,90 @@
+[
+  {
+    "symbol": "BTC-EUR",
+    "requestedFrom": "2026-06-29T13:45:00+00:00",
+    "requestedUntil": "2026-06-30T13:45:00+00:00",
+    "firstPageRows": 100,
+    "allRowsInRequestedWindowAndRegion": true,
+    "morePages": true,
+    "completeDay": false,
+    "secondPageRows": 100,
+    "paginationVerified": true
+  },
+  {
+    "symbol": "ETH-EUR",
+    "requestedFrom": "2026-06-29T13:45:00+00:00",
+    "requestedUntil": "2026-06-30T13:45:00+00:00",
+    "firstPageRows": 100,
+    "allRowsInRequestedWindowAndRegion": true,
+    "morePages": true,
+    "completeDay": false
+  },
+  {
+    "symbol": "SOL-EUR",
+    "requestedFrom": "2026-06-29T13:45:00+00:00",
+    "requestedUntil": "2026-06-30T13:45:00+00:00",
+    "firstPageRows": 100,
+    "allRowsInRequestedWindowAndRegion": true,
+    "morePages": true,
+    "completeDay": false
+  },
+  {
+    "symbol": "XRP-EUR",
+    "requestedFrom": "2026-06-29T13:45:00+00:00",
+    "requestedUntil": "2026-06-30T13:45:00+00:00",
+    "firstPageRows": 100,
+    "allRowsInRequestedWindowAndRegion": true,
+    "morePages": true,
+    "completeDay": false
+  },
+  {
+    "symbol": "LINK-EUR",
+    "requestedFrom": "2026-06-29T13:45:00+00:00",
+    "requestedUntil": "2026-06-30T13:45:00+00:00",
+    "firstPageRows": 100,
+    "allRowsInRequestedWindowAndRegion": true,
+    "morePages": true,
+    "completeDay": false
+  },
+  {
+    "symbol": "ADA-EUR",
+    "requestedFrom": "2026-06-29T13:45:00+00:00",
+    "requestedUntil": "2026-06-30T13:45:00+00:00",
+    "firstPageRows": 100,
+    "allRowsInRequestedWindowAndRegion": true,
+    "morePages": true,
+    "completeDay": false
+  },
+  {
+    "symbol": "DOGE-EUR",
+    "requestedFrom": "2026-06-29T13:45:00+00:00",
+    "requestedUntil": "2026-06-30T13:45:00+00:00",
+    "firstPageRows": 100,
+    "allRowsInRequestedWindowAndRegion": true,
+    "morePages": true,
+    "completeDay": false
+  },
+  {
+    "symbol": "SHIB-EUR",
+    "requestedFrom": "2026-06-29T13:45:00+00:00",
+    "requestedUntil": "2026-06-30T13:45:00+00:00",
+    "firstPageRows": 76,
+    "allRowsInRequestedWindowAndRegion": true,
+    "morePages": false,
+    "completeDay": true
+  },
+  {
+    "symbol": "PEPE-EUR",
+    "requestedFrom": "2026-06-29T13:45:00+00:00",
+    "requestedUntil": "2026-06-30T13:45:00+00:00",
+    "firstPageRows": 100,
+    "allRowsInRequestedWindowAndRegion": true,
+    "morePages": true,
+    "completeDay": false
+  },
+  {
+    "symbol": "BTC-EUR",
+    "alternativeCandleQuery": "until_only_15m_90days",
+    "rows": 0
+  }
+]

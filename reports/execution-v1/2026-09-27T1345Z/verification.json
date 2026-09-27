@@ -1,0 +1,65 @@
+[
+  {
+    "symbol": "BTC-EUR",
+    "batchMatchesSequential": true,
+    "noFutureDataPrefixChecks": 2,
+    "sourceCandlesValidated": 2743,
+    "omittedFirst200WarmupBarsSignalMismatches": 0
+  },
+  {
+    "symbol": "ETH-EUR",
+    "batchMatchesSequential": true,
+    "noFutureDataPrefixChecks": 2,
+    "sourceCandlesValidated": 2743,
+    "omittedFirst200WarmupBarsSignalMismatches": 0
+  },
+  {
+    "symbol": "SOL-EUR",
+    "batchMatchesSequential": true,
+    "noFutureDataPrefixChecks": 2,
+    "sourceCandlesValidated": 2743,
+    "omittedFirst200WarmupBarsSignalMismatches": 0
+  },
+  {
+    "symbol": "XRP-EUR",
+    "batchMatchesSequential": true,
+    "noFutureDataPrefixChecks": 2,
+    "sourceCandlesValidated": 2743,
+    "omittedFirst200WarmupBarsSignalMismatches": 0
+  },
+  {
+    "symbol": "LINK-EUR",
+    "batchMatchesSequential": true,
+    "noFutureDataPrefixChecks": 2,
+    "sourceCandlesValidated": 2743,
+    "omittedFirst200WarmupBarsSignalMismatches": 0
+  },
+  {
+    "symbol": "ADA-EUR",
+    "batchMatchesSequential": true,
+    "noFutureDataPrefixChecks": 2,
+    "sourceCandlesValidated": 2743,
+    "omittedFirst200WarmupBarsSignalMismatches": 0
+  },
+  {
+    "symbol": "DOGE-EUR",
+    "batchMatchesSequential": true,
+    "noFutureDataPrefixChecks": 2,
+    "sourceCandlesValidated": 2743,
+    "omittedFirst200WarmupBarsSignalMismatches": 0
+  },
+  {
+    "symbol": "SHIB-EUR",
+    "batchMatchesSequential": true,
+    "noFutureDataPrefixChecks": 2,
+    "sourceCandlesValidated": 2743,
+    "omittedFirst200WarmupBarsSignalMismatches": 0
+  },
+  {
+    "symbol": "PEPE-EUR",
+    "batchMatchesSequential": true,
+    "noFutureDataPrefixChecks": 2,
+    "sourceCandlesValidated": 2743,
+    "omittedFirst200WarmupBarsSignalMismatches": 0
+  }
+]

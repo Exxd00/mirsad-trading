@@ -1,0 +1,857 @@
+[
+  {
+    "name": "pairs",
+    "url": "https://revx.revolut.com/api/1.0/public/configuration/pairs?region=EEA",
+    "observedAt": "2026-09-27T13:48:18.435101+00:00",
+    "status": 200,
+    "sha256": "3c47c4cb6239ab5433b398222f7d4d31f5d5956024f1329fa0c9cf42b9aad7f1",
+    "bytes": 88520,
+    "returnedRows": null
+  },
+  {
+    "name": "BTC-EUR-window-0",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/BTC-EUR?interval=15&since=1787838300000&until=1788443100000&region=EEA",
+    "observedAt": "2026-09-27T13:48:19.588640+00:00",
+    "status": 200,
+    "sha256": "979ee659717ea822605c03a166575084a3292a6ed60cec50ebe37ab5ffec8619",
+    "bytes": 51037,
+    "returnedRows": 440
+  },
+  {
+    "name": "BTC-EUR-window-1",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/BTC-EUR?interval=15&since=1788443100000&until=1789047900000&region=EEA",
+    "observedAt": "2026-09-27T13:48:20.742818+00:00",
+    "status": 200,
+    "sha256": "5e63775f6d6fb62c673931cca70a7be9ae86b8b12011ac0f524c0c325e2cab3c",
+    "bytes": 78191,
+    "returnedRows": 673
+  },
+  {
+    "name": "BTC-EUR-window-2",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/BTC-EUR?interval=15&since=1789047900000&until=1789652700000&region=EEA",
+    "observedAt": "2026-09-27T13:48:21.896952+00:00",
+    "status": 200,
+    "sha256": "15d4fd7398c1b3885502eadbc74e2222e940333885e4db611731d8ac72115a4c",
+    "bytes": 78019,
+    "returnedRows": 673
+  },
+  {
+    "name": "BTC-EUR-window-3",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/BTC-EUR?interval=15&since=1789652700000&until=1790257500000&region=EEA",
+    "observedAt": "2026-09-27T13:48:23.049924+00:00",
+    "status": 200,
+    "sha256": "2c40cd7f7f83c16d5fdefcde435ba29d57e5e1f27ce0276b67cf090d84998b84",
+    "bytes": 78062,
+    "returnedRows": 673
+  },
+  {
+    "name": "BTC-EUR-window-4",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/BTC-EUR?interval=15&since=1790257500000&until=1790516700000&region=EEA",
+    "observedAt": "2026-09-27T13:48:24.204111+00:00",
+    "status": 200,
+    "sha256": "ab397a60105e76b98f1f8023fb4470d1b5419584ac5b5c345443290d7ef3d2f7",
+    "bytes": 33365,
+    "returnedRows": 289
+  },
+  {
+    "name": "BTC-EUR-probe-60",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/BTC-EUR?interval=15&since=1785332700000&until=1785419100000&region=EEA",
+    "observedAt": "2026-09-27T13:48:25.354556+00:00",
+    "status": 200,
+    "sha256": "34bc5bfc95e32c39f1693e08deb42b494ff1950b943cc2466c9f13d107313480",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "BTC-EUR-probe-90",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/BTC-EUR?interval=15&since=1782740700000&until=1782827100000&region=EEA",
+    "observedAt": "2026-09-27T13:48:26.508964+00:00",
+    "status": 200,
+    "sha256": "0925827f70a47d39d5998c5c17ca1aa03ec9400b4697898b140c16f625739b7c",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "BTC-EUR-probe-180",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/BTC-EUR?interval=15&since=1774964700000&until=1775051100000&region=EEA",
+    "observedAt": "2026-09-27T13:48:27.661791+00:00",
+    "status": 200,
+    "sha256": "914bad4407d7b26cf889ce7b99a1fc892bc6ae0520eaf99d54bb31ae34f9d28b",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "BTC-EUR-book",
+    "url": "https://revx.revolut.com/api/2.0/public/order-book/BTC-EUR?limit=50&region=EEA",
+    "observedAt": "2026-09-27T13:48:28.815704+00:00",
+    "status": 200,
+    "sha256": "ab348f1295f30e668f6e80e4c08952a72e96abc25bf0c16f4a531d080ea59edc",
+    "bytes": 5486,
+    "returnedRows": null
+  },
+  {
+    "name": "ETH-EUR-window-0",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/ETH-EUR?interval=15&since=1787838300000&until=1788443100000&region=EEA",
+    "observedAt": "2026-09-27T13:48:29.968406+00:00",
+    "status": 200,
+    "sha256": "7750c126b05b5768a85c3b3121bd416a310f714fbbea0b5bf74a82c94f5f12f2",
+    "bytes": 49733,
+    "returnedRows": 440
+  },
+  {
+    "name": "ETH-EUR-window-1",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/ETH-EUR?interval=15&since=1788443100000&until=1789047900000&region=EEA",
+    "observedAt": "2026-09-27T13:48:31.122975+00:00",
+    "status": 200,
+    "sha256": "f9903e22d85cabd6c1ca19731f6d5ae42b32634764b23db1fd3b498e5db421a3",
+    "bytes": 76068,
+    "returnedRows": 673
+  },
+  {
+    "name": "ETH-EUR-window-2",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/ETH-EUR?interval=15&since=1789047900000&until=1789652700000&region=EEA",
+    "observedAt": "2026-09-27T13:48:32.275549+00:00",
+    "status": 200,
+    "sha256": "38e50f91932100c2d1d235c698061fbd035e4d18c5de79acf97538a4ffaf5b39",
+    "bytes": 75945,
+    "returnedRows": 673
+  },
+  {
+    "name": "ETH-EUR-window-3",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/ETH-EUR?interval=15&since=1789652700000&until=1790257500000&region=EEA",
+    "observedAt": "2026-09-27T13:48:33.426156+00:00",
+    "status": 200,
+    "sha256": "0d3c5a8326cdbb05647df42fc166ed6ad7412cc5c5026c1c8b9c844753572544",
+    "bytes": 76125,
+    "returnedRows": 673
+  },
+  {
+    "name": "ETH-EUR-window-4",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/ETH-EUR?interval=15&since=1790257500000&until=1790516700000&region=EEA",
+    "observedAt": "2026-09-27T13:48:34.579780+00:00",
+    "status": 200,
+    "sha256": "0e96ff287997ae39907486d28cf47c727c4752e34ad51dc001ed4e7dff52fc7b",
+    "bytes": 32554,
+    "returnedRows": 289
+  },
+  {
+    "name": "ETH-EUR-probe-60",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/ETH-EUR?interval=15&since=1785332700000&until=1785419100000&region=EEA",
+    "observedAt": "2026-09-27T13:48:35.734327+00:00",
+    "status": 200,
+    "sha256": "ec541c57a680b25d6110216527607c058b36e7af250b0571b94d9280857c799f",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "ETH-EUR-probe-90",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/ETH-EUR?interval=15&since=1782740700000&until=1782827100000&region=EEA",
+    "observedAt": "2026-09-27T13:48:36.887562+00:00",
+    "status": 200,
+    "sha256": "44b984b1f89e77523ad0b3fc680e8e51a9ff2515cb63e23a895369f227d2c0a5",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "ETH-EUR-probe-180",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/ETH-EUR?interval=15&since=1774964700000&until=1775051100000&region=EEA",
+    "observedAt": "2026-09-27T13:48:38.039475+00:00",
+    "status": 200,
+    "sha256": "f522d9e00204f4f014df46e306700576189653d4d630b06c6b3376bc5d8b24bd",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "ETH-EUR-book",
+    "url": "https://revx.revolut.com/api/2.0/public/order-book/ETH-EUR?limit=50&region=EEA",
+    "observedAt": "2026-09-27T13:48:39.190556+00:00",
+    "status": 200,
+    "sha256": "752bff78da69b4d73294f43715ea00cfd4455bec39014744ab77192d5e25c6a4",
+    "bytes": 5328,
+    "returnedRows": null
+  },
+  {
+    "name": "SOL-EUR-window-0",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/SOL-EUR?interval=15&since=1787838300000&until=1788443100000&region=EEA",
+    "observedAt": "2026-09-27T13:48:40.342084+00:00",
+    "status": 200,
+    "sha256": "8ec0710a7427844c3bd5edec280a7815be1ea6d77686eee9c6fd85b9bbd4efb0",
+    "bytes": 47874,
+    "returnedRows": 440
+  },
+  {
+    "name": "SOL-EUR-window-1",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/SOL-EUR?interval=15&since=1788443100000&until=1789047900000&region=EEA",
+    "observedAt": "2026-09-27T13:48:41.492607+00:00",
+    "status": 200,
+    "sha256": "b59174d8434c6408bba0bc719f8a46eb401bc67f55eac4ab115941c47586de2d",
+    "bytes": 73073,
+    "returnedRows": 673
+  },
+  {
+    "name": "SOL-EUR-window-2",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/SOL-EUR?interval=15&since=1789047900000&until=1789652700000&region=EEA",
+    "observedAt": "2026-09-27T13:48:42.646854+00:00",
+    "status": 200,
+    "sha256": "e1c6014fb4d116c04ec2ca3c99bc99393cd277b47196216349d169c2b3797dcc",
+    "bytes": 73023,
+    "returnedRows": 673
+  },
+  {
+    "name": "SOL-EUR-window-3",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/SOL-EUR?interval=15&since=1789652700000&until=1790257500000&region=EEA",
+    "observedAt": "2026-09-27T13:48:43.798075+00:00",
+    "status": 200,
+    "sha256": "77a3849caff9f8899bfbddaec90003d3d537155b7307da808d62d7953ad15580",
+    "bytes": 74356,
+    "returnedRows": 673
+  },
+  {
+    "name": "SOL-EUR-window-4",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/SOL-EUR?interval=15&since=1790257500000&until=1790516700000&region=EEA",
+    "observedAt": "2026-09-27T13:48:44.950819+00:00",
+    "status": 200,
+    "sha256": "3b490ead5cbe59373414f56495a3a78284bb3ff1a627e34684c789d55d4a1d20",
+    "bytes": 32532,
+    "returnedRows": 289
+  },
+  {
+    "name": "SOL-EUR-probe-60",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/SOL-EUR?interval=15&since=1785332700000&until=1785419100000&region=EEA",
+    "observedAt": "2026-09-27T13:48:46.105343+00:00",
+    "status": 200,
+    "sha256": "2e930ea65d1a3ad52c2965bb7308191df628f8c9a219928d51795c60b3212924",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "SOL-EUR-probe-90",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/SOL-EUR?interval=15&since=1782740700000&until=1782827100000&region=EEA",
+    "observedAt": "2026-09-27T13:48:47.255865+00:00",
+    "status": 200,
+    "sha256": "289aa5174e6da8042f405a0c7de0b5f665cc408fd71e99010a013bf9130b7633",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "SOL-EUR-probe-180",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/SOL-EUR?interval=15&since=1774964700000&until=1775051100000&region=EEA",
+    "observedAt": "2026-09-27T13:48:48.409588+00:00",
+    "status": 200,
+    "sha256": "44547daa85721c02c99df124e1c4847089af7d0ead832aecac056677681d374a",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "SOL-EUR-book",
+    "url": "https://revx.revolut.com/api/2.0/public/order-book/SOL-EUR?limit=50&region=EEA",
+    "observedAt": "2026-09-27T13:48:49.559797+00:00",
+    "status": 200,
+    "sha256": "9b13c236dd5a76206b09afcad95e76302dec3a0c615984294de03eeb1fd487ad",
+    "bytes": 5254,
+    "returnedRows": null
+  },
+  {
+    "name": "XRP-EUR-window-0",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/XRP-EUR?interval=15&since=1787838300000&until=1788443100000&region=EEA",
+    "observedAt": "2026-09-27T13:48:50.710654+00:00",
+    "status": 200,
+    "sha256": "b8be3c2bde06273d54e3b02a2b78acdd402270acd5215bdb11913e588eb826e4",
+    "bytes": 48215,
+    "returnedRows": 440
+  },
+  {
+    "name": "XRP-EUR-window-1",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/XRP-EUR?interval=15&since=1788443100000&until=1789047900000&region=EEA",
+    "observedAt": "2026-09-27T13:48:51.860990+00:00",
+    "status": 200,
+    "sha256": "f87bdb9dffb02c4400e589b34b89022e9e6cbc60dcd6f55f63a97825d0c73a4b",
+    "bytes": 73719,
+    "returnedRows": 673
+  },
+  {
+    "name": "XRP-EUR-window-2",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/XRP-EUR?interval=15&since=1789047900000&until=1789652700000&region=EEA",
+    "observedAt": "2026-09-27T13:48:53.014227+00:00",
+    "status": 200,
+    "sha256": "f8ef9eeaac34eaaad7e36f1cd5fa9530dd8965a6f29b8b6cc6907d56ae550065",
+    "bytes": 73752,
+    "returnedRows": 673
+  },
+  {
+    "name": "XRP-EUR-window-3",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/XRP-EUR?interval=15&since=1789652700000&until=1790257500000&region=EEA",
+    "observedAt": "2026-09-27T13:48:54.167791+00:00",
+    "status": 200,
+    "sha256": "f1a6417157700df1e3189c71f2af69a775275c52da0c49ee30cdb8cbff4e7390",
+    "bytes": 74015,
+    "returnedRows": 673
+  },
+  {
+    "name": "XRP-EUR-window-4",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/XRP-EUR?interval=15&since=1790257500000&until=1790516700000&region=EEA",
+    "observedAt": "2026-09-27T13:48:55.318603+00:00",
+    "status": 200,
+    "sha256": "e982c515691c766d9b18c853ea417108f91b9189762cdec15d0273dd90e39263",
+    "bytes": 31772,
+    "returnedRows": 289
+  },
+  {
+    "name": "XRP-EUR-probe-60",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/XRP-EUR?interval=15&since=1785332700000&until=1785419100000&region=EEA",
+    "observedAt": "2026-09-27T13:48:56.473413+00:00",
+    "status": 200,
+    "sha256": "226c8ba171caa6f19368c467b3a5b1d136e27f5235d29f2a8339c75747f0c675",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "XRP-EUR-probe-90",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/XRP-EUR?interval=15&since=1782740700000&until=1782827100000&region=EEA",
+    "observedAt": "2026-09-27T13:48:57.628016+00:00",
+    "status": 200,
+    "sha256": "cbeb0c0d3d37d271c3c96b34f225ccb77573b092cfb2dd18ffe89121168f43ac",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "XRP-EUR-probe-180",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/XRP-EUR?interval=15&since=1774964700000&until=1775051100000&region=EEA",
+    "observedAt": "2026-09-27T13:48:58.779559+00:00",
+    "status": 200,
+    "sha256": "ba4d96fb9fb8710ddc800792f0aa5943fb2f37e8941d11a1410ff268e85d912a",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "XRP-EUR-book",
+    "url": "https://revx.revolut.com/api/2.0/public/order-book/XRP-EUR?limit=50&region=EEA",
+    "observedAt": "2026-09-27T13:48:59.931479+00:00",
+    "status": 200,
+    "sha256": "ffdeb1faf9e5b5a8fe959ebe8a2297d7d13e1a09ac7f78dbe589648aaf222f66",
+    "bytes": 5168,
+    "returnedRows": null
+  },
+  {
+    "name": "LINK-EUR-window-0",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/LINK-EUR?interval=15&since=1787838300000&until=1788443100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:01.084461+00:00",
+    "status": 200,
+    "sha256": "b00e653d8e7d1a26cc33e4df507628d6daf9f4314a1edd48c8754f06947cf409",
+    "bytes": 45915,
+    "returnedRows": 440
+  },
+  {
+    "name": "LINK-EUR-window-1",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/LINK-EUR?interval=15&since=1788443100000&until=1789047900000&region=EEA",
+    "observedAt": "2026-09-27T13:49:02.234662+00:00",
+    "status": 200,
+    "sha256": "eeab5a49a007def061d128a62d965a11c6d12b04b4e090be38f8cfd5cc707340",
+    "bytes": 72918,
+    "returnedRows": 673
+  },
+  {
+    "name": "LINK-EUR-window-2",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/LINK-EUR?interval=15&since=1789047900000&until=1789652700000&region=EEA",
+    "observedAt": "2026-09-27T13:49:03.385374+00:00",
+    "status": 200,
+    "sha256": "5b57ab8115a0bee6643db3bc7f23769fee096f1913dd108bf9d46bfa9f5829e5",
+    "bytes": 70633,
+    "returnedRows": 673
+  },
+  {
+    "name": "LINK-EUR-window-3",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/LINK-EUR?interval=15&since=1789652700000&until=1790257500000&region=EEA",
+    "observedAt": "2026-09-27T13:49:04.539207+00:00",
+    "status": 200,
+    "sha256": "e26562dec9c14b82f2822e92f1ea64b7e104610714852cad4a6f29940b24d18c",
+    "bytes": 72705,
+    "returnedRows": 673
+  },
+  {
+    "name": "LINK-EUR-window-4",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/LINK-EUR?interval=15&since=1790257500000&until=1790516700000&region=EEA",
+    "observedAt": "2026-09-27T13:49:05.693266+00:00",
+    "status": 200,
+    "sha256": "fe8c113a560b79f348ff36313a80608d25b36e0a732599555827319e79dbb3c2",
+    "bytes": 31473,
+    "returnedRows": 289
+  },
+  {
+    "name": "LINK-EUR-probe-60",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/LINK-EUR?interval=15&since=1785332700000&until=1785419100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:06.843764+00:00",
+    "status": 200,
+    "sha256": "bbfbd4ac9ab3eb497e2c58b87a2083ff0efb7de982ebff826d2478dbeadf34ae",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "LINK-EUR-probe-90",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/LINK-EUR?interval=15&since=1782740700000&until=1782827100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:07.994688+00:00",
+    "status": 200,
+    "sha256": "278f9e75488a0e723fc604da3c4229a87382f5f5695fa05c8b0710c62df69635",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "LINK-EUR-probe-180",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/LINK-EUR?interval=15&since=1774964700000&until=1775051100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:09.147011+00:00",
+    "status": 200,
+    "sha256": "e2143b4801fbf64d6bc32ea21e6b0b00df56f8deb11ec523ef2b8495dcaedefa",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "LINK-EUR-book",
+    "url": "https://revx.revolut.com/api/2.0/public/order-book/LINK-EUR?limit=50&region=EEA",
+    "observedAt": "2026-09-27T13:49:10.299574+00:00",
+    "status": 200,
+    "sha256": "8d960b4c013519d0b181a44653a3252173303a5e6663438ff7b9362665bc067f",
+    "bytes": 5202,
+    "returnedRows": null
+  },
+  {
+    "name": "ADA-EUR-window-0",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/ADA-EUR?interval=15&since=1787838300000&until=1788443100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:11.451139+00:00",
+    "status": 200,
+    "sha256": "e77a5f5980657fcf5935f0ffad35d18c24f3cce53b8185f84ffce1499929319b",
+    "bytes": 49225,
+    "returnedRows": 440
+  },
+  {
+    "name": "ADA-EUR-window-1",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/ADA-EUR?interval=15&since=1788443100000&until=1789047900000&region=EEA",
+    "observedAt": "2026-09-27T13:49:12.603160+00:00",
+    "status": 200,
+    "sha256": "3791b3451c1de3ff3fed6ffe4d05708f3aeee544eef36f2914edae79ac49625a",
+    "bytes": 75585,
+    "returnedRows": 673
+  },
+  {
+    "name": "ADA-EUR-window-2",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/ADA-EUR?interval=15&since=1789047900000&until=1789652700000&region=EEA",
+    "observedAt": "2026-09-27T13:49:13.753257+00:00",
+    "status": 200,
+    "sha256": "7e99f20b7a54cf33784234bb8320de8af4ac6af53408d541a1d9369622ccddf3",
+    "bytes": 75334,
+    "returnedRows": 673
+  },
+  {
+    "name": "ADA-EUR-window-3",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/ADA-EUR?interval=15&since=1789652700000&until=1790257500000&region=EEA",
+    "observedAt": "2026-09-27T13:49:14.907101+00:00",
+    "status": 200,
+    "sha256": "830e4d89d8acdbf962747365a365a6b0ef1f6de9cb2c5fef1d541cb712e2d644",
+    "bytes": 75821,
+    "returnedRows": 673
+  },
+  {
+    "name": "ADA-EUR-window-4",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/ADA-EUR?interval=15&since=1790257500000&until=1790516700000&region=EEA",
+    "observedAt": "2026-09-27T13:49:16.060507+00:00",
+    "status": 200,
+    "sha256": "ff094ee9f3af5e274859cf0ad9f9aa9f1d41f2d939689f7a0d356cae8494defb",
+    "bytes": 32484,
+    "returnedRows": 289
+  },
+  {
+    "name": "ADA-EUR-probe-60",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/ADA-EUR?interval=15&since=1785332700000&until=1785419100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:17.213304+00:00",
+    "status": 200,
+    "sha256": "25d011ea7ee8d949e2051ea8945473f74fd7297b5e4451d5d1fd5616a8aa5015",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "ADA-EUR-probe-90",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/ADA-EUR?interval=15&since=1782740700000&until=1782827100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:18.363397+00:00",
+    "status": 200,
+    "sha256": "d589c2f1fce84b15a6b50b2b0c1571ebed7bbf1b5609b5f93cbd36c870bfee85",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "ADA-EUR-probe-180",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/ADA-EUR?interval=15&since=1774964700000&until=1775051100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:19.513778+00:00",
+    "status": 200,
+    "sha256": "c3eb377e458b425f6e221e381e2ceba74c0be692e2b0e29de6f202ef67f364c9",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "ADA-EUR-book",
+    "url": "https://revx.revolut.com/api/2.0/public/order-book/ADA-EUR?limit=50&region=EEA",
+    "observedAt": "2026-09-27T13:49:20.667457+00:00",
+    "status": 200,
+    "sha256": "bd530d7cc3e0dd61361cd7e118c04a85887411a68d3f40fef4f25428f9e23c2e",
+    "bytes": 5288,
+    "returnedRows": null
+  },
+  {
+    "name": "DOGE-EUR-window-0",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/DOGE-EUR?interval=15&since=1787838300000&until=1788443100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:21.821512+00:00",
+    "status": 200,
+    "sha256": "6b0564d7e735e1bcdc3fb6498990a36921506903e842cd6a572d83b172474c11",
+    "bytes": 49490,
+    "returnedRows": 440
+  },
+  {
+    "name": "DOGE-EUR-window-1",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/DOGE-EUR?interval=15&since=1788443100000&until=1789047900000&region=EEA",
+    "observedAt": "2026-09-27T13:49:22.976428+00:00",
+    "status": 200,
+    "sha256": "70770b076b943eb78a25997c539511b7c81b7fb345909877b1d519d3dd32831c",
+    "bytes": 75772,
+    "returnedRows": 673
+  },
+  {
+    "name": "DOGE-EUR-window-2",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/DOGE-EUR?interval=15&since=1789047900000&until=1789652700000&region=EEA",
+    "observedAt": "2026-09-27T13:49:24.129287+00:00",
+    "status": 200,
+    "sha256": "9706a2e776774256729bae8b075569d65314dea98388b8a077baa20992aa158e",
+    "bytes": 75670,
+    "returnedRows": 673
+  },
+  {
+    "name": "DOGE-EUR-window-3",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/DOGE-EUR?interval=15&since=1789652700000&until=1790257500000&region=EEA",
+    "observedAt": "2026-09-27T13:49:25.283880+00:00",
+    "status": 200,
+    "sha256": "886912f14aaf7e4c0f73a44ce1ad234044ca7d70ccb336dd8e451426bb0aa70b",
+    "bytes": 75950,
+    "returnedRows": 673
+  },
+  {
+    "name": "DOGE-EUR-window-4",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/DOGE-EUR?interval=15&since=1790257500000&until=1790516700000&region=EEA",
+    "observedAt": "2026-09-27T13:49:26.437323+00:00",
+    "status": 200,
+    "sha256": "6d5578a6fb2685a5c50e6fc292e51e8426b15c6241e34ec4718bbd6b21163892",
+    "bytes": 32624,
+    "returnedRows": 289
+  },
+  {
+    "name": "DOGE-EUR-probe-60",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/DOGE-EUR?interval=15&since=1785332700000&until=1785419100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:27.587681+00:00",
+    "status": 200,
+    "sha256": "6f8e02bdb19bb2d80570005d30e9a6dc023e0ad722448358d32ac6a11357c88e",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "DOGE-EUR-probe-90",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/DOGE-EUR?interval=15&since=1782740700000&until=1782827100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:28.739204+00:00",
+    "status": 200,
+    "sha256": "4b5074d23936d60397a3e79cf78cd65be8edf9ab6bd69120d744fd52eb64ed61",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "DOGE-EUR-probe-180",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/DOGE-EUR?interval=15&since=1774964700000&until=1775051100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:29.892766+00:00",
+    "status": 200,
+    "sha256": "00425b3a0d3a669b5dc3a1ee582c356a6bc51f7267ff6a929ff8af1617a54e85",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "DOGE-EUR-book",
+    "url": "https://revx.revolut.com/api/2.0/public/order-book/DOGE-EUR?limit=50&region=EEA",
+    "observedAt": "2026-09-27T13:49:31.046759+00:00",
+    "status": 200,
+    "sha256": "006605e394764ff803e3166d3cebffc288c16791a2813e683a3fd0a3f7357a9f",
+    "bytes": 5344,
+    "returnedRows": null
+  },
+  {
+    "name": "SHIB-EUR-window-0",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/SHIB-EUR?interval=15&since=1787838300000&until=1788443100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:32.200500+00:00",
+    "status": 200,
+    "sha256": "40346a27be640cae021f72e556d0b9ed29df59bac0a464d593313cff9bcf3c20",
+    "bytes": 57222,
+    "returnedRows": 440
+  },
+  {
+    "name": "SHIB-EUR-window-1",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/SHIB-EUR?interval=15&since=1788443100000&until=1789047900000&region=EEA",
+    "observedAt": "2026-09-27T13:49:33.355025+00:00",
+    "status": 200,
+    "sha256": "334f81cdeaee0c205e588fb5034d9e02772549a7ef0ae389b5b25b4ebf38325b",
+    "bytes": 87497,
+    "returnedRows": 673
+  },
+  {
+    "name": "SHIB-EUR-window-2",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/SHIB-EUR?interval=15&since=1789047900000&until=1789652700000&region=EEA",
+    "observedAt": "2026-09-27T13:49:34.507651+00:00",
+    "status": 200,
+    "sha256": "918778a05ef1ecc9f7e2e2b98ae5e4ade503b426456550e139ecafa5ad27129c",
+    "bytes": 87705,
+    "returnedRows": 673
+  },
+  {
+    "name": "SHIB-EUR-window-3",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/SHIB-EUR?interval=15&since=1789652700000&until=1790257500000&region=EEA",
+    "observedAt": "2026-09-27T13:49:35.658545+00:00",
+    "status": 200,
+    "sha256": "5a7c678c6f49c8ec68a4739e17880227f875fc485b33a543b60fcd95f9034b0a",
+    "bytes": 87901,
+    "returnedRows": 673
+  },
+  {
+    "name": "SHIB-EUR-window-4",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/SHIB-EUR?interval=15&since=1790257500000&until=1790516700000&region=EEA",
+    "observedAt": "2026-09-27T13:49:36.810670+00:00",
+    "status": 200,
+    "sha256": "cc4bb4dc713252250344410fbf5dfc920ac18103e522b8171d2e2388430c6c2c",
+    "bytes": 37762,
+    "returnedRows": 289
+  },
+  {
+    "name": "SHIB-EUR-probe-60",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/SHIB-EUR?interval=15&since=1785332700000&until=1785419100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:37.965284+00:00",
+    "status": 200,
+    "sha256": "cd8b4fabb85aceed6912f8c1d1c2a323ebaea0e3c6f4e5d2670e09f0ca04597f",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "SHIB-EUR-probe-90",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/SHIB-EUR?interval=15&since=1782740700000&until=1782827100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:39.115500+00:00",
+    "status": 200,
+    "sha256": "352913604e980ade2a65604a8b89a57e73dd5f4098cd7ec832eccd3bbfb51e5d",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "SHIB-EUR-probe-180",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/SHIB-EUR?interval=15&since=1774964700000&until=1775051100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:40.270152+00:00",
+    "status": 200,
+    "sha256": "f9e743503a45a7011f4c5578d6db95ef902e93fc725bb767f2d2744a99dbb4e8",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "SHIB-EUR-book",
+    "url": "https://revx.revolut.com/api/2.0/public/order-book/SHIB-EUR?limit=50&region=EEA",
+    "observedAt": "2026-09-27T13:49:41.424241+00:00",
+    "status": 200,
+    "sha256": "006802c3a4bda0a05105e754807aebb9f0312fb79e454365323e5d6a7699c2bd",
+    "bytes": 5749,
+    "returnedRows": null
+  },
+  {
+    "name": "PEPE-EUR-window-0",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/PEPE-EUR?interval=15&since=1787838300000&until=1788443100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:42.576668+00:00",
+    "status": 200,
+    "sha256": "bbcc1fef896b8b50f9beec86507a1e4c0bcad5cab77bd9953e2fed8cb756ac20",
+    "bytes": 57599,
+    "returnedRows": 440
+  },
+  {
+    "name": "PEPE-EUR-window-1",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/PEPE-EUR?interval=15&since=1788443100000&until=1789047900000&region=EEA",
+    "observedAt": "2026-09-27T13:49:43.729117+00:00",
+    "status": 200,
+    "sha256": "9a8384c06246959df36b293128f47982799c92398a933101fa45da6e6e91cdb2",
+    "bytes": 88699,
+    "returnedRows": 673
+  },
+  {
+    "name": "PEPE-EUR-window-2",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/PEPE-EUR?interval=15&since=1789047900000&until=1789652700000&region=EEA",
+    "observedAt": "2026-09-27T13:49:44.882516+00:00",
+    "status": 200,
+    "sha256": "2da44b7c883d91a1d308c8948188f0495e324b2f69320b7ebdbc2b2116cca244",
+    "bytes": 88400,
+    "returnedRows": 673
+  },
+  {
+    "name": "PEPE-EUR-window-3",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/PEPE-EUR?interval=15&since=1789652700000&until=1790257500000&region=EEA",
+    "observedAt": "2026-09-27T13:49:46.037093+00:00",
+    "status": 200,
+    "sha256": "34a91eff3bb29672793dacec58393b0de6c60da98a5e0da010ff4832d813a204",
+    "bytes": 89198,
+    "returnedRows": 673
+  },
+  {
+    "name": "PEPE-EUR-window-4",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/PEPE-EUR?interval=15&since=1790257500000&until=1790516700000&region=EEA",
+    "observedAt": "2026-09-27T13:49:47.189054+00:00",
+    "status": 200,
+    "sha256": "efd82fed67d4bd50c5b9dbb0df687ad51b271276a6a603c856ef6f32ae090d61",
+    "bytes": 38106,
+    "returnedRows": 289
+  },
+  {
+    "name": "PEPE-EUR-probe-60",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/PEPE-EUR?interval=15&since=1785332700000&until=1785419100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:48.342011+00:00",
+    "status": 200,
+    "sha256": "a4420e413710ab75d24becab2ee4d4952564642a420a1562a790b1619c74da74",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "PEPE-EUR-probe-90",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/PEPE-EUR?interval=15&since=1782740700000&until=1782827100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:49.494300+00:00",
+    "status": 200,
+    "sha256": "02fc65ae534d197982fd1f918ff52f54125a61e2c43346d1d0df28ee3f372f0e",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "PEPE-EUR-probe-180",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/PEPE-EUR?interval=15&since=1774964700000&until=1775051100000&region=EEA",
+    "observedAt": "2026-09-27T13:49:50.648456+00:00",
+    "status": 200,
+    "sha256": "67dcc5baafbaf46fb1fd87cb6a11d6cc640908a8c91f9656ad13fe345c96423d",
+    "bytes": 65,
+    "returnedRows": 0
+  },
+  {
+    "name": "PEPE-EUR-book",
+    "url": "https://revx.revolut.com/api/2.0/public/order-book/PEPE-EUR?limit=50&region=EEA",
+    "observedAt": "2026-09-27T13:49:51.802569+00:00",
+    "status": 200,
+    "sha256": "439e94e196e5221908ba64f365eca86cada3eaa9cfca6e4adaafa5d9d7b46b9c",
+    "bytes": 5817,
+    "returnedRows": null
+  },
+  {
+    "name": "BTC-EUR-trades-probe-30",
+    "url": "https://revx.revolut.com/api/1.0/public/trades/all?symbol=BTC-EUR&start_date=1787924700000&end_date=1788011100000&limit=10&region=EEA",
+    "observedAt": "2026-09-27T13:49:52.954583+00:00",
+    "status": 200,
+    "sha256": "00d6f2a1e8d3efb67d293d3f09541a8de9f1eaecefc650d27328c1d292cc0a3a",
+    "bytes": 1768,
+    "returnedRows": 10
+  },
+  {
+    "name": "BTC-EUR-trades-probe-90",
+    "url": "https://revx.revolut.com/api/1.0/public/trades/all?symbol=BTC-EUR&start_date=1782740700000&end_date=1782827100000&limit=10&region=EEA",
+    "observedAt": "2026-09-27T13:49:54.106562+00:00",
+    "status": 200,
+    "sha256": "89cb4702cac79d9e43d8f6a05f7e8bc737d6084d683fa28ebc02fa32963c0c2a",
+    "bytes": 1765,
+    "returnedRows": 10
+  },
+  {
+    "name": "BTC-EUR-older-trades-first-page",
+    "url": "https://revx.revolut.com/api/1.0/public/trades/all?symbol=BTC-EUR&start_date=1782740700000&end_date=1782827100000&limit=100&region=EEA",
+    "observedAt": "2026-09-27T13:56:07.584854+00:00",
+    "status": 200,
+    "sha256": "e4c4bb38d477101915b5962760d42b9e9feb05c936f8a6ff900cd24f505a4711",
+    "bytes": 16345,
+    "returnedRows": 100
+  },
+  {
+    "name": "BTC-EUR-older-trades-second-page",
+    "url": "https://revx.revolut.com/api/1.0/public/trades/all?symbol=BTC-EUR&start_date=1782740700000&end_date=1782827100000&limit=100&region=EEA&cursor=ZGF0ZT0xNzgyODI2NDc5MTc0O2lkPWQ2NGI2Yjg4LWIwMDEtMzJiNy1iNzIwLTY0ZWM5MmZiMWUyNQ%3D%3D",
+    "observedAt": "2026-09-27T13:56:08.738414+00:00",
+    "status": 200,
+    "sha256": "be2e87ce4d8ea6ceb2139401ac6aea3be051501b4988e85bf6783d02025dab98",
+    "bytes": 16222,
+    "returnedRows": 100
+  },
+  {
+    "name": "ETH-EUR-older-trades-first-page",
+    "url": "https://revx.revolut.com/api/1.0/public/trades/all?symbol=ETH-EUR&start_date=1782740700000&end_date=1782827100000&limit=100&region=EEA",
+    "observedAt": "2026-09-27T13:56:09.893041+00:00",
+    "status": 200,
+    "sha256": "81f273f65592174cb699580043cc3f04d26965d090c60a723ffff4d6099fcbaa",
+    "bytes": 16222,
+    "returnedRows": 100
+  },
+  {
+    "name": "SOL-EUR-older-trades-first-page",
+    "url": "https://revx.revolut.com/api/1.0/public/trades/all?symbol=SOL-EUR&start_date=1782740700000&end_date=1782827100000&limit=100&region=EEA",
+    "observedAt": "2026-09-27T13:56:11.043435+00:00",
+    "status": 200,
+    "sha256": "74d10acd3bcf9ff94bbc4e5b3ad86055ab4ff6c2c69f6b365ca237992a5cbb5d",
+    "bytes": 15962,
+    "returnedRows": 100
+  },
+  {
+    "name": "XRP-EUR-older-trades-first-page",
+    "url": "https://revx.revolut.com/api/1.0/public/trades/all?symbol=XRP-EUR&start_date=1782740700000&end_date=1782827100000&limit=100&region=EEA",
+    "observedAt": "2026-09-27T13:56:12.194108+00:00",
+    "status": 200,
+    "sha256": "35b5afc7d729dd87e94b044abbce6e8ee22f49a513bdfb676e18614b7d89caa5",
+    "bytes": 16078,
+    "returnedRows": 100
+  },
+  {
+    "name": "LINK-EUR-older-trades-first-page",
+    "url": "https://revx.revolut.com/api/1.0/public/trades/all?symbol=LINK-EUR&start_date=1782740700000&end_date=1782827100000&limit=100&region=EEA",
+    "observedAt": "2026-09-27T13:56:13.348854+00:00",
+    "status": 200,
+    "sha256": "5e650bac796a40034eb529e3843746a7ab68b7ca9870eea7197ff428b05a9b0c",
+    "bytes": 16194,
+    "returnedRows": 100
+  },
+  {
+    "name": "ADA-EUR-older-trades-first-page",
+    "url": "https://revx.revolut.com/api/1.0/public/trades/all?symbol=ADA-EUR&start_date=1782740700000&end_date=1782827100000&limit=100&region=EEA",
+    "observedAt": "2026-09-27T13:56:14.503908+00:00",
+    "status": 200,
+    "sha256": "3f3a99514e82c228d7091d2bdb4d518a99a46837dcb21881a5a50b7570f8855c",
+    "bytes": 16249,
+    "returnedRows": 100
+  },
+  {
+    "name": "DOGE-EUR-older-trades-first-page",
+    "url": "https://revx.revolut.com/api/1.0/public/trades/all?symbol=DOGE-EUR&start_date=1782740700000&end_date=1782827100000&limit=100&region=EEA",
+    "observedAt": "2026-09-27T13:56:15.654748+00:00",
+    "status": 200,
+    "sha256": "1942f40d56a04fc501f75cb113f42d4b9f9f24b606a2e4fc1750708bdeafd0cc",
+    "bytes": 16632,
+    "returnedRows": 100
+  },
+  {
+    "name": "SHIB-EUR-older-trades-first-page",
+    "url": "https://revx.revolut.com/api/1.0/public/trades/all?symbol=SHIB-EUR&start_date=1782740700000&end_date=1782827100000&limit=100&region=EEA",
+    "observedAt": "2026-09-27T13:56:16.805169+00:00",
+    "status": 200,
+    "sha256": "f71de6120bf9417e7214b7f7d1023c31fec331a2f260249c1e642bb9ac43c48c",
+    "bytes": 12947,
+    "returnedRows": 76
+  },
+  {
+    "name": "PEPE-EUR-older-trades-first-page",
+    "url": "https://revx.revolut.com/api/1.0/public/trades/all?symbol=PEPE-EUR&start_date=1782740700000&end_date=1782827100000&limit=100&region=EEA",
+    "observedAt": "2026-09-27T13:56:17.955398+00:00",
+    "status": 200,
+    "sha256": "45fe16aba4c9fb4e15f5bac31a740d685244e39edaf1537f34c084f4cfb6ccf3",
+    "bytes": 17209,
+    "returnedRows": 100
+  },
+  {
+    "name": "BTC-EUR-older-candles-until-only",
+    "url": "https://revx.revolut.com/api/1.0/public/candles/BTC-EUR?interval=15&until=1782827100000&region=EEA",
+    "observedAt": "2026-09-27T13:56:19.106229+00:00",
+    "status": 200,
+    "sha256": "8d84ec2256ce58799efa6d55ad27174f704a80a577152cbf47bb74d363a28a7a",
+    "bytes": 65,
+    "returnedRows": 0
+  }
+]
