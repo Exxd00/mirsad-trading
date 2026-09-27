@@ -68,7 +68,7 @@ describe('durable SQL ownership and orchestration', () => {
     a.positions = [position('BBB-EUR')];
     const second = await cycle(port, j, ['AAA-EUR'], () => NOW);
     expect(second.blocks.some(b => b.reason === 'entry_reservation_unknown')).toBe(true); expect(port.submit).toHaveBeenCalledOnce(); expect(port.ensureProtection).toHaveBeenCalled();
-    expect(port.lookup).toHaveBeenCalledWith(first.intent!.key);
+    expect(port.lookup).toHaveBeenCalledWith(first.intent!.key, expect.any(Object));
   });
   it('resolves a late source acknowledgment without ever resending the old signal', async () => {
     const j = new SqlJournal(); await seed(j); const { port } = makePort(); vi.mocked(port.submit).mockRejectedValueOnce(new Error('timeout'));
@@ -103,6 +103,33 @@ describe('durable SQL ownership and orchestration', () => {
     expect(await cancelDeadline(port, j, intent.key, NOW + 59)).toMatchObject({ status: 'not_due', retryAt: NOW + 60 });
     expect(await cancelDeadline(port, j, intent.key, NOW + 60)).toMatchObject({ status: 'cancelled', retryAt: null });
     expect(port.cancelRemainder).toHaveBeenCalledWith(partial.id, expect.any(Object)); expect(port.ensureProtection).toHaveBeenCalledWith(expect.objectContaining({ quantity: '0.4' }), expect.any(Object)); expect(port.submit).not.toHaveBeenCalled();
+  });
+  it.each(['unsupported', 'timeout'])('keeps protecting partial fills when cancellation is %s', async mode => {
+    const j = new SqlJournal(), { port, a } = makePort();
+    const intent = planBuy(a, signal(), instrument(), quote(), evaluateRisk(initialState().risk, [], a.equityHistory, true, NOW), NOW).intent!;
+    const lease = (await j.acquire(CONFIG.accountId))!; await j.begin(lease, intent, NOW); await j.release(lease);
+    const partial = { ...order(), clientKey: intent.key, status: 'partial' as const, filledQuantity: '0.4', averageFillPrice: '100' };
+    vi.mocked(port.lookup).mockResolvedValue({ order: partial, authoritative: true });
+    a.positions = [{ ...position(), quantity: '0.4', available: '0.4' }];
+    if (mode === 'unsupported') vi.mocked(port.capabilities).mockResolvedValue({
+      idempotentOrders: true, fencedWrites: false, attachedProtection: true, coordinatedExits: false, cancelRemainder: false, cancellationTimer: true });
+    else vi.mocked(port.cancelRemainder).mockRejectedValueOnce(new Error('network_timeout'));
+    expect(await cancelDeadline(port, j, intent.key, NOW + 60)).toMatchObject({
+      status: mode === 'unsupported' ? 'blocked' : 'unknown', retryAt: NOW + (mode === 'unsupported' ? 120 : 65) });
+    expect(port.ensureProtection).toHaveBeenCalledWith(expect.objectContaining({ quantity: '0.4' }), expect.any(Object));
+    expect(port.cancelRemainder).toHaveBeenCalledTimes(mode === 'unsupported' ? 0 : 1);
+    expect(port.submit).not.toHaveBeenCalled();
+  });
+  it('does not settle a deadline using a different source order returned after cancellation', async () => {
+    const j = new SqlJournal(), { port, a } = makePort();
+    const intent = planBuy(a, signal(), instrument(), quote(), evaluateRisk(initialState().risk, [], a.equityHistory, true, NOW), NOW).intent!;
+    const lease = (await j.acquire(CONFIG.accountId))!; await j.begin(lease, intent, NOW); await j.release(lease);
+    const partial = { ...order(), clientKey: intent.key, status: 'partial' as const, filledQuantity: '0.4' };
+    vi.mocked(port.lookup).mockResolvedValueOnce({ order: partial, authoritative: true })
+      .mockResolvedValueOnce({ order: { ...partial, id: 'different-order', status: 'cancelled' }, authoritative: true });
+    await expect(cancelDeadline(port, j, intent.key, NOW + 60)).rejects.toThrow('deadline_order_mismatch');
+    const next = (await j.acquire(CONFIG.accountId))!;
+    expect((await j.decision(next, intent.key))?.status).toBe('attempting'); await j.release(next);
   });
 });
 describe('daily read-only reporting', () => {

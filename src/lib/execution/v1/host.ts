@@ -15,7 +15,7 @@ export const journal = new SqlJournal();
  * Credentials stay on the existing host; the scheduler receives no broker keys. */
 export async function connectedVenue(): Promise<CancellationPort | null> {
   const connection = await credentials();
-  return connection ? new ConnectedRevolutVenue({ client: connection.client, instruments, market: sourceMarket, candles: sourceExecutionCandles }) : null;
+  return connection ? new ConnectedRevolutVenue({ client: connection.client, journal, instruments, market: sourceMarket, candles: sourceExecutionCandles }) : null;
 }
 export async function configuredSymbols() {
   const selected = CONFIG.symbols.length ? CONFIG.symbols : await configuredWatchlist();

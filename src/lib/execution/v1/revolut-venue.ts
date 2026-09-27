@@ -3,6 +3,8 @@ import type { RevolutXClient, RevolutInstrument, RevolutMarket, RevolutOrder } f
 import { decimal, fresh, terminal, type Account, type Candle, type Instrument, type Position, type Quote, type SourceOrder } from './model';
 import type { CancellationPort } from './deadline';
 import { scheduleCancellation } from './scheduler';
+import type { DecisionRecord, Journal, Lease } from './journal';
+import { syncSourceArchive } from './source-archive';
 
 export const REVOLUT_EXECUTION_BLOCKERS = [
   'source_attached_protection_unavailable',
@@ -16,7 +18,8 @@ type Source = {
   // Deliberately accept only the existing connection's read methods. The current
   // public placement contract has no attached TP/SL creation operation. Reporting
   // a connected account must not silently enable unsupported automatic writes.
-  client: Pick<RevolutXClient, 'getBalances' | 'getOrders'>;
+  client: Pick<RevolutXClient, 'getBalances' | 'getOrders'> & Partial<Pick<RevolutXClient, 'getOrder' | 'getTransactionsPage'>>;
+  journal?: Journal;
   instruments(): Promise<RevolutInstrument[]>;
   market(symbol: string): Promise<RevolutMarket>;
   candles(symbol: string, after: number | null): Promise<Candle[]>;
@@ -37,6 +40,17 @@ export function sourceOrder(order: RevolutOrder): SourceOrder {
     purpose: order.type === 'tpsl' || order.type === 'conditional' ? 'protection' : order.side === 'buy' ? 'entry' : 'exit',
     averageFillPrice: order.averageFillPrice ?? null, feeEur: order.feeCurrency === 'EUR' ? order.fee ?? null : null };
 }
+function ownedOrder(order: RevolutOrder, decision: DecisionRecord): SourceOrder {
+  const intent = decision.intent;
+  if (order.accountId !== 'revolut-x' || order.clientOrderId !== decision.sourceIdentity?.clientOrderId
+    || decision.key !== intent.key || order.symbol !== intent.symbol || order.side !== intent.side
+    || order.type !== (intent.side === 'buy' ? 'limit' : 'market') || order.quantity === null
+    || !decimal(order.quantity).eq(intent.quantity)
+    || (intent.side === 'buy' && (order.price === undefined || !decimal(order.price).eq(intent.limitPrice)))) {
+    throw new Error('source_order_identity_mismatch');
+  }
+  return { ...sourceOrder(order), clientKey: decision.key, managed: true, purpose: intent.side === 'buy' ? 'entry' : 'exit' };
+}
 
 /** The same credential-backed account used by the main dashboard. No local
  * wallet, seeded balance, stored-account fallback, or ownership adoption. */
@@ -48,7 +62,20 @@ export class ConnectedRevolutVenue implements CancellationPort {
       coordinatedExits: false, cancelRemainder: false,
       cancellationTimer: Boolean(process.env.EXECUTION_DEADLINE_URL && process.env.EXECUTION_SCHEDULER_TOKEN) };
   }
-  async reconcile() { /* Source snapshots are fetched on every account read. No source mutation. */ }
+  private validateLease(lease: Lease) {
+    if (lease.key !== `execution:v1:${this.accountId}:lock`) throw new Error('source_lease_account_mismatch');
+  }
+  async reconcile(lease?: Lease, options: { transactions?: boolean } = {}) {
+    if (!options.transactions || !this.source.journal || !this.source.client.getTransactionsPage) return;
+    if (!lease) throw new Error('source_lease_required');
+    this.validateLease(lease);
+    const result = await syncSourceArchive({ getTransactionsPage: input => this.source.client.getTransactionsPage!(input) },
+      this.source.journal, lease, this.clock() * 1000);
+    if (result.status !== 'not_due') {
+      await this.source.journal.event(lease, { type: 'source_archive', at: this.clock(), ...result });
+      console.info(JSON.stringify({ type: 'execution.v1.source_archive', ...result }));
+    }
+  }
   async account(): Promise<Account> {
     const balances = await this.source.client.getBalances();
     const observedAt = balances.length ? Math.min(...balances.map(b => seconds(b.observedAt))) : this.clock();
@@ -56,7 +83,18 @@ export class ConnectedRevolutVenue implements CancellationPort {
     if (!eur || new Set(balances.map(b => b.currency)).size !== balances.length) throw new Error('source_balance_missing');
     if (balances.some(b => decimal(b.total).lt(0) || decimal(b.available).lt(0) || decimal(b.reserved).lt(0)
       || !decimal(b.available).add(b.reserved).eq(b.total))) throw new Error('source_balance_mismatch');
-    const orders = (await this.source.client.getOrders()).map(sourceOrder);
+    const decisions = await this.source.journal?.accountDecisions(this.accountId) ?? [];
+    const identities = new Map<string, DecisionRecord>();
+    for (const decision of decisions) {
+      const id = decision.sourceIdentity?.clientOrderId;
+      if (!id) continue;
+      if (identities.has(id)) throw new Error('source_identity_conflict');
+      identities.set(id, decision);
+    }
+    const orders = (await this.source.client.getOrders()).map(order => {
+      const decision = identities.get(order.clientOrderId);
+      return decision ? ownedOrder(order, decision) : sourceOrder(order);
+    });
     const positions: Position[] = balances.filter(b => b.currency !== 'EUR' && decimal(b.total).gt(0)).map(b => ({
       id: `${this.accountId}:${b.currency}`, symbol: `${b.currency}-EUR`, managed: false, openedAt: null,
       quantity: b.total, available: b.available, reserved: b.reserved,
@@ -90,10 +128,26 @@ export class ConnectedRevolutVenue implements CancellationPort {
     return result;
   }
   async candles(symbol: string, after: number | null) { return this.source.candles(symbol, after); }
-  async lookup(_key: string): Promise<{ order: SourceOrder | null; authoritative: boolean }> {
-    // A hash decision key is not a broker UUID. No v1 submission mapping exists
-    // yet, so absence must never settle an unresolved decision as a rejection.
-    return { order: null, authoritative: false };
+  async lookup(key: string, lease?: Lease): Promise<{ order: SourceOrder | null; authoritative: boolean }> {
+    if (!this.source.journal) return { order: null, authoritative: false };
+    if (!lease) throw new Error('source_lease_required');
+    this.validateLease(lease);
+    if (!/^[a-f0-9]{64}$/.test(key)) throw new Error('source_decision_key_invalid');
+    const decision = await this.source.journal.decision(lease, key);
+    // A never-allocated key cannot have been submitted by this adapter: its
+    // source UUID is created only by the same atomic insertion as the intent.
+    if (!decision) return { order: null, authoritative: true };
+    if (!decision.sourceIdentity) return { order: null, authoritative: false };
+    let found: RevolutOrder | undefined;
+    if (decision.source?.id && this.source.client.getOrder) found = await this.source.client.getOrder(decision.source.id);
+    else {
+      const matches = (await this.source.client.getOrders()).filter(order => order.clientOrderId === decision.sourceIdentity!.clientOrderId);
+      if (matches.length > 1) throw new Error('source_identity_conflict');
+      found = matches[0];
+    }
+    // An empty source scan or a 404 never proves that a timed-out submission
+    // failed. No replacement UUID is allocated and no order is re-sent.
+    return found ? { order: ownedOrder(found, decision), authoritative: true } : { order: null, authoritative: false };
   }
   async ensureProtection(position: Position) {
     if (position.managed) throw new Error('source_attached_protection_unavailable');

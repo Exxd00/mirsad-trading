@@ -8,12 +8,12 @@ export interface VenuePort {
   readonly accountId: string;
   capabilities(): Promise<{ idempotentOrders: boolean; fencedWrites: boolean; attachedProtection: boolean;
     coordinatedExits: boolean; cancelRemainder: boolean; cancellationTimer: boolean }>;
-  reconcile(): Promise<void>;
+  reconcile(lease: Lease, options?: { transactions?: boolean }): Promise<void>;
   account(): Promise<Account>;
   quotes(symbols: string[]): Promise<Quote[]>;
   instruments(): Promise<Instrument[]>;
   candles(symbol: string, after: number | null): Promise<Candle[]>;
-  lookup(key: string): Promise<{ order: SourceOrder | null; authoritative: boolean }>;
+  lookup(key: string, lease: Lease): Promise<{ order: SourceOrder | null; authoritative: boolean }>;
   ensureProtection(position: Position, lease: Lease): Promise<void>;
   prepareExit(intent: Extract<Intent, { side: 'sell' }>, lease: Lease): Promise<{ ready: boolean; quantity: string }>;
   submit(intent: Intent, lease: Lease): Promise<SourceOrder>;
@@ -28,7 +28,7 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
   try {
     const caps = await port.capabilities(), state = await journal.state(lease);
     if (Object.values(caps).some(value => !value)) result.blocks.push({ reason: 'execution_capabilities_missing' });
-    await port.reconcile();
+    await port.reconcile(lease, { transactions: true });
     let account = await port.account();
     const validateAccount = (a: Account) => {
       if (a.id !== port.accountId) throw new Error('account_mismatch');
@@ -44,7 +44,7 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
     validateAccount(account);
     for (const decision of await journal.unresolved(lease)) {
       try {
-        const lookup = await port.lookup(decision.key);
+        const lookup = await port.lookup(decision.key, lease);
         if (lookup.order && lookup.order.clientKey === decision.key) await journal.result(lease, decision.key, 'acknowledged', lookup.order);
         // Authoritative absence settles uncertainty but still consumes this signal.
         else if (!lookup.order && lookup.authoritative) await journal.result(lease, decision.key, 'absent', null);
@@ -132,7 +132,7 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
     }
     await journal.save(lease, state);
     if (intent) {
-      const known = await journal.decision(lease, intent.key), source = await port.lookup(intent.key);
+      const known = await journal.decision(lease, intent.key), source = await port.lookup(intent.key, lease);
       if (source.order) { result.status = 'reconciled'; result.sourceOrder = source.order; }
       else if (known || !source.authoritative) { result.status = 'blocked'; result.reason = known ? 'decision_already_consumed' : 'lookup_unconfirmed'; }
       else if (await journal.begin(lease, intent, clock())) {

@@ -2,7 +2,7 @@ import 'server-only';
 import { query } from '../db';
 import { CONFIG, VERSION } from './v1/model';
 import { connectedVenue, runHost } from './v1/host';
-import type { RuntimeState } from './v1/journal';
+import type { RuntimeState, SourceArchiveState } from './v1/journal';
 import { REVOLUT_EXECUTION_BLOCKERS } from './v1/revolut-venue';
 
 export async function executionReport() {
@@ -11,6 +11,7 @@ export async function executionReport() {
   if (live && live.id !== CONFIG.accountId) throw new Error('account_mismatch');
   const stateRow = await query<{ value: RuntimeState }>('SELECT value FROM app_settings WHERE key=$1', [`execution:v1:${CONFIG.accountId}:state`]);
   const cycleRow = await query<{ detail: Record<string, unknown> }>("SELECT detail FROM audit_events WHERE event='execution.v1' AND detail->>'accountId'=$1 AND detail->>'type'='cycle' ORDER BY id DESC LIMIT 1", [CONFIG.accountId]);
+  const archiveRow = await query<{ value: SourceArchiveState }>('SELECT value FROM app_settings WHERE key=$1', [`execution:v1:${CONFIG.accountId}:source_archive`]);
   const state = stateRow.rows[0]?.value, connected = live !== null;
   const ready = connected && capabilities !== null && Object.values(capabilities).every(Boolean);
   return {
@@ -30,6 +31,10 @@ export async function executionReport() {
     orders: live?.orders ?? null, performance: null, saved_records_are_v1_results: false,
     last_cycle: cycleRow.rows[0]?.detail ?? null, indicators: state?.indicators ?? {}, risk: state?.risk ?? null,
     daily_report: state?.dailyReport ?? null, last_successful_report: state?.lastSuccessfulReport ?? null,
+    source_archive: archiveRow.rows[0]?.value ? { observed_from_ms: archiveRow.rows[0].value.observedFromMs,
+      scanned_until_ms: archiveRow.rows[0].value.scannedUntilMs, source_at_ms: archiveRow.rows[0].value.sourceAtMs,
+      last_read_at_ms: archiveRow.rows[0].value.lastReadAtMs, more_pages: archiveRow.rows[0].value.cursor !== null,
+      last_error: archiveRow.rows[0].value.lastError, establishes_equity_history: false } : null,
     blockers: connected ? ready ? [] : [...REVOLUT_EXECUTION_BLOCKERS, ...(!capabilities?.cancellationTimer ? ['deadline_connection_missing'] : [])] : ['account_connection_missing'],
   };
 }
