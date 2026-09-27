@@ -4,6 +4,7 @@ import { query, transaction, type SqlExecutor } from '../../db';
 import type { RevolutTransaction } from '../../brokers/revolut';
 import { VERSION, type IndicatorState, type Intent, type RiskState, type Signal, type SourceOrder } from './model';
 import type { ProtectionLevels } from './protection';
+import type { AccountingEvidence } from './accounting';
 export type RuntimeState = { risk: RiskState; indicators: Record<string, IndicatorState>; pendingSignals: Signal[]; entriesEnabled: boolean; scanCursor?: number;
   // Armed by the owner's execution switch, never by deployment or a scheduler.
   // Pausing entries does not remove protection from already managed fills.
@@ -34,6 +35,8 @@ export interface Journal {
   result(lease: Lease, key: string, status: DecisionRecord['status'], source: SourceOrder | null): Promise<void>;
   unresolved(lease: Lease): Promise<DecisionRecord[]>;
   accountDecisions(accountId: string): Promise<DecisionRecord[]>;
+  accounting(accountId: string): Promise<AccountingEvidence | null>;
+  saveAccounting(lease: Lease, value: AccountingEvidence, expectedCheckedAt: number): Promise<boolean>;
   sourceArchive(lease: Lease): Promise<SourceArchiveState | null>;
   saveSourceArchive(lease: Lease, state: SourceArchiveState, records: RevolutTransaction[]): Promise<void>;
   protections(accountId: string): Promise<ManagedProtection[]>;
@@ -109,6 +112,20 @@ export class SqlJournal implements Journal {
     return transaction(async tx => { await this.owned(tx, lease);
       const r = await tx.query<{ value: SourceArchiveState }>('SELECT value FROM app_settings WHERE key=$1', [this.path(lease, 'source_archive')]);
       return r.rows[0]?.value ?? null;
+    });
+  }
+  async accounting(accountId: string) {
+    const r = await query<{ value: AccountingEvidence }>('SELECT value FROM app_settings WHERE key=$1', [`${root(accountId)}:accounting`]);
+    return r.rows[0]?.value ?? null;
+  }
+  async saveAccounting(lease: Lease, value: AccountingEvidence, expectedCheckedAt: number) {
+    return transaction(async tx => {
+      await this.owned(tx, lease);
+      const key = this.path(lease, 'accounting');
+      const old = await tx.query<{ value: AccountingEvidence }>('SELECT value FROM app_settings WHERE key=$1', [key]);
+      if ((old.rows[0]?.value.checkedAt ?? 0) !== expectedCheckedAt) return false;
+      await tx.query('INSERT INTO app_settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=NOW()', [key, JSON.stringify(value)]);
+      return true;
     });
   }
   async saveSourceArchive(lease: Lease, state: SourceArchiveState, records: RevolutTransaction[]) {

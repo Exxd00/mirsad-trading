@@ -36,6 +36,25 @@ function assertSigned(url: string | URL | Request, init?: RequestInit) {
 }
 
 describe('Revolut X adapter with isolated mocked transport', () => {
+  it('reads signed book depth and rejects levels from a different pair', async () => {
+    let currency = 'BTC';
+    const transport = vi.fn<typeof fetch>(async (url, init) => {
+      assertSigned(url, init); expect(String(url)).toBe('https://revx.revolut.com/api/1.0/order-book/BTC-EUR?limit=50');
+      return Response.json({ data: { bids: [{ p: '100', q: '2', pc: 'EUR', qc: currency }], asks: [{ p: '101', q: '3', pc: 'EUR', qc: currency }] }, metadata: { timestamp: 1790000000000 } });
+    });
+    expect(await makeClient(transport).getOrderBook('BTC-EUR')).toMatchObject({ symbol: 'BTC-EUR', bids: [{ price: '100', quantity: '2' }], sourceAt: 1790000000000 });
+    currency = 'ETH'; await expect(makeClient(transport).getOrderBook('BTC-EUR')).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+  });
+  it('reads exact historical minute candles without filling gaps or using incomplete bars', async () => {
+    const end = 1790000040000;
+    const transport = vi.fn<typeof fetch>(async (url, init) => {
+      assertSigned(url, init); const parsed = new URL(String(url));
+      expect(parsed.pathname).toBe('/api/1.0/candles/BTC-EUR'); expect(parsed.searchParams.get('interval')).toBe('1');
+      return Response.json({ data: [{ start: end - 60000, close: '100' }, { start: end, close: '999' }], metadata: { timestamp: end } });
+    });
+    expect(await makeClient(transport).getValuationCandles('BTC-EUR', end - 60000, end)).toEqual([{ at: end / 1000, price: '100' }]);
+    await expect(makeClient(transport).getValuationCandles('BTC-EUR', end, end)).rejects.toMatchObject({ code: 'VALIDATION' });
+  });
   it('signs exact GET path and preserves account balance decimals without exposing keys', async () => {
     const transport = vi.fn<typeof fetch>(async (url, init) => {
       expect(String(url)).toBe('https://revx.revolut.com/api/1.0/balances');

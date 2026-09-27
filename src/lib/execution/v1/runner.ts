@@ -9,6 +9,7 @@ export interface VenuePort {
   capabilities(): Promise<{ idempotentOrders: boolean; fencedWrites: boolean; attachedProtection: boolean;
     managedProtection?: boolean; entryRiskData?: boolean;
     coordinatedExits: boolean; cancelRemainder: boolean; cancellationTimer: boolean }>;
+  refreshAccounting?(): Promise<void>;
   reconcile(lease: Lease, options?: { transactions?: boolean }): Promise<void>;
   account(options?: { protectionOnly?: boolean }): Promise<Account>;
   quotes(symbols: string[]): Promise<Quote[]>;
@@ -48,6 +49,7 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
     try { prefetched.set(symbol, { candles: await port.candles(symbol, before.indicators[symbol]?.lastCloseTime ?? null) }); }
     catch (e) { prefetched.set(symbol, { error: e instanceof Error ? e.message : 'candles_unavailable' }); }
   }
+  await port.refreshAccounting?.();
   const lease = await journal.acquire(port.accountId);
   if (!lease) return { ...result, status: 'busy' };
   try {

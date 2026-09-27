@@ -3,9 +3,12 @@ import { query } from '../db';
 import { CONFIG, VERSION } from './v1/model';
 import { connectedVenue, runHost } from './v1/host';
 import type { RuntimeState, SourceArchiveState, ManagedProtection, ProtectionHeartbeat } from './v1/journal';
-import { REVOLUT_EXECUTION_BLOCKERS } from './v1/revolut-venue';
 import { executionCapabilitiesReady } from './v1/runner';
 import { fresh } from './v1/model';
+import { evaluateRisk } from './v1/risk';
+import { FEE_SCHEDULE } from './v1/costs';
+import { buildReport } from './v1/reporting';
+import type { AccountingEvidence } from './v1/accounting';
 
 export async function executionReport() {
   const venue = await connectedVenue(), live = venue ? await venue.account() : null;
@@ -16,14 +19,20 @@ export async function executionReport() {
   const archiveRow = await query<{ value: SourceArchiveState }>('SELECT value FROM app_settings WHERE key=$1', [`execution:v1:${CONFIG.accountId}:source_archive`]);
   const protectionRows = await query<{ value: ManagedProtection }>('SELECT value FROM app_settings WHERE key LIKE $1', [`execution:v1:${CONFIG.accountId}:protection:%`]);
   const heartbeatRow = await query<{ value: ProtectionHeartbeat }>('SELECT value FROM app_settings WHERE key=$1', [`execution:v1:${CONFIG.accountId}:protection_heartbeat`]);
+  const accountingRow = await query<{ value: AccountingEvidence }>('SELECT value FROM app_settings WHERE key=$1', [`execution:v1:${CONFIG.accountId}:accounting`]);
   const state = stateRow.rows[0]?.value, connected = live !== null;
-  const ready = connected && capabilities !== null && executionCapabilitiesReady(capabilities);
+  const now = Math.floor(Date.now() / 1000), evidence = accountingRow.rows[0]?.value ?? null;
+  const currentRisk = live ? evaluateRisk(state?.risk ?? { reduced: false, dailyHaltDate: null }, live.trades, live.equityHistory, live.tradeHistoryComplete, now) : null;
+  const blockers = connected ? [...new Set([...(live.dataBlockers ?? []),
+    ...(!capabilities || !executionCapabilitiesReady(capabilities) ? ['execution_capabilities_missing'] : []),
+    ...(currentRisk?.entryBlocked ? [currentRisk.entryBlocked] : [])])] : ['account_connection_missing'];
+  const ready = connected && blockers.length === 0;
   const heartbeat = heartbeatRow.rows[0]?.value ?? null;
   const heartbeatFresh = heartbeat !== null && fresh(heartbeat.at, Math.floor(Date.now() / 1000), CONFIG.protectionHeartbeatMaxAgeSeconds);
   return {
     version: '1.0.0' as const, strategy_version: VERSION, mode: 'execution-core' as const,
     status: connected ? ready ? state?.entriesEnabled ? 'enabled' : 'entries_paused' : 'monitoring' : 'blocked',
-    enabled: ready && state?.entriesEnabled === true, entries_requested: state?.entriesEnabled ?? false,
+    enabled: capabilities !== null && executionCapabilitiesReady(capabilities) && state?.entriesEnabled === true, entries_requested: state?.entriesEnabled ?? false,
     adapter_configured: venue !== null, account_source_configured: true, account_connected: connected,
     execution_ready: ready, order_api_connected: ready, signal_configured: true, capabilities,
     reason: connected ? ready ? 'configured' : 'execution_data_incomplete' : 'account_connection_missing',
@@ -37,14 +46,20 @@ export async function executionReport() {
     source_at: live?.sourceAt ?? null, source_timestamp_basis: 'response_observed_at',
     read_at: Math.floor(Date.now() / 1000), available_eur: live?.availableEur ?? null,
     balances: live?.balances ?? null, positions: live?.positions ?? null,
-    orders: live?.orders ?? null, performance: null, saved_records_are_v1_results: false,
+    orders: live?.orders ?? null, performance: live?.archiveStart !== null && live ? buildReport(live, now) : null, saved_records_are_v1_results: false,
+    accounting: { equity_eur: live?.equityEur ?? null, valuation_at: live?.valuationAt ?? null,
+      valuation_complete: live?.valuationComplete ?? false, checked_at: evidence?.checkedAt ?? null,
+      history_start: evidence?.observations[0]?.at ?? null, observations: evidence?.observations.length ?? 0,
+      transactions: evidence?.transactions.length ?? 0, last_error: evidence?.lastError ?? null,
+      current_risk: currentRisk, fee_schedule: FEE_SCHEDULE, cost_method: 'taker_both_legs_plus_one_spread_and_size_specific_sell_depth',
+      historical_mark_method: 'last_completed_source_minute_close' },
     last_cycle: cycleRow.rows[0]?.detail ?? null, indicators: state?.indicators ?? {}, risk: state?.risk ?? null,
     daily_report: state?.dailyReport ?? null, last_successful_report: state?.lastSuccessfulReport ?? null,
     source_archive: archiveRow.rows[0]?.value ? { observed_from_ms: archiveRow.rows[0].value.observedFromMs,
       scanned_until_ms: archiveRow.rows[0].value.scannedUntilMs, source_at_ms: archiveRow.rows[0].value.sourceAtMs,
       last_read_at_ms: archiveRow.rows[0].value.lastReadAtMs, more_pages: archiveRow.rows[0].value.cursor !== null,
       last_error: archiveRow.rows[0].value.lastError, establishes_equity_history: false } : null,
-    blockers: connected ? ready ? [] : [...REVOLUT_EXECUTION_BLOCKERS, ...(!capabilities?.cancellationTimer ? ['deadline_connection_missing'] : [])] : ['account_connection_missing'],
+    blockers,
   };
 }
 export type ExecutionReport = Awaited<ReturnType<typeof executionReport>>;

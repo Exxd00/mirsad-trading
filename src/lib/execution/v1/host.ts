@@ -12,6 +12,7 @@ import { dailyReport } from './reporting';
 import { ConnectedRevolutVenue } from './revolut-venue';
 import { protectionCycle } from './managed-protection';
 import { scheduleProtectionWatch } from './scheduler';
+import { evaluateRisk } from './risk';
 export const journal = new SqlJournal();
 /** Owner-selected connection: the account already connected on the main page.
  * Credentials stay on the existing host; the scheduler receives no broker keys. */
@@ -76,6 +77,16 @@ export async function entrySwitch(enabled: boolean) {
     if (!port || !executionCapabilitiesReady(await port.capabilities())) {
       return { status: 'blocked', reason: 'execution_capabilities_missing', entriesEnabled: false, orderApiConnected: false };
     }
+    await port.refreshAccounting?.();
+    const live = await port.account();
+    const check = await journal.acquire(CONFIG.accountId);
+    if (!check) return { status: 'busy' };
+    try {
+      const state = await journal.state(check);
+      const risk = evaluateRisk(state.risk, live.trades, live.equityHistory, live.tradeHistoryComplete, Math.floor(Date.now() / 1000));
+      if (live.dataBlockers?.length || risk.entryBlocked) return { status: 'blocked', reason: live.dataBlockers?.[0] ?? risk.entryBlocked,
+        entriesEnabled: false, orderApiConnected: true };
+    } finally { await journal.release(check); }
     await scheduleProtectionWatch();
   }
   const lease = await journal.acquire(CONFIG.accountId);
@@ -86,6 +97,11 @@ export async function entrySwitch(enabled: boolean) {
     await journal.event(lease, { type: 'entries_setting', enabled, at: Math.floor(Date.now() / 1000) });
     return { entriesEnabled: enabled };
   } finally { await journal.release(lease); }
+}
+export async function refreshReadiness() {
+  const port = await connectedVenue();
+  if (port) await port.refreshAccounting?.();
+  return { status: port ? 'checked' : 'blocked' };
 }
 export async function runProtection() {
   const port = await connectedVenue();

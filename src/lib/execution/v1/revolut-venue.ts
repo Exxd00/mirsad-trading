@@ -10,15 +10,13 @@ import { syncSourceArchive } from './source-archive';
 import { managedPositions, protectionPositionId, protectionRecord } from './managed-protection';
 import { planBuy } from './planner';
 import { evaluateRisk } from './risk';
-
-export const REVOLUT_EXECUTION_BLOCKERS = [
-  'source_fee_schedule_missing',
-  'transfer_neutral_valuations_missing',
-] as const;
+import { FEE_SCHEDULE, revolutCosts } from './costs';
+import { sameAmounts, sourceAmounts, sourceTradeResults } from './accounting';
+import { refreshSourceAccounting } from './account-evidence';
 
 type Source = {
   client: Pick<RevolutXClient, 'getBalances' | 'getOrders'> & Partial<Pick<RevolutXClient,
-    'getOrder' | 'getTransactionsPage' | 'getActiveOrders' | 'submitOrder' | 'cancelOrder'>>;
+    'getOrder' | 'getTransactionsPage' | 'getTransaction' | 'getOrderBook' | 'getValuationCandles' | 'getFillsForOrders' | 'getActiveOrders' | 'submitOrder' | 'cancelOrder'>>;
   journal?: Journal;
   instruments(): Promise<RevolutInstrument[]>;
   market(symbol: string): Promise<RevolutMarket>;
@@ -30,6 +28,7 @@ const seconds = (value: string) => {
   return Math.floor(at);
 };
 export function sourceOrder(order: RevolutOrder): SourceOrder {
+  const baseFee = order.feeCurrency === order.symbol.split('-')[0] ? order.fee : undefined;
   const status: SourceOrder['status'] = ({ pending_new: 'open', new: 'open', partially_filled: 'partial',
     filled: 'filled', cancelled: 'cancelled', rejected: 'rejected', replaced: 'unknown' } as const)[order.status];
   return { id: order.id, clientKey: order.clientOrderId, symbol: order.symbol, side: order.side, status,
@@ -38,7 +37,10 @@ export function sourceOrder(order: RevolutOrder): SourceOrder {
     remainingBudgetEur: ['filled', 'cancelled', 'rejected'].includes(status) ? '0' : null,
     submittedAt: seconds(order.createdAt), sourceAt: seconds(order.updatedAt), managed: false,
     purpose: order.type === 'tpsl' || order.type === 'conditional' ? 'protection' : order.side === 'buy' ? 'entry' : 'exit',
-    averageFillPrice: order.averageFillPrice ?? null, feeEur: order.feeCurrency === 'EUR' ? order.fee ?? null : null };
+    averageFillPrice: order.averageFillPrice ?? null,
+    feeEur: order.feeCurrency === 'EUR' ? order.fee ?? null : baseFee !== undefined && order.averageFillPrice
+      ? decimal(baseFee).mul(order.averageFillPrice).toFixed() : null,
+    ...(baseFee !== undefined ? { baseFeeQuantity: baseFee } : {}) };
 }
 function ownedOrder(order: RevolutOrder, decision: DecisionRecord): SourceOrder {
   const intent = decision.intent;
@@ -67,7 +69,14 @@ export class ConnectedRevolutVenue implements CancellationPort {
     const timer = Boolean(process.env.EXECUTION_DEADLINE_URL && process.env.EXECUTION_SCHEDULER_TOKEN);
     return { idempotentOrders: writes, fencedWrites: writes, attachedProtection: false,
       managedProtection: writes && timer, coordinatedExits: writes, cancelRemainder: writes,
-      cancellationTimer: timer, entryRiskData: false };
+      cancellationTimer: timer, entryRiskData: Boolean(this.source.journal && this.source.client.getOrderBook
+        && this.source.client.getValuationCandles && this.source.client.getTransaction && this.source.client.getTransactionsPage) };
+  }
+  async refreshAccounting() {
+    const client = this.source.client;
+    if (this.source.journal && client.getOrderBook && client.getValuationCandles && client.getTransaction && client.getTransactionsPage) {
+      await refreshSourceAccounting(client as Parameters<typeof refreshSourceAccounting>[0], this.source.journal, this.clock);
+    }
   }
   private validateLease(lease: Lease) {
     if (lease.key !== `execution:v1:${this.accountId}:lock`) throw new Error('source_lease_account_mismatch');
@@ -81,7 +90,7 @@ export class ConnectedRevolutVenue implements CancellationPort {
         try { await this.lookup(write.decisionKey, lease); } catch { /* retain uncertainty; other symbols can still be protected */ }
       }
       for (const decision of await this.source.journal.accountDecisions(this.accountId)) {
-        if (decision.source && !terminal(decision.source)) {
+        if (decision.source && (!terminal(decision.source) || (decimal(decision.source.filledQuantity).gt(0) && decision.source.feeEur === null))) {
           try { await this.lookup(decision.key, lease); } catch { /* preserved; submitting against uncertainty is blocked */ }
         }
       }
@@ -93,7 +102,7 @@ export class ConnectedRevolutVenue implements CancellationPort {
           if (!snapshot.positions.some(position => position.id === protectionPositionId(p.entryKey)) && entry && terminal(entry)) {
             const decisions = await this.source.journal.accountDecisions(this.accountId);
             const exitKeys = decisions.filter(d => d.intent.side === 'sell' && d.intent.positionId === protectionPositionId(p.entryKey)).map(d => d.key);
-            const sold = snapshot.orders.filter(o => exitKeys.includes(o.clientKey)).reduce((sum, o) => sum.add(o.filledQuantity), new D(0));
+            const sold = snapshot.orders.filter(o => exitKeys.includes(o.clientKey)).reduce((sum, o) => sum.add(o.filledQuantity).add(o.baseFeeQuantity ?? '0'), decimal(entry.baseFeeQuantity ?? '0'));
             if (sold.eq(entry.filledQuantity)) await this.source.journal.saveProtection(lease, { ...p, quantity: '0', entryFilled: entry.filledQuantity,
               exitedQuantity: sold.toFixed(), status: 'closed', lastError: null, updatedAt: this.clock() });
           }
@@ -110,7 +119,7 @@ export class ConnectedRevolutVenue implements CancellationPort {
       console.info(JSON.stringify({ type: 'execution.v1.source_archive', ...result }));
     }
   }
-  async account(options: { protectionOnly?: boolean } = {}): Promise<Account> {
+  async account(options: { protectionOnly?: boolean; preSubmitKey?: string } = {}): Promise<Account> {
     const balances = await this.source.client.getBalances();
     const observedAt = balances.length ? Math.min(...balances.map(b => seconds(b.observedAt))) : this.clock();
     const eur = balances.find(b => b.currency === 'EUR');
@@ -140,6 +149,10 @@ export class ConnectedRevolutVenue implements CancellationPort {
       const decision = identities.get(order.clientOrderId);
       return decision ? ownedOrder(order, decision) : sourceOrder(order);
     });
+    // Terminal source confirmations remain part of v1's archive even when the
+    // source's default history window stops returning them. Open/uncertain
+    // orders still require fresh source reconciliation.
+    for (const d of decisions) if (d.source && terminal(d.source) && !orders.some(o => o.id === d.source!.id)) orders.push(d.source);
     const managed = managedPositions(balances, orders, decisions, saved);
     const positions: Position[] = balances.filter(b => b.currency !== 'EUR' && decimal(b.total).gt(0)).map<Position>(b => {
       const own = managed.find(p => p.symbol === `${b.currency}-EUR`);
@@ -158,20 +171,68 @@ export class ConnectedRevolutVenue implements CancellationPort {
     // the account response observation, never the time of a saved legacy record.
     // Transfer-neutral history is not inferred from current holdings. Managed
     // quantities above come only from this version's matching source orders.
-    return { id: this.accountId, sourceAt: observedAt, readAt: this.clock(), availableEur: eur.available,
+    const account: Account = { id: this.accountId, sourceAt: observedAt, readAt: this.clock(), availableEur: eur.available,
       balances: balances.map(({ currency, total, available, reserved }) => ({ currency, total, available, reserved })),
       positions, orders, equityEur: null, valuationAt: null, valuationComplete: false,
       trades: [], equityHistory: [], fills: null, tradeHistoryComplete: false, archiveStart: null };
+    if (options.protectionOnly || !this.source.client.getOrderBook || !this.source.journal) return account;
+    const evidence = await this.source.journal.accounting(this.accountId);
+    const blockers: string[] = [];
+    try {
+      const amounts = sourceAmounts(balances);
+      const quotes = await this.quotes(positions.map(p => p.symbol));
+      let equity = decimal(eur.total);
+      for (const p of positions) {
+        const quote = quotes.find(q => q.symbol === p.symbol);
+        if (!quote) throw new Error('accounting_price_coverage_incomplete');
+        p.marketValueEur = decimal(p.quantity).mul(quote.bid).toFixed();
+        p.valuationAt = this.clock(); equity = equity.add(p.marketValueEur);
+      }
+      account.equityEur = equity.toFixed(); account.valuationAt = this.clock(); account.valuationComplete = true;
+      if (!evidence?.anchor) blockers.push('accounting_evidence_missing');
+      else {
+        if (evidence.lastError) blockers.push(evidence.lastError);
+        if (!sameAmounts(evidence.anchor.amounts, amounts)) blockers.push('accounting_balance_changed');
+        if (!fresh(Math.floor(evidence.anchor.at), this.clock(), CONFIG.accountMaxAgeSeconds)) blockers.push('accounting_evidence_stale');
+        // The live tail can extend only a fresh, reconciled source snapshot.
+        // Any changed balance requires transaction coverage before a new entry.
+        account.equityHistory = [...evidence.observations.filter(v => v.at < account.valuationAt!),
+          { id: `live:${account.valuationAt}`, at: account.valuationAt, equityEur: account.equityEur,
+            netFlowEur: blockers.length ? null : '0', beforeFlowEquityEur: null, transfersComplete: blockers.length === 0,
+            evidence: { kind: 'source_snapshot', markAt: account.valuationAt, transactionIds: [] } }];
+        account.archiveStart = evidence.observations[0]?.at ?? null;
+      }
+    } catch (error) { blockers.push(error instanceof Error && error.message.startsWith('accounting_') ? error.message : 'accounting_source_valuation_unavailable'); }
+    const results = sourceTradeResults(decisions.filter(d => d.key !== options.preSubmitKey), orders, saved);
+    account.trades = results.trades; account.tradeHistoryComplete = results.complete;
+    const filled = orders.filter(o => o.managed && decimal(o.filledQuantity).gt(0));
+    if (evidence && filled.every(o => evidence.fills.filter(f => f.orderId === o.id).reduce((n, f) => n.add(f.quantity), new D(0)).eq(o.filledQuantity))) {
+      account.fills = evidence.fills.map(f => ({ id: f.id, orderId: f.orderId, symbol: f.symbol, side: f.side!, at: seconds(f.createdAt),
+        quantity: f.quantity, price: f.price, feeEur: f.feeCurrency === 'EUR' ? f.fee ?? null : null, slippageEur: null }));
+    }
+    if (filled.some(o => o.averageFillPrice && o.feeEur !== null
+      && decimal(o.feeEur).gt(decimal(o.filledQuantity).mul(o.averageFillPrice).mul(FEE_SCHEDULE.taker)))) blockers.push('source_fee_schedule_changed');
+    if (!results.complete) blockers.push('trade_history_incomplete');
+    if (results.trades.some(t => t.feesEur === null || t.netPnlEur === null)) blockers.push('closed_trade_costs_missing');
+    account.dataBlockers = [...new Set(blockers)];
+    return account;
   }
   async instruments(): Promise<Instrument[]> {
     return (await this.source.instruments()).map(i => ({ symbol: i.symbol, active: i.status === 'active',
       quoteCurrency: i.quote, quantityStep: i.baseStep, priceStep: i.quoteStep,
       minimumQuantity: i.minOrderSize, minimumNotional: i.minOrderSizeQuote,
-      maximumQuantity: i.maxOrderSize, costs: null }));
+      maximumQuantity: i.maxOrderSize, costs: this.source.client.getOrderBook ? revolutCosts(seconds(i.observedAt)) : null }));
   }
   async quotes(symbols: string[]): Promise<Quote[]> {
     const result: Quote[] = [];
     for (const symbol of [...new Set(symbols)]) {
+      if (this.source.client.getOrderBook) {
+        const book = await this.source.client.getOrderBook(symbol), readAt = this.clock(), sourceAt = Math.floor(book.sourceAt / 1000);
+        if (!fresh(sourceAt, readAt, CONFIG.quoteMaxAgeSeconds)) throw new Error('quote_stale');
+        result.push({ symbol, bid: book.bids[0].price, ask: book.asks[0].price, sourceAt, readAt, source: 'Revolut X authenticated order book',
+          depth: { bids: book.bids, asks: book.asks } });
+        continue;
+      }
       const m = await this.source.market(symbol), readAt = this.clock(), sourceAt = Math.floor(m.sourceTimestamp / 1000);
       if (!fresh(sourceAt, readAt, 15)) throw new Error('quote_stale');
       result.push({ symbol, bid: m.bid, ask: m.ask, sourceAt, readAt, source: m.source });
@@ -282,7 +343,10 @@ export class ConnectedRevolutVenue implements CancellationPort {
         if (!state.entriesEnabled) throw new Error('entries_paused');
         const heartbeat = await journal.protectionHeartbeat(this.accountId);
         if (!heartbeat || !fresh(heartbeat.at, this.clock(), CONFIG.protectionHeartbeatMaxAgeSeconds) || !['idle', 'watching'].includes(heartbeat.status)) throw new Error('protection_monitor_stale');
-        const account = await this.account(), instrument = (await this.instruments()).find(i => i.symbol === intent.symbol);
+        // This exact decision has just been allocated under this lease and the
+        // non-expiring write claim has not been made yet. Exclude only it from
+        // historical-result coverage; other uncertain decisions remain blockers.
+        const account = await this.account({ preSubmitKey: intent.key }), instrument = (await this.instruments()).find(i => i.symbol === intent.symbol);
         const quote = (await this.quotes([intent.symbol]))[0];
         if (!instrument || this.clock() >= intent.expiresAt) throw new Error('entry_expired_before_send');
         const candidate = planBuy(account, intent.signal, instrument, quote, evaluateRisk(state.risk, account.trades, account.equityHistory, account.tradeHistoryComplete, this.clock()), this.clock());

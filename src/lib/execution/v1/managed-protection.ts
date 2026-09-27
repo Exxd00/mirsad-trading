@@ -31,7 +31,7 @@ export function managedPositions(balances: RevolutBalance[], orders: SourceOrder
       if (decision.source && !order) throw new Error('managed_exit_source_missing');
       if (order) exits.push(order);
     }
-    const sold = exits.reduce((sum, o) => sum.add(decimal(o.filledQuantity)), new D(0));
+    const sold = exits.reduce((sum, o) => sum.add(decimal(o.filledQuantity)).add(o.baseFeeQuantity ?? '0'), decimal(source.baseFeeQuantity ?? '0'));
     if (sold.lt(0) || sold.gt(bought) || (old && sold.lt(old.exitedQuantity))) throw new Error('managed_exit_fill_mismatch');
     const quantity = bought.sub(sold);
     if (!quantity.gt(0)) continue;

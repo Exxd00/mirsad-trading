@@ -93,6 +93,10 @@ export interface RevolutMarket {
   sourceTimestamp: number; candleSourceTimestamp: number; observedAt: string;
   candles: RevolutCandle[];
 }
+export interface RevolutOrderBook {
+  symbol: string; sourceAt: number; readAt: number;
+  bids: { price: string; quantity: string }[]; asks: { price: string; quantity: string }[];
+}
 export class BrokerApiError extends Error {
   readonly code: string;
   readonly status?: number;
@@ -311,6 +315,36 @@ export class RevolutXClient {
     const result = parse(transactionSchema, await this.#request(`/api/1.0/transactions/${id}`));
     if (result.id !== id) throw new BrokerApiError('Broker returned a different transaction.', { code: 'INVALID_RESPONSE' });
     return normalizeTransaction(result);
+  }
+  async getOrderBook(symbol: string): Promise<RevolutOrderBook> {
+    SYMBOL.parse(symbol);
+    const level = z.object({ p: POSITIVE, q: POSITIVE, pc: z.string(), qc: z.string() });
+    const result = parse(z.object({ data: z.object({ bids: z.array(level).min(1), asks: z.array(level).min(1) }),
+      metadata: z.object({ timestamp: z.number().int().positive().safe() }) }),
+    await this.#request(`/api/1.0/order-book/${symbol}`, new URLSearchParams({ limit: '50' })));
+    const map = (rows: z.infer<typeof level>[], side: 'buy' | 'sell') => {
+      if (rows.some(r => `${r.qc}-${r.pc}` !== symbol) || new Set(rows.map(r => new Decimal(r.p).toFixed())).size !== rows.length) {
+        throw new BrokerApiError('Order book identity mismatch.', { code: 'INVALID_RESPONSE' });
+      }
+      return rows.map(r => ({ price: r.p, quantity: r.q })).sort((a, b) => new Decimal(a.price).cmp(b.price) * (side === 'buy' ? -1 : 1));
+    };
+    const bids = map(result.data.bids, 'buy'), asks = map(result.data.asks, 'sell');
+    if (new Decimal(bids[0].price).gt(asks[0].price)) throw new BrokerApiError('Crossed order book.', { code: 'INVALID_RESPONSE' });
+    return { symbol, bids, asks, sourceAt: result.metadata.timestamp, readAt: Date.now() };
+  }
+  /** Historical accounting marks, not executable quotes. Never interpolate a
+   * missing candle or substitute a later price for an earlier flow. */
+  async getValuationCandles(symbol: string, since: number, until: number) {
+    SYMBOL.parse(symbol);
+    if (![since, until].every(Number.isSafeInteger) || since < 0 || until <= since || until - since > 86_400_000) {
+      throw new BrokerApiError('Invalid valuation candle window.', { code: 'VALIDATION' });
+    }
+    const bar = z.object({ start: z.number().int().safe(), close: POSITIVE });
+    const result = parse(z.object({ data: z.array(bar), metadata: z.object({ timestamp: z.number().int().safe() }) }),
+      await this.#request(`/api/1.0/candles/${symbol}`, new URLSearchParams({ interval: '1', since: String(since), until: String(until) })));
+    if (result.metadata.timestamp < until) throw new BrokerApiError('Incomplete historical marks.', { code: 'INCOMPLETE_HISTORY' });
+    return result.data.filter(c => c.start >= since && c.start + 60_000 <= until)
+      .map(c => ({ at: (c.start + 60_000) / 1000, price: c.close }));
   }
   async findOrderByClientId(clientId: string): Promise<RevolutOrder | null> {
     UUID.parse(clientId);

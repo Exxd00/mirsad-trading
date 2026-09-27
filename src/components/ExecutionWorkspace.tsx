@@ -6,9 +6,10 @@ import type { ExecutionReport } from '@/lib/execution/service';
 import styles from '@/app/automation/page.module.css';
 
 export function ExecutionWorkspace() {
-  const [report, setReport] = useState<ExecutionReport | null>(null);
+  const [report, setReport] = useState<(ExecutionReport & { csrfToken: string }) | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [mutating, setMutating] = useState(false);
   const refresh = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     try {
@@ -16,12 +17,25 @@ export function ExecutionWorkspace() {
       if (response.status === 401) throw new Error('انتهت جلسة الدخول. افتح الصفحة الرئيسية ثم سجّل الدخول مجددًا.');
       if (!response.ok) throw new Error('تعذر تحديث حالة المحرك.');
       const data = await response.json();
-      if (data?.mode !== 'execution-core' || data?.version !== '1.0.0' || !data?.policy) throw new Error('تقرير المحرك غير مكتمل.');
+      if (data?.mode !== 'execution-core' || data?.version !== '1.0.0' || !data?.policy || !data?.accounting || typeof data.csrfToken !== 'string') throw new Error('تقرير المحرك غير مكتمل.');
       if (!signal?.aborted) { setReport(data); setError(''); }
     } catch (failure) {
       if (!signal?.aborted) setError(failure instanceof Error ? failure.message : 'تعذر تحديث الحالة.');
     } finally { if (!signal?.aborted) setLoading(false); }
   }, []);
+  const action = async (kind: 'check' | 'settings', entriesEnabled?: boolean) => {
+    if (!report || mutating) return;
+    setMutating(true); setError('');
+    try {
+      const response = await fetch(`/api/execution/${kind}`, { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'x-csrf-token': report.csrfToken },
+        body: JSON.stringify(kind === 'settings' ? { entriesEnabled } : {}) });
+      const result = await response.json();
+      if (!response.ok || result.status === 'blocked' || result.status === 'busy') throw new Error('لم يكتمل الطلب. راجع أسباب الجاهزية ثم أعد الفحص.');
+      await refresh();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'تعذر إكمال الطلب.'); }
+    finally { setMutating(false); }
+  };
   useEffect(() => {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
@@ -41,14 +55,47 @@ export function ExecutionWorkspace() {
         <p className={styles.description}>يقرأ المحرك الحساب المتصل في الصفحة الرئيسية ويحسب تقاطعات EMA من الشموع المكتملة.</p></div>
       {report && <span className={`${styles.state} ${styles.paused}`}>{report.enabled ? 'المحرك مفعّل' : report.account_connected ? 'الحساب متصل · إرسال الأوامر متوقف' : 'بانتظار اتصال الحساب'}</span>}
     </header>
-    <div className={styles.controls}><button className={styles.button} disabled={loading} onClick={() => void refresh()}>{loading ? 'جارٍ التحديث…' : 'تحديث الحالة'}</button></div>
+    <div className={styles.controls}><button className={styles.button} disabled={loading || mutating} onClick={() => void refresh()}>{loading ? 'جارٍ التحديث…' : 'تحديث الحالة'}</button>
+      {report?.account_connected && <><button className={styles.button} disabled={mutating} onClick={() => void action('check')}>{mutating ? 'جارٍ الفحص…' : 'فحص الجاهزية الآن'}</button>
+        <button className={styles.button} disabled={mutating || (!report.entries_requested && (!report.execution_ready || !report.protection.heartbeat_fresh))}
+          onClick={() => void action('settings', !report.entries_requested)}>{report.entries_requested ? 'إيقاف الدخول الجديد' : 'تفعيل الشراء والبيع الآلي'}</button></>}
+    </div>
     {error && <p role="alert" className={`${styles.message} ${styles.error}`}>{error}</p>}
     {!report && loading && <p className={styles.loading}>جارٍ تحميل الحالة…</p>}
     {report && <>
       <p role="status" className={`${styles.message} ${styles.warning}`}>{report.account_connected
         ? report.enabled ? 'الدخول الآلي مفعّل. يدير مرصاد حماية المراكز التي يفتحها هذا الإصدار.' : 'الحساب متصل بـRevolut X. الحماية مضبوطة داخل مرصاد؛ إرسال الأوامر متوقف حتى اكتمال جاهزية التنفيذ وتفعيله. المراكز والأوامر السابقة تبقى خارج إدارته.'
         : 'تعذر العثور على اتصال الحساب الموجود. راجع اتصال الحساب في الصفحة الرئيسية.'}</p>
-      {report.account_connected && !report.execution_ready && <p className={styles.sectionNote}>المتبقي لجاهزية الدخول: احتساب تكلفة الصفقة كاملة، وسجل تقييم المخاطر الذي يفصل نتائج التداول عن الإيداعات والسحوبات.</p>}
+      {report.account_connected && <section className={styles.panel}>
+        <div className={styles.panelHeading}><h2>التكاليف وجاهزية المخاطر</h2><span className={`${styles.state} ${styles.paused}`}>{report.execution_ready ? 'جاهز وفق البيانات الحالية' : 'الدخول معلّق لحين اكتمال البيانات'}</span></div>
+        <p className={styles.sectionNote}>قيمة الحساب: {report.accounting.equity_eur === null ? 'غير مكتملة' : `${report.accounting.equity_eur} EUR`} · تقييمات محفوظة: {report.accounting.observations} · آخر جمع: {report.accounting.checked_at ? new Date(report.accounting.checked_at * 1000).toISOString() : 'لم يكتمل بعد'}</p>
+        <p className={styles.sectionNote}>تقدير الصفقة يستخدم رسوم آخذ السيولة {percent(report.accounting.fee_schedule.taker)} لكل جهة، وفرق السعر مرة واحدة، وأثر كمية البيع في دفتر الأوامر. لا يُسمح بالدخول إذا تجاوز الإجمالي {percent(report.policy.maximum_cost)} أو نقص العمق.</p>
+        <p className={styles.subtle}>تقييمات منتصف الليل والتحويلات تستخدم إغلاق آخر دقيقة مكتملة من Revolut عند الحدث؛ هي أسعار تقييم تاريخية وليست ضمانًا لسعر البيع. تظهر الرسوم الفعلية بعد تأكيد المصدر.</p>
+        {!!report.blockers.length && <ul className={styles.sectionNote}>{report.blockers.map(reason => <li key={reason}>{({
+          accounting_evidence_stale: 'يلزم تحديث سجل المخاطر؛ اضغط «فحص الجاهزية الآن».',
+          valuation_or_transfers_missing: 'لم تكتمل مطابقة التقييم مع التحويلات.',
+          accounting_evidence_missing: 'بانتظار أول سجل تقييم موثق للحساب.',
+          accounting_balance_changed: 'تغيّر رصيد المصدر؛ تجري مطابقة معاملاته قبل الدخول.',
+          accounting_transaction_pending: 'معاملة لدى المصدر لم تُحسم بعد.',
+          accounting_historical_price_missing: 'السعر التاريخي اللازم لتقييم الحساب غير متاح.',
+          accounting_source_reconciliation_failed: 'حركة الرصيد لا تطابق المعاملات المكتملة؛ يلزم حسم بيانات المصدر.',
+          accounting_source_revision: 'عدّل المصدر معاملة سبق إدراجها؛ يلزم تسوية سجل المخاطر.',
+          accounting_late_transaction: 'ظهرت معاملة متأخرة تؤثر في تقييم سابق؛ يلزم تسويتها.',
+          accounting_balance_changed_during_read: 'تغيّر الرصيد أثناء الفحص؛ أعد الفحص بعد استقرار المعاملات.',
+          accounting_transaction_details_incomplete: 'تفاصيل بعض معاملات المصدر لم تكتمل.',
+          accounting_transaction_coverage_incomplete: 'قراءة جميع صفحات المعاملات لم تكتمل.',
+          accounting_read_budget: 'استغرقت قراءة المصدر وقتًا أطول من المهلة؛ أعد الفحص.',
+          accounting_backfill_required: 'توجد فجوة في سجل المصدر تحتاج استكمالًا قبل الدخول.',
+          accounting_source_unavailable: 'تعذر الوصول إلى بيانات المصدر الآن.',
+          day_start_valuation_missing: 'تقييم بداية يوم برلين لم يكتمل.',
+          daily_loss_limit: 'وصلت الخسارة اليومية إلى الحد المحدد؛ يستمر وقف الدخول حتى اليوم التالي.',
+          source_fee_schedule_changed: 'رسوم المصدر تختلف عن الجدول المراجع؛ يلزم تحديث التكاليف.',
+          trade_history_incomplete: 'هناك نتائج أوامر تحتاج تأكيد المصدر.',
+          closed_trade_costs_missing: 'رسوم صفقة مغلقة غير مؤكدة بعد.',
+          execution_capabilities_missing: 'جزء من اتصال التنفيذ غير متاح.',
+        } as Record<string, string>)[reason] ?? 'تعذر تأكيد أحد بيانات المصدر. أعد الفحص؛ يبقى الدخول متوقفًا حتى اكتمال التسوية.'}</li>)}</ul>}
+        {!report.entries_requested && report.execution_ready && <p className={styles.sectionNote}>الفحص لا يفعّل التداول. زر «تفعيل الشراء والبيع الآلي» يشغّل أوامر الحساب وإدارة الحماية داخل مرصاد وفق القواعد المعروضة.</p>}
+      </section>}
       <section className={styles.panel}>
         <div className={styles.panelHeading}><h2>الحماية داخل مرصاد</h2><span className={`${styles.state} ${styles.paused}`}>{!report.protection.heartbeat_fresh ? 'المراقبة غير مؤكدة أو متأخرة'
           : report.protection.heartbeat?.status === 'blocked' ? 'تحتاج متابعة' : report.protection.heartbeat?.managedPositions ? 'تجري مراقبة المراكز' : 'المراقبة تعمل · لا مراكز مدارة'}</span></div>

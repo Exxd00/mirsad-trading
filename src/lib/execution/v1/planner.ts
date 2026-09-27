@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { CONFIG, D, decimal, positive, fresh, terminal, type Account, type BuyIntent, type Instrument,
   type Quote, type RiskResult, type Signal, type SellIntent } from './model';
+import { exitDepthValue } from './costs';
 const keyFor = (account: string, decision: string) => createHash('sha256').update(JSON.stringify([account, decision])).digest('hex');
 export function planBuy(account: Account, signal: Signal, instrument: Instrument, quote: Quote, risk: RiskResult, now: number): { intent: BuyIntent | null; reason: string } {
   const blocked = (reason: string) => ({ intent: null, reason });
@@ -12,6 +13,7 @@ export function planBuy(account: Account, signal: Signal, instrument: Instrument
   const ask = positive(quote.ask), bid = positive(quote.bid);
   if (bid.gt(ask)) return blocked('invalid_quote');
   if (risk.entryBlocked) return blocked(risk.entryBlocked);
+  if (account.dataBlockers?.length) return blocked(account.dataBlockers[0]);
   const active = account.orders.filter(o => !terminal(o));
   if (account.positions.some(p => p.symbol === signal.symbol && decimal(p.quantity).gt(0)) || active.some(o => o.side === 'buy' && o.symbol === signal.symbol)) return blocked('position_or_buy_exists');
   // Unknown account-level entry reservation prevents new entries, never exits.
@@ -49,9 +51,14 @@ export function planBuy(account: Account, signal: Signal, instrument: Instrument
   if (!quantity.gt(0) || quantity.lt(instrument.minimumQuantity) || notional.lt(instrument.minimumNotional)) return blocked('budget_below_minimum');
   if (notional.add(entryFee).gt(budget)) return blocked('budget_rounding_violation');
   const exitNotional = quantity.mul(bid);
+  let depthImpact = new D(0);
+  if (costs.depthRequired) {
+    try { depthImpact = exitNotional.sub(exitDepthValue(quote, quantity.toFixed())); }
+    catch (error) { return blocked(error instanceof Error ? error.message : 'order_book_missing'); }
+  }
   // Fees + one quoted spread + incremental slippage, each counted exactly once.
   const roundTrip = entryFee.add(exitNotional.mul(costs.sellFeeRate)).add(costs.sellFixedEur)
-    .add(quantity.mul(limit.sub(bid))).add(notional.mul(costs.buySlippageRate)).add(exitNotional.mul(costs.sellSlippageRate));
+    .add(quantity.mul(limit.sub(bid))).add(depthImpact).add(notional.mul(costs.buySlippageRate)).add(exitNotional.mul(costs.sellSlippageRate));
   const fraction = roundTrip.div(notional);
   if (fraction.gt(CONFIG.maximumRoundTripCost)) return blocked('round_trip_cost_limit');
   return { reason: 'entry', intent: { side: 'buy', type: 'limit', symbol: signal.symbol, signal,

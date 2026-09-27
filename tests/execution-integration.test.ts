@@ -9,7 +9,7 @@ import type { CancellationPort } from '../src/lib/execution/v1/deadline';
 import { ConnectedRevolutVenue } from '../src/lib/execution/v1/revolut-venue';
 const auth = vi.hoisted(() => ({ requireSession: vi.fn(), requireMutation: vi.fn(), refreshSessionCookie: vi.fn() }));
 const db = vi.hoisted(() => ({ query: vi.fn() }));
-const host = vi.hoisted(() => ({ connectedVenue: vi.fn<() => Promise<CancellationPort | null>>(async () => null), runHost: vi.fn(), runTick: vi.fn(), runProtection: vi.fn(), entrySwitch: vi.fn(), handleDeadline: vi.fn() }));
+const host = vi.hoisted(() => ({ connectedVenue: vi.fn<() => Promise<CancellationPort | null>>(async () => null), runHost: vi.fn(), runTick: vi.fn(), runProtection: vi.fn(), entrySwitch: vi.fn(), handleDeadline: vi.fn(), refreshReadiness: vi.fn() }));
 vi.mock('../src/lib/auth', async original => ({ ...(await original<typeof import('../src/lib/auth')>()), ...auth }));
 vi.mock('../src/lib/db', async original => ({ ...(await original<typeof import('../src/lib/db')>()), ...db }));
 vi.mock('../src/lib/execution/v1/host', () => host);
@@ -19,7 +19,8 @@ const request = (action: string, data: unknown = {}, token?: string) => new Requ
 beforeEach(() => {
   vi.clearAllMocks(); db.query.mockResolvedValue({ rows: [], rowCount: 0 });
   host.connectedVenue.mockResolvedValue(null);
-  auth.requireSession.mockResolvedValue({ id: 'test-session' }); auth.requireMutation.mockResolvedValue({ id: 'test-session' }); auth.refreshSessionCookie.mockResolvedValue('test-session=renewed');
+  auth.requireSession.mockResolvedValue({ id: 'test-session', csrfToken: 'test-csrf-token' }); auth.requireMutation.mockResolvedValue({ id: 'test-session' }); auth.refreshSessionCookie.mockResolvedValue('test-session=renewed');
+  host.refreshReadiness.mockResolvedValue({ status: 'checked' });
   host.runHost.mockResolvedValue({ status: 'blocked', reason: 'order_api_not_connected' });
   host.runTick.mockResolvedValue({ status: 'blocked', reason: 'order_api_not_connected' });
   host.runProtection.mockResolvedValue({ status: 'idle' });
@@ -46,6 +47,15 @@ describe('scoped native account integration and authenticated endpoints', () => 
     host.entrySwitch.mockResolvedValueOnce({ status: 'blocked', reason: 'execution_capabilities_missing' });
     expect((await POST(request('settings', { entriesEnabled: true }), context('settings'))).status).toBe(409);
     expect((await POST(request('run', { signal: 'injected' }), context('run'))).status).toBe(400);
+  });
+  it('checks readiness through authenticated read-only source work without toggling execution or running a trading cycle', async () => {
+    expect((await POST(request('check'), context('check'))).status).toBe(200);
+    expect(host.refreshReadiness).toHaveBeenCalledOnce(); expect(host.entrySwitch).not.toHaveBeenCalled(); expect(host.runHost).not.toHaveBeenCalled();
+    expect((await POST(request('check', { entriesEnabled: true }), context('check'))).status).toBe(400);
+    auth.requireMutation.mockRejectedValueOnce(new AuthError(403, 'CSRF_REQUIRED', 'CSRF required'));
+    expect((await POST(request('check'), context('check'))).status).toBe(403);
+    const report = await GET(new Request('https://mirsad.test/api/execution/report'), context('report'));
+    expect((await report.json()).csrfToken).toBe('test-csrf-token');
   });
   it.each(['production', 'preview', 'development'])('adds no platform classification gate for %s', async value => {
     vi.stubEnv('VERCEL_ENV', value);

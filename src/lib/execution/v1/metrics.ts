@@ -8,6 +8,7 @@ export function tradeMetrics(input: ClosedTrade[], from: number, until: number, 
   const wins = complete.filter(t => decimal(t.netPnlEur!).gt(0)), losses = complete.filter(t => decimal(t.netPnlEur!).lt(0));
   const grossProfit = sum(wins.map(t => t.netPnlEur!)), grossLoss = sum(losses.map(t => t.netPnlEur!)).abs();
   const r = complete.map(t => {
+    if (t.averageEntryPrice === null || t.originalStop === null) return null;
     const originalRisk = decimal(t.quantity).mul(decimal(t.averageEntryPrice).sub(t.originalStop));
     return originalRisk.gt(0) ? decimal(t.netPnlEur!).div(originalRisk) : null;
   });

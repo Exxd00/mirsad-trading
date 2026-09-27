@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { requireMutation, requireSession, refreshSessionCookie } from '@/lib/auth';
 import { json, failure, body } from '@/lib/http';
 import { executionReport, runExecution } from '@/lib/execution/service';
-import { entrySwitch, handleDeadline, runTick, runProtection } from '@/lib/execution/v1/host';
+import { entrySwitch, handleDeadline, runTick, runProtection, refreshReadiness } from '@/lib/execution/v1/host';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -19,7 +19,7 @@ export async function GET(request: Request, context: Context) {
   try {
     const session = await requireSession(request);
     if ((await context.params).action.join('/') !== 'report') return json({ error: 'المسار غير موجود.' }, 404);
-    const response = json(await executionReport());
+    const response = json({ ...await executionReport(), csrfToken: session.csrfToken });
     response.headers.append('Set-Cookie', await refreshSessionCookie(request, session));
     return response;
   } catch (error) { return failure(error); }
@@ -31,6 +31,10 @@ export async function POST(request: Request, context: Context) {
       if (!schedulerAuthorized(request)) return json({ error: 'authentication_required' }, 401);
     } else await requireMutation(request);
     const data = await body(request);
+    if (action === 'check') {
+      z.object({}).strict().parse(data);
+      return json(await refreshReadiness());
+    }
     if (action === 'protect') {
       z.object({}).strict().parse(data);
       const result = await runProtection(); return json(result, result.status === 'blocked' ? 409 : 200);
