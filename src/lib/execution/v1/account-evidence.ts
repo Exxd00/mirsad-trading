@@ -65,7 +65,7 @@ export async function refreshSourceAccounting(client: Client, journal: Journal, 
     const times = [...(old.anchor ? [] : [start]), ...movements.filter(m => Object.values(m!.flow).some(v => !decimal(v).eq(0))).map(m => m!.at)];
     for (let midnight = berlinBounds(start).end; midnight <= at; midnight = berlinBounds(midnight).end) times.push(midnight);
     const currencies = [...new Set([...Object.keys(amounts).filter(c => !decimal(amounts[c]).eq(0)),
-      ...movements.flatMap(m => Object.keys(m!.delta))])].filter(c => c !== 'EUR');
+      ...movements.flatMap(m => [...Object.keys(m!.delta), ...Object.keys(m!.flow)])])].filter(c => c !== 'EUR');
     if (currencies.length > 20) throw new Error('accounting_price_coverage_incomplete');
     const marks: Mark[] = [];
     let current = decimal(amounts.EUR);

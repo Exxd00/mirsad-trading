@@ -38,6 +38,32 @@ describe('real source valuation evidence', () => {
     const rows = extendValuations(emptyAccounting(), { at: NOW, amounts: { EUR: '999.9' } }, [withdrawal, deposit], [], '999.9');
     expect(neutralSeries(rows, NOW).series.at(-1)?.index).toBe('0.9999');
   });
+  it('values converted withdrawals from actual external net proceeds and counts the destination fee once', () => {
+    const withdrawal = tx({ type: 'sell', source: leg('1', 'revolut_x', 'AAA'),
+      destination: { ...leg('99.9', 'revolut', 'EUR'), fee: '0.1', feeCurrency: 'EUR' } });
+    expect(transactionMovement(withdrawal)).toMatchObject({ delta: { AAA: '-1' }, flow: { EUR: '-99.9' } });
+    const marks = [{ currency: 'AAA', at: baseline, price: '100' }, { currency: 'AAA', at: NOW - 60, price: '100' }];
+    const rows = extendValuations(emptyAccounting(), { at: NOW, amounts: { EUR: '0', AAA: '9' } }, [withdrawal], marks, '900');
+    expect(rows[0].equityEur).toBe('1000');
+    expect(rows[1]).toMatchObject({ equityEur: '900', netFlowEur: '-99.9', beforeFlowEquityEur: '999.9' });
+    expect(neutralSeries(rows, NOW).series.at(-1)?.index).toBe('0.9999');
+  });
+  it('requires disclosed conversion fee evidence and rejects invalid fees', () => {
+    const withdrawal = tx({ type: 'sell', source: leg('1', 'revolut_x', 'AAA'), destination: leg('99.9', 'revolut', 'EUR') });
+    expect(() => transactionMovement(withdrawal)).toThrow('accounting_transfer_fee_missing');
+    expect(() => transactionMovement({ ...withdrawal, destination: { ...withdrawal.destination!, fee: '0.1', feeCurrency: 'AAA' } })).toThrow('accounting_transfer_fee_missing');
+    expect(() => transactionMovement({ ...withdrawal, destination: { ...withdrawal.destination!, fee: '-0.1', feeCurrency: 'EUR' } })).toThrow('accounting_transfer_amount_invalid');
+  });
+  it('requires an event valuation for a converted payout currency that is not held in the account', () => {
+    const withdrawal = tx({ type: 'sell', source: leg('1', 'revolut_x', 'AAA'),
+      destination: { ...leg('1.98', 'revolut', 'BBB'), fee: '0.02', feeCurrency: 'BBB' } });
+    const marks = [{ currency: 'AAA', at: baseline, price: '100' }, { currency: 'AAA', at: NOW - 60, price: '100' }];
+    const end = { at: NOW, amounts: { EUR: '0', AAA: '9' } };
+    expect(() => extendValuations(emptyAccounting(), end, [withdrawal], marks, '900')).toThrow('accounting_historical_price_missing');
+    const rows = extendValuations(emptyAccounting(), end, [withdrawal], [...marks, { currency: 'BBB', at: NOW - 60, price: '50' }], '900');
+    expect(rows[1]).toMatchObject({ netFlowEur: '-99', beforeFlowEquityEur: '999' });
+    expect(neutralSeries(rows, NOW).series.at(-1)?.index).toBe('0.999');
+  });
   it('uses dated source marks for a crypto transfer and retains later market gains', () => {
     const crypto = tx({ source: leg('1', 'revolut', 'AAA'), destination: leg('1', 'revolut_x', 'AAA') });
     const marks = [{ currency: 'AAA', at: baseline, price: '100' }, { currency: 'AAA', at: NOW - 60, price: '100' }];
@@ -136,6 +162,20 @@ describe('durable read-only accounting collector', () => {
     const lease = (await j.acquire(CONFIG.accountId))!;
     expect(await j.state(lease)).toMatchObject({ entriesEnabled: false });
     expect((await j.state(lease)).executionArmed).not.toBe(true); await j.release(lease);
+  });
+  it('collects valuation evidence for externally received conversion currency without adding it to source balances', async () => {
+    const j = new SqlJournal(), c = client();
+    const withdrawal = tx({ type: 'sell', source: leg('1', 'revolut_x', 'AAA'),
+      destination: { ...leg('1.98', 'revolut', 'BBB'), fee: '0.02', feeCurrency: 'BBB' } });
+    c.getTransactionsPage.mockResolvedValue({ transactions: [withdrawal], nextCursor: null, sourceAt: new Date(NOW * 1000).toISOString() });
+    c.getTransaction.mockResolvedValue(withdrawal);
+    c.getValuationCandles.mockImplementation(async (symbol: string) => [baseline, NOW - 60].map(at => ({ at, price: symbol === 'AAA-EUR' ? '100' : '50' })));
+    await refreshSourceAccounting(c, j, () => NOW);
+    const saved = (await j.accounting(CONFIG.accountId))!;
+    expect(saved.lastError).toBeNull();
+    expect(saved.anchor?.amounts).toEqual({ EUR: '1000' });
+    expect(c.getValuationCandles.mock.calls.map(args => args[0])).toEqual(['AAA-EUR', 'BBB-EUR']);
+    expect(saved.observations.find(row => row.id.startsWith('flow:'))).toMatchObject({ netFlowEur: '-99', beforeFlowEquityEur: '1099' });
   });
   it('preserves the last successful evidence after a changed balance or repeated source cursor', async () => {
     const j = new SqlJournal(), c = client(); await refreshSourceAccounting(c, j, () => NOW);

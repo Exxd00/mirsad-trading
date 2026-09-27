@@ -52,6 +52,18 @@ export function transactionMovement(t: RevolutTransaction): Movement | null {
   if (incoming && !outgoing && t.type !== 'reward') add(flow, t.destination!.currency, t.destination!.netAmount);
   if (outgoing && !incoming) {
     const leg = t.source!;
+    const converted = (t.type === 'buy' || t.type === 'sell') && t.destination
+      && t.destination.currency !== leg.currency && t.destination.fee !== null
+      && t.destination.feeCurrency === t.destination.currency;
+    if (converted) {
+      // A conversion paid out to an external account is an outflow of the
+      // recipient's actual NET proceeds, in that recipient currency. The
+      // source-asset debit remains in delta. Do not deduct its disclosed fee
+      // again, assume a source-currency fee, or add external proceeds to holdings.
+      if (decimal(t.destination!.fee!).lt(0)) throw new Error('accounting_transfer_amount_invalid');
+      add(flow, t.destination!.currency, decimal(t.destination!.netAmount).negated().toFixed());
+      return { transaction: t, at: Date.parse(t.processedAt) / 1000, delta, flow };
+    }
     // The actual recipient leg identifies the transferred principal. The
     // difference stays an expense; source net amounts already include fees.
     let principal: string;
