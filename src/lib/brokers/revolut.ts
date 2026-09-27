@@ -101,10 +101,12 @@ export class BrokerApiError extends Error {
   readonly code: string;
   readonly status?: number;
   readonly retryAfterMs?: number;
-  constructor(message: string, options: { code?: string; status?: number; retryAfterMs?: number } = {}) {
+  readonly responseDiagnostic?: string;
+  constructor(message: string, options: { code?: string; status?: number; retryAfterMs?: number; responseDiagnostic?: string } = {}) {
     super(message); this.name = 'BrokerApiError';
     this.code = options.code ?? 'BROKER_API_ERROR'; this.status = options.status;
     this.retryAfterMs = options.retryAfterMs;
+    this.responseDiagnostic = options.responseDiagnostic;
   }
 }
 export class BrokerUnknownOutcomeError extends BrokerApiError {
@@ -130,9 +132,21 @@ const unknownMutation = (identity: MutationIdentity) => 'venueOrderId' in identi
 const settledOrder = (order: RevolutOrder) => ['filled', 'cancelled', 'rejected'].includes(order.status);
 
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-function parse<T>(schema: z.ZodType<T>, value: unknown): T {
+function parse<T>(schema: z.ZodType<T>, value: unknown, context?: 'transaction_page' | 'transaction_details'): T {
   const result = schema.safeParse(value);
-  if (!result.success) throw new BrokerApiError('Unexpected broker response format.', { code: 'INVALID_RESPONSE' });
+  if (!result.success) {
+    // Schema paths and value categories only: never include a transaction body,
+    // identifier, amount, account name, address, or authentication material.
+    const responseDiagnostic = context ? `${context}:${result.error.issues.slice(0, 3).map(issue => {
+      const received = issue.path.reduce<unknown>((node, key) => node && typeof node === 'object'
+        ? (node as Record<PropertyKey, unknown>)[key] : undefined, value);
+      let kind: string = received === null ? 'null' : Array.isArray(received) ? 'array' : typeof received;
+      if (typeof received === 'string' && /^-?\d+(?:\.\d+)?[eE][+-]?\d+$/.test(received)) kind = 'exponential_decimal';
+      const field = issue.path.map(part => typeof part === 'number' ? 'item' : String(part)).join('.');
+      return `${field}:${issue.code}:${kind}`;
+    }).join(';')}` : undefined;
+    throw new BrokerApiError('Unexpected broker response format.', { code: 'INVALID_RESPONSE', responseDiagnostic });
+  }
   return result.data;
 }
 function iso(ms: number): string {
@@ -303,7 +317,7 @@ export class RevolutXClient {
     if (range.cursor) query.set('cursor', range.cursor);
     const result = parse(z.object({ data: z.array(transactionSchema), metadata: z.object({
       timestamp: z.number().int(), next_cursor: z.string().nullish(),
-    }) }), await this.#request('/api/1.0/transactions', query));
+    }) }), await this.#request('/api/1.0/transactions', query), 'transaction_page');
     if (range.cursor && result.metadata.next_cursor === range.cursor) {
       throw new BrokerApiError('Broker repeated a pagination cursor.', { code: 'INCOMPLETE_HISTORY' });
     }
@@ -312,7 +326,7 @@ export class RevolutXClient {
   }
   async getTransaction(id: string): Promise<RevolutTransaction> {
     UUID.parse(id);
-    const result = parse(transactionSchema, await this.#request(`/api/1.0/transactions/${id}`));
+    const result = parse(transactionSchema, await this.#request(`/api/1.0/transactions/${id}`), 'transaction_details');
     if (result.id !== id) throw new BrokerApiError('Broker returned a different transaction.', { code: 'INVALID_RESPONSE' });
     return normalizeTransaction(result);
   }

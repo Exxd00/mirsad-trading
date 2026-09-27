@@ -120,7 +120,7 @@ export async function refreshSourceAccounting(client: Client, journal: Journal, 
       observations: extendValuations(old, anchor, records, marks, current.toFixed()), fills: [...fills.values()] };
   } catch (error) {
     next.lastError = error instanceof Error && error.message.startsWith('accounting_') ? error.message
-      : error instanceof BrokerApiError ? `accounting_source_${error.code.toLowerCase()}` : 'accounting_source_unavailable';
+      : error instanceof BrokerApiError ? `accounting_source_${error.code.toLowerCase()}${error.responseDiagnostic ? `:${error.responseDiagnostic}` : ''}` : 'accounting_source_unavailable';
   }
   next.checkedAt = clock();
   const lease = await journal.acquire('revolut-x');

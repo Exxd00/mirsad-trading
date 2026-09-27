@@ -257,6 +257,18 @@ describe('Revolut X adapter with isolated mocked transport', () => {
     await expect(makeClient(transport).getTransaction(clientId)).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
   });
 
+  it('reports transaction schema paths without disclosing response values', async () => {
+    const at = 1_790_000_000_000;
+    const transport = vi.fn<typeof fetch>(async () => Response.json({ data: [{ id: clientId, type: 'send', status: 'completed',
+      created_date: at, processed_date: at, source: { amount: '1E-7', currency: 'SOL',
+        account: { type: 'revolut_x', display_name: 'private account name', crypto_address: 'private address' } },
+    }], metadata: { timestamp: at } }));
+    const error = await makeClient(transport).getTransactionsPage({ startDate: at - 1000, endDate: at }).catch(error => error);
+    expect(error).toMatchObject({ code: 'INVALID_RESPONSE',
+      responseDiagnostic: 'transaction_page:data.item.source.amount:invalid_format:exponential_decimal' });
+    for (const value of [clientId, '1E-7', 'private account name', 'private address']) expect(JSON.stringify(error)).not.toContain(value);
+  });
+
   it('validates mutation IDs and transaction ranges before any transport call', async () => {
     const transport = vi.fn<typeof fetch>(); const client = makeClient(transport);
     await expect(client.cancelOrder('not-a-uuid')).rejects.toThrow();
