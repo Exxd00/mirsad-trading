@@ -57,7 +57,11 @@ export function transactionMovement(t: RevolutTransaction): Movement | null {
     let principal: string;
     if (t.destination?.currency === leg.currency) principal = t.destination.netAmount;
     else if (leg.fee !== null && leg.feeCurrency === leg.currency) principal = decimal(leg.netAmount).sub(leg.fee).toFixed();
-    else throw new Error('accounting_transfer_fee_missing');
+    else {
+      const feeState = (part: RevolutTransaction['source']) => part?.fee == null ? 'missing'
+        : part.feeCurrency === leg.currency ? 'source_currency' : part.feeCurrency === t.destination?.currency ? 'destination_currency' : 'other_currency';
+      throw new Error(`accounting_transfer_fee_missing:type_${t.type}:source_${leg.currency}:destination_${t.destination?.currency ?? 'missing'}:source_fee_${feeState(leg)}:destination_fee_${feeState(t.destination)}:order_${t.orderId ? 'present' : 'missing'}`);
+    }
     if (decimal(principal).lt(0) || decimal(principal).gt(leg.netAmount)) throw new Error('accounting_transfer_amount_invalid');
     add(flow, leg.currency, decimal(principal).negated().toFixed());
   }
