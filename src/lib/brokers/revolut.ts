@@ -11,6 +11,10 @@ const DECIMAL = z.string().regex(/^-?\d+(?:\.\d+)?$/);
 const POSITIVE = DECIMAL.refine((s) => new Decimal(s).gt(0));
 const SYMBOL = z.string().regex(/^[A-Z0-9]+-[A-Z0-9]+$/);
 const UUID = z.string().uuid();
+// Source transaction IDs have the GUID hex layout but can use version nibble
+// `a`, as observed in transaction responses. Preserve the exact source ID;
+// these are not the RFC UUIDs we generate for order idempotency.
+const TRANSACTION_ID = z.guid();
 const sideSchema = z.enum(['buy', 'sell']);
 const statusSchema = z.enum(['pending_new', 'new', 'partially_filled', 'filled', 'cancelled', 'rejected', 'replaced']);
 const orderSchema = z.object({
@@ -30,7 +34,7 @@ const transactionLegSchema = z.object({
   fee: DECIMAL.optional(), fee_currency: z.string().optional(),
 });
 const transactionSchema = z.object({
-  id: UUID, status: z.enum(['pending', 'completed', 'cancelled', 'failed', 'reverted']),
+  id: TRANSACTION_ID, status: z.enum(['pending', 'completed', 'cancelled', 'failed', 'reverted']),
   type: z.enum(['buy', 'sell', 'receive', 'send', 'stake', 'un_stake', 'reward']),
   source: transactionLegSchema.optional(), destination: transactionLegSchema.optional(),
   created_date: z.number().int(), processed_date: z.number().int().optional(), order_id: UUID.optional(),
@@ -330,7 +334,7 @@ export class RevolutXClient {
       sourceAt: iso(result.metadata.timestamp) };
   }
   async getTransaction(id: string): Promise<RevolutTransaction> {
-    UUID.parse(id);
+    TRANSACTION_ID.parse(id);
     const result = parse(transactionSchema, await this.#request(`/api/1.0/transactions/${id}`), 'transaction_details');
     if (result.id !== id) throw new BrokerApiError('Broker returned a different transaction.', { code: 'INVALID_RESPONSE' });
     return normalizeTransaction(result);

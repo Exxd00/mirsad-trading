@@ -257,6 +257,36 @@ describe('Revolut X adapter with isolated mocked transport', () => {
     await expect(makeClient(transport).getTransaction(clientId)).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
   });
 
+  it('preserves source transaction GUIDs with non-RFC version bits through page and detail reads', async () => {
+    const transactionId = '11111111-2222-a333-9444-555555555555';
+    const at = 1_790_000_000_000;
+    const record = { id: transactionId, type: 'send', status: 'completed', created_date: at, processed_date: at,
+      source: { amount: '0.000001', currency: 'SOL', account: { type: 'revolut_x' } },
+      destination: { amount: '0.000001', currency: 'SOL', account: { type: 'revolut' } } };
+    const transport = vi.fn<typeof fetch>(async (url, init) => {
+      assertSigned(url, init);
+      expect(init?.method).toBe('GET');
+      return String(url).includes('/transactions?')
+        ? Response.json({ data: [record], metadata: { timestamp: at, next_cursor: '' } })
+        : Response.json(record);
+    });
+    const client = makeClient(transport);
+    const page = await client.getTransactionsPage({ startDate: at - 1000, endDate: at });
+    expect(page.transactions[0].id).toBe(transactionId);
+    expect(await client.getTransaction(page.transactions[0].id)).toEqual(page.transactions[0]);
+    expect(String(transport.mock.calls[1][0])).toBe(`https://revx.revolut.com/api/1.0/transactions/${transactionId}`);
+    transport.mockResolvedValueOnce(Response.json({ ...record, id: clientId }));
+    await expect(client.getTransaction(transactionId)).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+  });
+
+  it('rejects malformed transaction IDs before requesting source data', async () => {
+    const transport = vi.fn<typeof fetch>();
+    for (const id of ['', '../balances', 'not-a-guid', '111111112222a3339444555555555555']) {
+      await expect(makeClient(transport).getTransaction(id)).rejects.toThrow();
+    }
+    expect(transport).not.toHaveBeenCalled();
+  });
+
   it('reports transaction schema paths without disclosing response values', async () => {
     const at = 1_790_000_000_000;
     const transport = vi.fn<typeof fetch>(async () => Response.json({ data: [{ id: clientId, type: 'send', status: 'completed',
