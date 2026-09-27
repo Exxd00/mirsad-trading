@@ -199,8 +199,8 @@ describe('source transactions on the existing monitoring cycle', () => {
     await venue.reconcile(lease); expect(client.getTransactionsPage).not.toHaveBeenCalled();
     await venue.reconcile(lease, { transactions: true }); expect(client.getTransactionsPage).toHaveBeenCalledTimes(1);
     expect(JSON.parse(log.mock.calls[0][0])).toEqual({ type: 'execution.v1.source_archive', status: 'source_read', records: 0, morePages: false, scannedUntilMs: atMs });
-    expect(await venue.capabilities()).toMatchObject({ attachedProtection: false, fencedWrites: false, idempotentOrders: false });
-    await expect(venue.submit()).rejects.toThrow('source_attached_protection_unavailable');
+    expect(await venue.capabilities()).toMatchObject({ attachedProtection: false, fencedWrites: true, idempotentOrders: true, entryRiskData: false });
+    await expect(venue.submit()).rejects.toThrow('execution_not_armed');
     expect(client.submitOrder).not.toHaveBeenCalled(); expect(client.cancelOrder).not.toHaveBeenCalled(); await j.release(lease);
   });
 });

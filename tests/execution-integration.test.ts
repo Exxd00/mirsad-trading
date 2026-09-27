@@ -9,7 +9,7 @@ import type { CancellationPort } from '../src/lib/execution/v1/deadline';
 import { ConnectedRevolutVenue } from '../src/lib/execution/v1/revolut-venue';
 const auth = vi.hoisted(() => ({ requireSession: vi.fn(), requireMutation: vi.fn(), refreshSessionCookie: vi.fn() }));
 const db = vi.hoisted(() => ({ query: vi.fn() }));
-const host = vi.hoisted(() => ({ connectedVenue: vi.fn<() => Promise<CancellationPort | null>>(async () => null), runHost: vi.fn(), runTick: vi.fn(), entrySwitch: vi.fn(), handleDeadline: vi.fn() }));
+const host = vi.hoisted(() => ({ connectedVenue: vi.fn<() => Promise<CancellationPort | null>>(async () => null), runHost: vi.fn(), runTick: vi.fn(), runProtection: vi.fn(), entrySwitch: vi.fn(), handleDeadline: vi.fn() }));
 vi.mock('../src/lib/auth', async original => ({ ...(await original<typeof import('../src/lib/auth')>()), ...auth }));
 vi.mock('../src/lib/db', async original => ({ ...(await original<typeof import('../src/lib/db')>()), ...db }));
 vi.mock('../src/lib/execution/v1/host', () => host);
@@ -22,6 +22,7 @@ beforeEach(() => {
   auth.requireSession.mockResolvedValue({ id: 'test-session' }); auth.requireMutation.mockResolvedValue({ id: 'test-session' }); auth.refreshSessionCookie.mockResolvedValue('test-session=renewed');
   host.runHost.mockResolvedValue({ status: 'blocked', reason: 'order_api_not_connected' });
   host.runTick.mockResolvedValue({ status: 'blocked', reason: 'order_api_not_connected' });
+  host.runProtection.mockResolvedValue({ status: 'idle' });
   host.handleDeadline.mockResolvedValue({ status: 'cancelled' }); host.entrySwitch.mockResolvedValue({ entriesEnabled: false, orderApiConnected: false });
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
@@ -58,6 +59,10 @@ describe('scoped native account integration and authenticated endpoints', () => 
     expect((await POST(request('tick', {}, 'unit-test-secret'), context('tick'))).status).toBe(409);
     expect((await POST(request('deadline', { key: 'a'.repeat(64) }, 'unit-test-secret'), context('deadline'))).status).toBe(200);
     expect(host.handleDeadline).toHaveBeenCalledWith('a'.repeat(64));
+    expect((await POST(request('protect'), context('protect'))).status).toBe(401);
+    expect((await POST(request('protect', { key: 'injected' }, 'unit-test-secret'), context('protect'))).status).toBe(400);
+    expect((await POST(request('protect', {}, 'unit-test-secret'), context('protect'))).status).toBe(200);
+    expect(host.runProtection).toHaveBeenCalledOnce();
   });
   it.each(['tick', 'setup', 'settings', 'run'])('leaves retired %s requests inert', async action => {
     const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
@@ -85,7 +90,7 @@ describe('scoped native account integration and authenticated endpoints', () => 
     }));
     expect(await executionReport()).toMatchObject({ account_id: 'revolut-x', account_connected: true,
       adapter_configured: true, execution_ready: false, enabled: false, available_eur: '20.12',
-      reason: 'source_attached_protection_unavailable', status: 'monitoring' });
+      reason: 'execution_data_incomplete', status: 'monitoring', protection: { mode: 'mirsad', armed: false } });
     expect(db.query.mock.calls.every(([sql]) => sql.startsWith('SELECT'))).toBe(true);
     expect(db.query.mock.calls.some(([, params]) => params?.[0] === EDUCATION_STORAGE_KEY)).toBe(false);
   });

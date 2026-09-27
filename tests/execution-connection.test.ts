@@ -43,11 +43,11 @@ describe('the dashboard account connection', () => {
     expect(sourceOrder({ ...protectedOrder, quantity: null, status: 'replaced', fee: '0.1', feeCurrency: 'SOL' }))
       .toMatchObject({ quantity: null, status: 'unknown', feeEur: null, remainingBudgetEur: null });
   });
-  it('keeps unsupported protection and writes unavailable and does not settle uncertain keys', async () => {
+  it('requires a complete write connection and owner activation; does not settle uncertain keys', async () => {
     const { client, venue } = setup();
     expect(await venue.capabilities()).toMatchObject({ attachedProtection: false, fencedWrites: false, coordinatedExits: false });
-    await expect(venue.submit()).rejects.toThrow('source_attached_protection_unavailable');
-    await expect(venue.cancelRemainder()).rejects.toThrow('source_fenced_writes_unavailable');
+    await expect(venue.submit()).rejects.toThrow('execution_not_armed');
+    await expect(venue.cancelRemainder()).rejects.toThrow('execution_not_armed');
     expect(await venue.lookup('a'.repeat(64))).toEqual({ order: null, authoritative: false });
     expect(await venue.prepareExit()).toEqual({ ready: false, quantity: '0' });
     expect(client.submitOrder).not.toHaveBeenCalled();

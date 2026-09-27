@@ -1,7 +1,7 @@
 import { CONFIG, D, decimal, positive, type Instrument, type Position, type SourceOrder } from './model';
 export type ProtectionLevels = { quantity: string; stop: string; target: string; originalStop: string; averageFillPrice: string };
-/** Pure levels for a SOURCE-CONFIRMED cumulative fill. The venue adapter must
- * atomically resize linked protection. This function never creates a fill. */
+/** Pure levels for a source-confirmed cumulative fill. The adapter persists
+ * these levels before monitoring exits; this function never creates a fill. */
 export function protectionForFill(entry: SourceOrder, position: Position, instrument: Instrument, previous: ProtectionLevels | null): ProtectionLevels {
   if (!position.managed || entry.side !== 'buy' || entry.purpose !== 'entry' || entry.symbol !== position.symbol || instrument.symbol !== entry.symbol
     || entry.averageFillPrice === null || !decimal(entry.filledQuantity).gt(0)) throw new Error('confirmed_entry_fill_required');

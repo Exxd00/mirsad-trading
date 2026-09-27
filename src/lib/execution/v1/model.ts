@@ -25,7 +25,8 @@ export type Position = { id: string; symbol: string; managed: boolean; openedAt:
   reserved: string; averageFillPrice: string | null; originalStop: string | null;
   stop: string | null; target: string | null; marketValueEur: string | null;
   valuationAt: number | null; unrealizedNetPnlEur: string | null;
-  protectionState: 'active' | 'missing' | 'unknown'; protectionIds: string[] };
+  protectionState: 'active' | 'missing' | 'unknown'; protectionIds: string[];
+  exitReason?: 'stop' | 'target' | 'reverse_cross'; exitRevision?: string };
 export type SourceOrder = { id: string; clientKey: string; symbol: string; side: 'buy' | 'sell';
   status: 'open' | 'partial' | 'filled' | 'cancelled' | 'rejected' | 'expired' | 'unknown';
   quantity: string | null; filledQuantity: string; remainingBudgetEur: string | null;
@@ -55,7 +56,7 @@ export type BuyIntent = { side: 'buy'; symbol: string; signal: Signal; key: stri
   expiresAt: number; stopFraction: string; targetFraction: string; quote: Quote };
 export type SellIntent = { side: 'sell'; symbol: string; positionId: string; key: string;
   quantity: string; reason: 'stop' | 'target' | 'reverse_cross'; signal: Signal | null;
-  reduceOnly: true; protectionIds: string[] };
+  reduceOnly: true; protectionIds: string[]; triggerQuote?: Quote };
 export type Intent = BuyIntent | SellIntent;
 export type Block = { symbol?: string; reason: string };
 export const terminal = (order: SourceOrder) => ['filled', 'cancelled', 'rejected', 'expired'].includes(order.status);

@@ -255,7 +255,7 @@ export class RevolutXClient {
   }
   async getOrders(): Promise<RevolutOrder[]> {
     // Sequential streams avoid unnecessary account request bursts.
-    const active = await this.#orders('/api/1.0/orders/active', 300);
+    const active = await this.getActiveOrders();
     const historical = await this.#orders('/api/1.0/orders/historical', 1900);
     const unique = new Map<string, RevolutOrder>();
     for (const order of [...historical, ...active]) {
@@ -264,6 +264,7 @@ export class RevolutXClient {
     }
     return [...unique.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
+  async getActiveOrders(): Promise<RevolutOrder[]> { return this.#orders('/api/1.0/orders/active', 300); }
   async getOrder(id: string): Promise<RevolutOrder> {
     UUID.parse(id);
     const result = parse(z.object({ data: orderSchema }), await this.#request(`/api/1.0/orders/${id}`));

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { requireMutation, requireSession, refreshSessionCookie } from '@/lib/auth';
 import { json, failure, body } from '@/lib/http';
 import { executionReport, runExecution } from '@/lib/execution/service';
-import { entrySwitch, handleDeadline, runTick } from '@/lib/execution/v1/host';
+import { entrySwitch, handleDeadline, runTick, runProtection } from '@/lib/execution/v1/host';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -27,10 +27,14 @@ export async function GET(request: Request, context: Context) {
 export async function POST(request: Request, context: Context) {
   try {
     const action = (await context.params).action.join('/');
-    if (action === 'tick' || action === 'deadline') {
+    if (action === 'tick' || action === 'deadline' || action === 'protect') {
       if (!schedulerAuthorized(request)) return json({ error: 'authentication_required' }, 401);
     } else await requireMutation(request);
     const data = await body(request);
+    if (action === 'protect') {
+      z.object({}).strict().parse(data);
+      const result = await runProtection(); return json(result, result.status === 'blocked' ? 409 : 200);
+    }
     if (action === 'settings') {
       const result = await entrySwitch(z.object({ entriesEnabled: z.boolean() }).strict().parse(data).entriesEnabled);
       return json(result, 'status' in result && result.status === 'blocked' ? 409 : 200);

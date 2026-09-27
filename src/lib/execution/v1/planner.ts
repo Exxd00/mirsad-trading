@@ -69,12 +69,12 @@ export function planExit(account: Account, signals: Signal[], quotes: Quote[], n
     if (account.orders.some(o => o.symbol === p.symbol && o.side === 'sell' && o.purpose !== 'protection' && !terminal(o))) continue;
     const reverse = signals.find(s => s.side === 'sell' && s.version === CONFIG.strategyVersion && s.symbol === p.symbol && p.openedAt !== null && s.at > p.openedAt && s.at <= now);
     const q = quotes.find(q => q.symbol === p.symbol && fresh(q.sourceAt, now, CONFIG.quoteMaxAgeSeconds) && fresh(q.readAt, now, CONFIG.quoteMaxAgeSeconds));
-    const trigger = q && p.stop !== null && decimal(q.bid).lte(p.stop) ? 'stop' : q && p.target !== null && decimal(q.bid).gte(p.target) ? 'target' : reverse ? 'reverse_cross' : null;
+    const trigger = p.exitReason ?? (q && p.stop !== null && decimal(q.bid).lte(p.stop) ? 'stop' : q && p.target !== null && decimal(q.bid).gte(p.target) ? 'target' : reverse ? 'reverse_cross' : null);
     if (!trigger) continue;
     return { side: 'sell', symbol: p.symbol, positionId: p.id, quantity: p.quantity,
-      reason: trigger, signal: trigger === 'reverse_cross' ? reverse! : null,
-      key: keyFor(account.id, `exit:${p.id}:${trigger === 'reverse_cross' ? reverse!.id : trigger}`),
-      reduceOnly: true, protectionIds: [...p.protectionIds] };
+      reason: trigger, signal: trigger === 'reverse_cross' ? reverse ?? null : null,
+      key: keyFor(account.id, `exit:${p.id}:${p.exitRevision ?? ''}:${trigger === 'reverse_cross' ? reverse?.id ?? 'latched_reverse' : trigger}`),
+      reduceOnly: true, protectionIds: [...p.protectionIds], ...(q ? { triggerQuote: q } : {}) };
   }
   return null;
 }

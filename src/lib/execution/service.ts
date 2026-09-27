@@ -2,8 +2,10 @@ import 'server-only';
 import { query } from '../db';
 import { CONFIG, VERSION } from './v1/model';
 import { connectedVenue, runHost } from './v1/host';
-import type { RuntimeState, SourceArchiveState } from './v1/journal';
+import type { RuntimeState, SourceArchiveState, ManagedProtection, ProtectionHeartbeat } from './v1/journal';
 import { REVOLUT_EXECUTION_BLOCKERS } from './v1/revolut-venue';
+import { executionCapabilitiesReady } from './v1/runner';
+import { fresh } from './v1/model';
 
 export async function executionReport() {
   const venue = await connectedVenue(), live = venue ? await venue.account() : null;
@@ -12,15 +14,22 @@ export async function executionReport() {
   const stateRow = await query<{ value: RuntimeState }>('SELECT value FROM app_settings WHERE key=$1', [`execution:v1:${CONFIG.accountId}:state`]);
   const cycleRow = await query<{ detail: Record<string, unknown> }>("SELECT detail FROM audit_events WHERE event='execution.v1' AND detail->>'accountId'=$1 AND detail->>'type'='cycle' ORDER BY id DESC LIMIT 1", [CONFIG.accountId]);
   const archiveRow = await query<{ value: SourceArchiveState }>('SELECT value FROM app_settings WHERE key=$1', [`execution:v1:${CONFIG.accountId}:source_archive`]);
+  const protectionRows = await query<{ value: ManagedProtection }>('SELECT value FROM app_settings WHERE key LIKE $1', [`execution:v1:${CONFIG.accountId}:protection:%`]);
+  const heartbeatRow = await query<{ value: ProtectionHeartbeat }>('SELECT value FROM app_settings WHERE key=$1', [`execution:v1:${CONFIG.accountId}:protection_heartbeat`]);
   const state = stateRow.rows[0]?.value, connected = live !== null;
-  const ready = connected && capabilities !== null && Object.values(capabilities).every(Boolean);
+  const ready = connected && capabilities !== null && executionCapabilitiesReady(capabilities);
+  const heartbeat = heartbeatRow.rows[0]?.value ?? null;
+  const heartbeatFresh = heartbeat !== null && fresh(heartbeat.at, Math.floor(Date.now() / 1000), CONFIG.protectionHeartbeatMaxAgeSeconds);
   return {
     version: '1.0.0' as const, strategy_version: VERSION, mode: 'execution-core' as const,
     status: connected ? ready ? state?.entriesEnabled ? 'enabled' : 'entries_paused' : 'monitoring' : 'blocked',
     enabled: ready && state?.entriesEnabled === true, entries_requested: state?.entriesEnabled ?? false,
     adapter_configured: venue !== null, account_source_configured: true, account_connected: connected,
     execution_ready: ready, order_api_connected: ready, signal_configured: true, capabilities,
-    reason: connected ? ready ? 'configured' : 'source_attached_protection_unavailable' : 'account_connection_missing',
+    reason: connected ? ready ? 'configured' : 'execution_data_incomplete' : 'account_connection_missing',
+    protection: { mode: CONFIG.protectionMode, interval_seconds: CONFIG.protectionPollSeconds,
+      armed: state?.executionArmed === true, heartbeat, heartbeat_fresh: heartbeatFresh,
+      records: protectionRows.rows.map(row => row.value), continues_when_entries_paused: true },
     policy: { allocation: CONFIG.allocation, reduced_allocation: CONFIG.reducedAllocation, stop: CONFIG.stopFraction,
       target: CONFIG.targetFraction, maximum_positions: CONFIG.maximumPositions, maximum_exposure: CONFIG.maximumExposure,
       maximum_cost: CONFIG.maximumRoundTripCost, daily_loss: CONFIG.dailyLossLimit },

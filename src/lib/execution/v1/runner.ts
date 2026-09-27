@@ -7,9 +7,10 @@ import type { Journal, Lease } from './journal';
 export interface VenuePort {
   readonly accountId: string;
   capabilities(): Promise<{ idempotentOrders: boolean; fencedWrites: boolean; attachedProtection: boolean;
+    managedProtection?: boolean; entryRiskData?: boolean;
     coordinatedExits: boolean; cancelRemainder: boolean; cancellationTimer: boolean }>;
   reconcile(lease: Lease, options?: { transactions?: boolean }): Promise<void>;
-  account(): Promise<Account>;
+  account(options?: { protectionOnly?: boolean }): Promise<Account>;
   quotes(symbols: string[]): Promise<Quote[]>;
   instruments(): Promise<Instrument[]>;
   candles(symbol: string, after: number | null): Promise<Candle[]>;
@@ -19,15 +20,40 @@ export interface VenuePort {
   submit(intent: Intent, lease: Lease): Promise<SourceOrder>;
   armCancellation(key: string, expiresAt: number): Promise<void>;
 }
+export function protectionCapable(caps: Awaited<ReturnType<VenuePort['capabilities']>>) {
+  return CONFIG.protectionMode === 'mirsad' ? caps.managedProtection === true : caps.attachedProtection;
+}
+export function executionCapabilitiesReady(caps: Awaited<ReturnType<VenuePort['capabilities']>>) {
+  return caps.idempotentOrders && caps.fencedWrites && protectionCapable(caps) && caps.coordinatedExits
+    && caps.cancelRemainder && caps.cancellationTimer && caps.entryRiskData !== false;
+}
 export type CycleResult = { id: string; at: number; status: string; reason?: string; intent?: Intent; sourceOrder?: SourceOrder; blocks: { symbol?: string; reason: string }[] };
 /** Account values are read through the port, never maintained in the journal. */
 export async function cycle(port: VenuePort, journal: Journal, symbols: string[], clock = () => Math.floor(Date.now() / 1000)): Promise<CycleResult> {
   const result: CycleResult = { id: randomUUID(), at: clock(), status: 'waiting', blocks: [] };
+  // Slow public candle I/O must not hold the account's mutation lock and delay
+  // the independent protection watch. Indicators are applied to the latest
+  // locked state below, so overlapping scans cannot overwrite newer progress.
+  const readLease = await journal.acquire(port.accountId);
+  if (!readLease) return { ...result, status: 'busy' };
+  const before = await journal.state(readLease).finally(() => journal.release(readLease));
+  const tracked = (await journal.protections(port.accountId)).filter(p => p.status !== 'closed').map(p => p.symbol);
+  const scan = [...new Set([...tracked, ...symbols])];
+  const prefetched = new Map<string, { candles?: Candle[]; error?: string }>();
+  const scanStart = Date.now(), cursor = scan.length ? (before.scanCursor ?? 0) % scan.length : 0;
+  let scanned = 0;
+  for (; scanned < scan.length; scanned++) {
+    if (Date.now() - scanStart >= 15000) break;
+    const symbol = scan[(cursor + scanned) % scan.length];
+    try { prefetched.set(symbol, { candles: await port.candles(symbol, before.indicators[symbol]?.lastCloseTime ?? null) }); }
+    catch (e) { prefetched.set(symbol, { error: e instanceof Error ? e.message : 'candles_unavailable' }); }
+  }
   const lease = await journal.acquire(port.accountId);
   if (!lease) return { ...result, status: 'busy' };
   try {
     const caps = await port.capabilities(), state = await journal.state(lease);
-    if (Object.values(caps).some(value => !value)) result.blocks.push({ reason: 'execution_capabilities_missing' });
+    state.scanCursor = scan.length ? (cursor + scanned) % scan.length : 0;
+    if (!executionCapabilitiesReady(caps)) result.blocks.push({ reason: 'execution_capabilities_missing' });
     await port.reconcile(lease, { transactions: true });
     let account = await port.account();
     const validateAccount = (a: Account) => {
@@ -68,7 +94,9 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
     for (const symbol of allSymbols) {
       await journal.renew(lease);
       try {
-        const parsed = processCandles(symbol, await port.candles(symbol, state.indicators[symbol]?.lastCloseTime ?? null), state.indicators[symbol] ?? null, clock());
+        const fetched = prefetched.get(symbol);
+        if (!fetched?.candles) throw new Error(fetched?.error ?? 'scan_time_budget_next_cycle');
+        const parsed = processCandles(symbol, fetched.candles, state.indicators[symbol] ?? null, clock());
         state.indicators[symbol] = parsed.state;
         state.pendingSignals = [...new Map([...state.pendingSignals, ...parsed.signals].map(s => [s.id, s])).values()];
         for (const signal of parsed.signals) await journal.event(lease, { type: 'signal', readAt: clock(), sourceAt: signal.at, signal });
@@ -104,7 +132,7 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
       else if (!valuationMatches(account)) result.blocks.push({ reason: 'risk_valuation_mismatch' });
       else if (result.blocks.some(b => b.reason === 'order_outcome_unknown')) result.blocks.push({ reason: 'entry_reservation_unknown' });
       else if (result.blocks.some(b => b.reason === 'protection_reconciliation_failed')) result.blocks.push({ reason: 'protection_requires_resolution' });
-      else if (!caps.idempotentOrders || !caps.fencedWrites || !caps.attachedProtection || !caps.cancelRemainder || !caps.cancellationTimer) result.blocks.push({ reason: 'entry_capability_missing' });
+      else if (!caps.idempotentOrders || !caps.fencedWrites || !protectionCapable(caps) || !caps.cancelRemainder || !caps.cancellationTimer || caps.entryRiskData === false) result.blocks.push({ reason: 'entry_capability_missing' });
       else {
         const candidates = [];
         for (const signal of state.pendingSignals.filter(s => s.side === 'buy' && configured.includes(s.symbol))) {

@@ -6,10 +6,12 @@ import { CONFIG, VERSION } from './model';
 import { SqlJournal } from './journal';
 import { processCandles } from './strategy';
 import { loadCandles } from './feed';
-import { cycle } from './runner';
+import { cycle, executionCapabilitiesReady } from './runner';
 import { cancelDeadline, type CancellationPort } from './deadline';
 import { dailyReport } from './reporting';
 import { ConnectedRevolutVenue } from './revolut-venue';
+import { protectionCycle } from './managed-protection';
+import { scheduleProtectionWatch } from './scheduler';
 export const journal = new SqlJournal();
 /** Owner-selected connection: the account already connected on the main page.
  * Credentials stay on the existing host; the scheduler receives no broker keys. */
@@ -71,16 +73,23 @@ export async function handleDeadline(key: string) {
 export async function entrySwitch(enabled: boolean) {
   if (enabled) {
     const port = await connectedVenue();
-    if (!port || Object.values(await port.capabilities()).some(value => !value)) {
+    if (!port || !executionCapabilitiesReady(await port.capabilities())) {
       return { status: 'blocked', reason: 'execution_capabilities_missing', entriesEnabled: false, orderApiConnected: false };
     }
+    await scheduleProtectionWatch();
   }
   const lease = await journal.acquire(CONFIG.accountId);
   if (!lease) return { status: 'busy' };
-  try { const state = await journal.state(lease); state.entriesEnabled = enabled; await journal.save(lease, state);
+  try { const state = await journal.state(lease); state.entriesEnabled = enabled;
+    if (enabled) state.executionArmed = true;
+    await journal.save(lease, state);
     await journal.event(lease, { type: 'entries_setting', enabled, at: Math.floor(Date.now() / 1000) });
     return { entriesEnabled: enabled };
   } finally { await journal.release(lease); }
+}
+export async function runProtection() {
+  const port = await connectedVenue();
+  return port ? protectionCycle(port, journal) : { status: 'blocked', reason: 'account_connection_missing', retryAt: Math.floor(Date.now() / 1000) + CONFIG.protectionPollSeconds };
 }
 export async function runTick() {
   const execution = await runHost();

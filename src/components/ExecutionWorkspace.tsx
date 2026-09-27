@@ -24,8 +24,10 @@ export function ExecutionWorkspace() {
   }, []);
   useEffect(() => {
     const controller = new AbortController();
-    void refresh(controller.signal);
-    return () => controller.abort();
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => { await refresh(controller.signal); if (!controller.signal.aborted) timer = setTimeout(poll, 15000); };
+    void poll();
+    return () => { controller.abort(); clearTimeout(timer); };
   }, [refresh]);
 
   const percent = (value: string) => `${Number(value) * 100}%`;
@@ -44,8 +46,21 @@ export function ExecutionWorkspace() {
     {!report && loading && <p className={styles.loading}>جارٍ تحميل الحالة…</p>}
     {report && <>
       <p role="status" className={`${styles.message} ${styles.warning}`}>{report.account_connected
-        ? 'تُقرأ الأرصدة والأوامر من اتصال Revolut X الموجود. إرسال الأوامر متوقف: واجهة إنشاء الأوامر الموثقة لا توفر الحماية المترابطة المطلوبة. المراكز القائمة تبقى خارج إدارة هذا الإصدار.'
+        ? report.enabled ? 'الدخول الآلي مفعّل. يدير مرصاد حماية المراكز التي يفتحها هذا الإصدار.' : 'الحساب متصل بـRevolut X. الحماية مضبوطة داخل مرصاد؛ إرسال الأوامر متوقف حتى اكتمال جاهزية التنفيذ وتفعيله. المراكز والأوامر السابقة تبقى خارج إدارته.'
         : 'تعذر العثور على اتصال الحساب الموجود. راجع اتصال الحساب في الصفحة الرئيسية.'}</p>
+      {report.account_connected && !report.execution_ready && <p className={styles.sectionNote}>المتبقي لجاهزية الدخول: احتساب تكلفة الصفقة كاملة، وسجل تقييم المخاطر الذي يفصل نتائج التداول عن الإيداعات والسحوبات.</p>}
+      <section className={styles.panel}>
+        <div className={styles.panelHeading}><h2>الحماية داخل مرصاد</h2><span className={`${styles.state} ${styles.paused}`}>{!report.protection.heartbeat_fresh ? 'المراقبة غير مؤكدة أو متأخرة'
+          : report.protection.heartbeat?.status === 'blocked' ? 'تحتاج متابعة' : report.protection.heartbeat?.managedPositions ? 'تجري مراقبة المراكز' : 'المراقبة تعمل · لا مراكز مدارة'}</span></div>
+        <p className={styles.sectionNote}>وقف الخسارة {percent(report.policy.stop)} والهدف {percent(report.policy.target)} من متوسط التنفيذ الفعلي. تعمل المراقبة على الخادم حتى عند إغلاق المتصفح، وتستهدف فحصًا كل {report.protection.interval_seconds} ثوانٍ بعد اكتمال الفحص السابق.</p>
+        <p className={styles.sectionNote}>إذا توقف مرصاد أو الاتصال بالمنصة فقد يتأخر البيع، وقد يختلف سعر التنفيذ عن مستوى الوقف. لا توجد أوامر وقف أو هدف لدى Revolut لهذه الحماية.</p>
+        <p className={styles.subtle}>آخر فحص: {report.protection.heartbeat ? new Date(report.protection.heartbeat.at * 1000).toISOString() : 'لم يصل بعد'} · التنفيذ المالي: {report.protection.armed ? 'مفعّل للمراكز المدارة' : 'غير مفعّل'}</p>
+        {report.protection.heartbeat?.errors.length ? <p role="alert" className={`${styles.message} ${styles.error}`}>تعذر إكمال فحص الحماية. راجع الاتصال والأوامر غير المحسومة قبل أي دخول جديد.</p> : null}
+        {report.protection.records.some(p => p.status !== 'closed') && <div className={styles.scroll}><table className={styles.table}>
+          <thead><tr><th>الأصل</th><th>الكمية المؤكدة</th><th>الوقف</th><th>الهدف</th><th>الحالة</th></tr></thead>
+          <tbody>{report.protection.records.filter(p => p.status !== 'closed').map(p => <tr key={p.entryKey}><td>{p.symbol}</td><td className={styles.numeric}>{p.quantity}</td><td className={styles.numeric}>{p.stop}</td><td className={styles.numeric}>{p.target}</td><td>{p.status === 'watching' ? 'مراقبة' : p.trigger ? 'خروج مطلوب' : 'تحتاج متابعة'}</td></tr>)}</tbody>
+        </table></div>}
+      </section>
       {report.account_connected && <section className={styles.panel}>
         <div className={styles.panelHeading}><div><h2>{report.account_name}</h2><p className={styles.subtle}>آخر قراءة من الحساب: {report.source_at === null ? 'غير متاح' : new Date(report.source_at * 1000).toISOString()}</p></div></div>
         <div className={styles.scroll}><table className={styles.table}>

@@ -18,7 +18,7 @@ const makePort = () => {
   const a = account();
   const port: CancellationPort = {
     accountId: CONFIG.accountId,
-    capabilities: vi.fn(async () => ({ idempotentOrders: true, fencedWrites: true, attachedProtection: true, coordinatedExits: true, cancelRemainder: true, cancellationTimer: true })),
+    capabilities: vi.fn(async () => ({ idempotentOrders: true, fencedWrites: true, attachedProtection: false, managedProtection: true, coordinatedExits: true, cancelRemainder: true, cancellationTimer: true })),
     reconcile: vi.fn(async () => undefined), account: vi.fn(async () => structuredClone(a)),
     quotes: vi.fn(async (symbols: string[]) => symbols.map(s => quote(s))), instruments: vi.fn(async () => ['AAA-EUR', 'BBB-EUR', 'CCC-EUR'].map(s => instrument(s))),
     candles: vi.fn(async () => []), lookup: vi.fn(async () => ({ order: null, authoritative: true })),
@@ -51,6 +51,15 @@ describe('durable SQL ownership and orchestration', () => {
     await query("UPDATE app_settings SET value=jsonb_set(value,'{expires}','0'::jsonb) WHERE key=$1", [one.key]);
     const replacement = (await j.acquire(CONFIG.accountId))!; expect(replacement.owner).not.toBe(one.owner);
     await expect(j.save(one, initialState())).rejects.toThrow('lock_lost'); await j.release(one); expect(await j.acquire(CONFIG.accountId)).toBeNull(); await j.release(replacement);
+  });
+  it('leaves the account lock available for protection while reading slow candles', async () => {
+    const j = new SqlJournal(); await seed(j, ['AAA-EUR'], false); const { port } = makePort();
+    vi.mocked(port.candles).mockImplementation(async () => {
+      const protectionLease = await j.acquire(CONFIG.accountId);
+      expect(protectionLease).not.toBeNull(); await j.release(protectionLease!); return [];
+    });
+    await cycle(port, j, ['AAA-EUR'], () => NOW);
+    expect(port.candles).toHaveBeenCalled(); expect(port.submit).not.toHaveBeenCalled();
   });
   it('arms the deadline before the sole entry, persists signal consumption across runner restarts', async () => {
     const j = new SqlJournal(); await seed(j, ['AAA-EUR', 'BBB-EUR']); const { port } = makePort();
