@@ -15,7 +15,7 @@ export function ExecutionWorkspace() {
     try {
       const response = await fetch('/api/execution/report', { credentials: 'same-origin', cache: 'no-store', signal });
       if (response.status === 401) throw new Error('انتهت جلسة الدخول. افتح الصفحة الرئيسية ثم سجّل الدخول مجددًا.');
-      if (!response.ok) throw new Error('تعذر تحديث حالة المحرك.');
+      if (!response.ok) throw new Error(`تعذر تحديث حالة المحرك (HTTP ${response.status}). أي تقرير معروض هو آخر قراءة ناجحة، وليس الحالة الحالية.`);
       const data = await response.json();
       if (data?.mode !== 'execution-core' || data?.version !== '1.0.0' || !data?.policy || !data?.accounting || typeof data.csrfToken !== 'string') throw new Error('تقرير المحرك غير مكتمل.');
       if (!signal?.aborted) { setReport(data); setError(''); }
@@ -45,6 +45,7 @@ export function ExecutionWorkspace() {
   }, [refresh]);
 
   const percent = (value: string) => `${Number(value) * 100}%`;
+  const shown = (value: string | number | null | undefined) => value == null ? 'غير متاح' : String(value);
   return <main className={styles.page} dir="rtl">
     <nav className={styles.nav}>
       <Link href="/" className={styles.brand}>مرصاد</Link>
@@ -53,19 +54,24 @@ export function ExecutionWorkspace() {
     <header className={styles.hero}>
       <div><p className={styles.kicker}>محرك التنفيذ · 1.0.0</p><h1>حالة الأتمتة</h1>
         <p className={styles.description}>يقرأ المحرك الحساب المتصل في الصفحة الرئيسية ويحسب تقاطعات EMA من الشموع المكتملة.</p></div>
-      {report && <span className={`${styles.state} ${styles.paused}`}>{report.enabled ? 'المحرك مفعّل' : report.account_connected ? 'الحساب متصل · إرسال الأوامر متوقف' : 'بانتظار اتصال الحساب'}</span>}
+      {report && <span className={`${styles.state} ${styles.paused}`}>{error ? 'حالة سابقة · تعذر التحديث' : report.report_status === 'partial' ? 'تقرير جزئي · يحتاج مراجعة' : report.enabled ? 'المحرك مفعّل' : report.account_connected ? 'الحساب متصل · الدخول غير جاهز أو متوقف' : 'بانتظار اتصال الحساب'}</span>}
     </header>
     <div className={styles.controls}><button className={styles.button} disabled={loading || mutating} onClick={() => void refresh()}>{loading ? 'جارٍ التحديث…' : 'تحديث الحالة'}</button>
-      {report?.account_connected && <><button className={styles.button} disabled={mutating} onClick={() => void action('check')}>{mutating ? 'جارٍ الفحص…' : 'فحص الجاهزية الآن'}</button>
-        <button className={styles.button} disabled={mutating || (!report.entries_requested && (!report.execution_ready || !report.protection.heartbeat_fresh))}
-          onClick={() => void action('settings', !report.entries_requested)}>{report.entries_requested ? 'إيقاف الدخول الجديد' : 'تفعيل الشراء والبيع الآلي'}</button></>}
+      {report?.adapter_configured && <button className={styles.button} disabled={mutating || loading || Boolean(error)} onClick={() => void action('check')}>{mutating ? 'جارٍ الفحص…' : 'فحص الجاهزية الآن'}</button>}
+      {report?.account_connected && <button className={styles.button} disabled={mutating || loading || Boolean(error) || (!report.entries_requested && (!report.execution_ready || !report.protection.heartbeat_fresh))}
+        onClick={() => void action('settings', !report.entries_requested)}>{report.entries_requested ? 'إيقاف الدخول الجديد' : 'تفعيل الشراء والبيع الآلي'}</button>}
     </div>
     {error && <p role="alert" className={`${styles.message} ${styles.error}`}>{error}</p>}
     {!report && loading && <p className={styles.loading}>جارٍ تحميل الحالة…</p>}
     {report && <>
+      <p className={styles.sectionNote}>وقت قراءة التقرير: {new Date(report.read_at * 1000).toISOString()} · الإصدار: {report.strategy_version}</p>
+      {report.read_errors?.length > 0 && <div role="alert" className={`${styles.message} ${styles.error}`}>
+        <p>تعذر إكمال قراءة المصدر. البيانات الناقصة غير متاحة، وتظهر أدناه آخر حالة محفوظة للمراقبة بأوقاتها؛ لا تؤكد هذه الحالة سلامة التنفيذ الآن.</p>
+        <ul>{report.read_errors.map(item => <li key={item.stage}>{item.stage}: <code>{item.code}</code></li>)}</ul>
+      </div>}
       <p role="status" className={`${styles.message} ${styles.warning}`}>{report.account_connected
-        ? report.enabled ? 'الدخول الآلي مفعّل. يدير مرصاد حماية المراكز التي يفتحها هذا الإصدار.' : 'الحساب متصل بـRevolut X. الحماية مضبوطة داخل مرصاد؛ إرسال الأوامر متوقف حتى اكتمال جاهزية التنفيذ وتفعيله. المراكز والأوامر السابقة تبقى خارج إدارته.'
-        : 'تعذر العثور على اتصال الحساب الموجود. راجع اتصال الحساب في الصفحة الرئيسية.'}</p>
+        ? report.enabled ? 'الدخول الآلي مفعّل. يدير مرصاد حماية المراكز التي يفتحها هذا الإصدار.' : report.entries_requested ? 'طلب التفعيل محفوظ، لكن بيانات هذه القراءة لا تؤكد جاهزية الدخول. راجع أسباب المنع وحالة الحماية.' : 'الحساب متصل بـRevolut X. الحماية مضبوطة داخل مرصاد؛ إرسال الأوامر متوقف حتى اكتمال جاهزية التنفيذ وتفعيله. المراكز والأوامر السابقة تبقى خارج إدارته.'
+        : report.adapter_configured ? 'الاتصال مُعدّ، لكن قراءة الحساب لم تكتمل. لا توجد أرصدة أو أرباح حالية مؤكدة في هذا التقرير.' : 'تعذر العثور على اتصال الحساب الموجود. راجع اتصال الحساب في الصفحة الرئيسية.'}</p>
       {report.account_connected && <section className={styles.panel}>
         <div className={styles.panelHeading}><h2>التكاليف وجاهزية المخاطر</h2><span className={`${styles.state} ${styles.paused}`}>{report.execution_ready ? 'جاهز وفق البيانات الحالية' : 'الدخول معلّق لحين اكتمال البيانات'}</span></div>
         <p className={styles.sectionNote}>قيمة الحساب: {report.accounting.equity_eur === null ? 'غير مكتملة' : `${report.accounting.equity_eur} EUR`} · تقييمات محفوظة: {report.accounting.observations} · آخر جمع: {report.accounting.checked_at ? new Date(report.accounting.checked_at * 1000).toISOString() : 'لم يكتمل بعد'}</p>
@@ -121,6 +127,28 @@ export function ExecutionWorkspace() {
         <div className={styles.panelHeading}><h2>آخر دورة للمشغّل</h2></div>
         <p className={styles.sectionNote}>{typeof report.last_cycle?.at === 'number' ? new Date(report.last_cycle.at * 1000).toISOString() : 'لم تُسجل دورة بعد.'}</p>
         {report.last_cycle && <p className={styles.sectionNote}>الحالة: {String(report.last_cycle.status ?? 'غير متاحة')}</p>}
+      </section>
+      <section className={styles.panel}>
+        <div className={styles.panelHeading}><h2>توثيق نتائج الصفقات</h2></div>
+        <p className={styles.sectionNote}>النجاح نتيجة موجبة لصفقة مغلقة مؤكدة بعد الرسوم. تُسجّل الخسائر والتعادل أيضًا، وتبقى المراكز المفتوحة منفصلة. نقص التغطية أو الرسوم لا يُعامل كصفر.</p>
+        {report.performance ? <div className={styles.scroll}><table className={styles.table}>
+          <thead><tr><th>الفترة</th><th>التغطية</th><th>مغلقة مؤكدة ضمن المتاح</th><th>رابحة</th><th>خاسرة</th><th>صافي المحقق EUR</th><th>الرسوم EUR</th><th>نسبة النجاح</th><th>معامل الربح</th><th>التوقع R</th></tr></thead>
+          <tbody>{(['last24h', 'berlinToday'] as const).map(key => {
+            const metrics = report.performance![key];
+            return <tr key={key}><td>{key === 'last24h' ? 'آخر 24 ساعة' : 'يوم برلين'}<small dir="ltr">{new Date(metrics.from * 1000).toISOString()} — {new Date(metrics.until * 1000).toISOString()}</small></td>
+              <td>{metrics.coverageComplete ? 'تغطية الأرشيف مكتملة' : 'جزئية'}</td><td>{metrics.confirmedClosedTrades}</td><td>{shown(metrics.wins)}</td><td>{shown(metrics.losses)}</td>
+              <td className={styles.numeric}>{shown(metrics.realizedNetPnlEur)}</td><td className={styles.numeric}>{shown(metrics.feesEur)}</td><td>{metrics.winRate === null ? 'غير متاح' : `${(Number(metrics.winRate) * 100).toFixed(2)}%`}</td><td>{shown(metrics.profitFactor)}</td><td>{shown(metrics.expectancyR)}</td></tr>;
+          })}</tbody>
+        </table></div> : <p className={styles.empty}>مقاييس الأداء غير متاحة في هذه القراءة.</p>}
+        {report.closed_trades?.length ? <div className={styles.scroll}><table className={styles.table}>
+          <thead><tr><th>معرّف الصفقة</th><th>الأصل</th><th>الإصدار</th><th>وقت الإغلاق المسجل UTC</th><th>صافي النتيجة EUR</th><th>الرسوم EUR</th><th>أوامر المصدر</th></tr></thead>
+          <tbody>{report.closed_trades.map(trade => <tr key={trade.id}><td>{trade.id}</td><td>{trade.symbol}</td><td>{trade.version}</td><td>{new Date(trade.closedAt * 1000).toISOString()}</td><td>{shown(trade.netPnlEur)}</td><td>{shown(trade.feesEur)}</td><td>{trade.sourceOrderIds.join(', ')}</td></tr>)}</tbody>
+        </table></div> : <p className={styles.empty}>{report.closed_trades === null ? 'تعذرت قراءة سجل الصفقات.' : 'لا توجد صفقات مغلقة مؤكدة في السجل المتاح لهذا الإصدار.'}</p>}
+        <p className={styles.sectionNote}>معرّفات الصفقات تمنع تكرار التوثيق. يلزم ربط أوقات الإغلاق بتعبئات المصدر قبل اعتماد حدود الفترات. عدد العينة والربح الصافي والتراجع تُراجع معًا؛ لا تثبت سلسلة أرباح قصيرة جدوى زيادة رأس المال.</p>
+        <details className={styles.reportDetails}><summary>بيانات التقرير الكاملة للتوثيق</summary>
+          <p className={styles.subtle}>يتضمن أوقات المصدر والقراءة، أسباب النقص، وآخر تقرير محفوظ بوقته. التقرير الحالي وحده يُستخدم لتحديث اللقطة الحالية.</p>
+          <pre className={styles.reportJson} dir="ltr">{JSON.stringify({ ...report, csrfToken: undefined }, null, 2)}</pre>
+        </details>
       </section>
       <div className={styles.metrics}>
         {[["ميزانية الدخول", report.policy.allocation, 'من اليورو المتاح، شاملة رسوم الدخول'],

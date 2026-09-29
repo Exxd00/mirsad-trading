@@ -110,4 +110,45 @@ describe('scoped native account integration and authenticated endpoints', () => 
     db.query.mockRejectedValueOnce(new Error('database_unavailable'));
     expect((await GET(new Request('https://mirsad.test/api/execution/report'), context('report'))).status).toBe(503);
   });
+  it('keeps stored monitoring visible when source validation fails, without changing execution or inventing balances', async () => {
+    const heartbeat = { at: Math.floor(Date.now() / 1000), status: 'blocked', managedPositions: 1, errors: ['source_unavailable'] };
+    const savedReport = { readAt: 100, sourceAt: 99, status: 'source_read' };
+    db.query.mockImplementation(async (_sql, params) => ({ rows: params?.[0]?.endsWith(':state')
+      ? [{ value: { entriesEnabled: true, executionArmed: true, lastSuccessfulReport: savedReport } }]
+      : params?.[0]?.endsWith(':protection_heartbeat') ? [{ value: heartbeat }] : [], rowCount: 1 }));
+    host.connectedVenue.mockResolvedValue(new ConnectedRevolutVenue({
+      client: { getBalances: async () => { throw new Error('source_balance_mismatch'); }, getOrders: async () => [] },
+      instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [],
+    }));
+    const response = await GET(new Request('https://mirsad.test/api/execution/report'), context('report'));
+    expect(response.status).toBe(200);
+    const report = await response.json();
+    expect(report).toMatchObject({ report_status: 'partial', account_connected: false, execution_ready: false,
+      enabled: false, entries_requested: true, balances: null, available_eur: null, closed_trades: null, performance: null,
+      protection: { armed: true, heartbeat }, last_successful_report: savedReport,
+      read_errors: [{ stage: 'account', code: 'source_balance_mismatch' }] });
+    expect(report.blockers).toContain('source_balance_mismatch');
+    expect(db.query.mock.calls.every(([sql]) => sql.startsWith('SELECT'))).toBe(true);
+    expect(host.runHost).not.toHaveBeenCalled(); expect(host.runProtection).not.toHaveBeenCalled();
+    expect(host.entrySwitch).not.toHaveBeenCalled(); expect(host.refreshReadiness).not.toHaveBeenCalled();
+  });
+  it('redacts arbitrary provider error text and can recover on the next report read', async () => {
+    host.connectedVenue.mockRejectedValueOnce(new Error('secret-provider-token https://private.example'));
+    const failed = await executionReport();
+    expect(failed.read_errors).toMatchObject([{ stage: 'connection', code: 'report_connection_unavailable' }]);
+    expect(JSON.stringify(failed)).not.toContain('secret-provider-token');
+    const recovered = await executionReport();
+    expect(recovered.read_errors).toEqual([]);
+    expect(recovered.report_status).toBe('current');
+  });
+  it('exposes incomplete performance coverage for documentation without labelling it zero profit', async () => {
+    host.connectedVenue.mockResolvedValue(new ConnectedRevolutVenue({
+      client: { getBalances: async () => [{ accountId: 'revolut-x', currency: 'EUR', total: '10', available: '10', reserved: '0', observedAt: new Date().toISOString() }], getOrders: async () => [] },
+      instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [],
+    }));
+    const report = await executionReport();
+    expect(report).toMatchObject({ closed_trades: [], fills: null, trade_history_complete: false,
+      performance: { last24h: { coverageComplete: false, confirmedClosedTrades: 0, realizedNetPnlEur: null, wins: null, winRate: null },
+        berlinToday: { coverageComplete: false, realizedNetPnlEur: null } } });
+  });
 });
