@@ -7,6 +7,7 @@ import { EDUCATION_STORAGE_KEY, readEducationAccount } from '../src/lib/executio
 import retiredWorker from '../automation/retired-scheduler.mjs';
 import type { CancellationPort } from '../src/lib/execution/v1/deadline';
 import { ConnectedRevolutVenue } from '../src/lib/execution/v1/revolut-venue';
+import { account as fixtureAccount } from './execution-fixtures';
 const auth = vi.hoisted(() => ({ requireSession: vi.fn(), requireMutation: vi.fn(), refreshSessionCookie: vi.fn() }));
 const db = vi.hoisted(() => ({ query: vi.fn() }));
 const host = vi.hoisted(() => ({ connectedVenue: vi.fn<() => Promise<CancellationPort | null>>(async () => null), runHost: vi.fn(), runTick: vi.fn(), runProtection: vi.fn(), entrySwitch: vi.fn(), handleDeadline: vi.fn(), refreshReadiness: vi.fn() }));
@@ -126,7 +127,7 @@ describe('scoped native account integration and authenticated endpoints', () => 
     expect(report).toMatchObject({ report_status: 'partial', account_connected: false, execution_ready: false,
       enabled: false, entries_requested: true, balances: null, available_eur: null, closed_trades: null, performance: null,
       protection: { armed: true, heartbeat }, last_successful_report: savedReport,
-      read_errors: [{ stage: 'account', code: 'source_balance_mismatch' }] });
+      read_errors: [{ stage: 'account', code: 'source_balance_mismatch' }, { stage: 'account_details', code: 'source_balance_mismatch' }] });
     expect(report.blockers).toContain('source_balance_mismatch');
     expect(db.query.mock.calls.every(([sql]) => sql.startsWith('SELECT'))).toBe(true);
     expect(host.runHost).not.toHaveBeenCalled(); expect(host.runProtection).not.toHaveBeenCalled();
@@ -140,6 +141,20 @@ describe('scoped native account integration and authenticated endpoints', () => 
     const recovered = await executionReport();
     expect(recovered.read_errors).toEqual([]);
     expect(recovered.report_status).toBe('current');
+  });
+  it('keeps the execution failure visible when diagnostic order details recover the report', async () => {
+    const venue = new ConnectedRevolutVenue({ client: { getBalances: async () => [], getOrders: async () => [] },
+      instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [] });
+    vi.spyOn(venue, 'account').mockRejectedValueOnce(new Error('managed_exit_fill_mismatch'))
+      .mockResolvedValueOnce({ ...fixtureAccount(), id: 'revolut-x' });
+    host.connectedVenue.mockResolvedValue(venue);
+    const report = await executionReport();
+    expect(report).toMatchObject({ account_connected: true, account_read_method: 'source_order_details_for_reporting',
+      report_status: 'partial', execution_ready: false, enabled: false,
+      read_errors: [{ stage: 'account', code: 'managed_exit_fill_mismatch' }] });
+    expect(report.balances).not.toBeNull(); expect(report.performance).not.toBeNull();
+    expect(report.blockers).toContain('managed_exit_fill_mismatch');
+    expect(host.runHost).not.toHaveBeenCalled(); expect(host.entrySwitch).not.toHaveBeenCalled();
   });
   it('exposes incomplete performance coverage for documentation without labelling it zero profit', async () => {
     host.connectedVenue.mockResolvedValue(new ConnectedRevolutVenue({
