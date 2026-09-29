@@ -12,6 +12,8 @@ export interface VenuePort {
   refreshAccounting?(): Promise<void>;
   reconcile(lease: Lease, options?: { transactions?: boolean }): Promise<void>;
   account(options?: { protectionOnly?: boolean }): Promise<Account>;
+  /** Read-only diagnostic projection. Never used by execution or protection. */
+  reportAccount?(): Promise<Account>;
   quotes(symbols: string[]): Promise<Quote[]>;
   instruments(): Promise<Instrument[]>;
   candles(symbol: string, after: number | null): Promise<Candle[]>;

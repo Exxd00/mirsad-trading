@@ -13,10 +13,13 @@ import type { AccountingEvidence } from './v1/accounting';
 type Venue = NonNullable<Awaited<ReturnType<typeof connectedVenue>>>;
 const reportErrorCodes = new Set(['account_mismatch', 'source_balance_missing', 'source_balance_mismatch',
   'source_timestamp_invalid', 'source_identity_conflict', 'source_order_identity_mismatch', 'source_order_regressed',
-  'invalid_decimal', 'conflicting_trade', 'conflicting_fill', 'conflicting_valuation']);
+  'invalid_decimal', 'conflicting_trade', 'conflicting_fill', 'conflicting_valuation',
+  'managed_entry_source_missing', 'managed_entry_fill_mismatch', 'managed_exit_source_missing',
+  'managed_exit_fill_mismatch', 'multiple_managed_entries', 'managed_source_balance_mismatch',
+  'report_order_details_unavailable', 'report_order_details_limit']);
 
 export async function executionReport() {
-  const readErrors: { stage: 'connection' | 'account' | 'capabilities' | 'risk' | 'performance'; code: string; at: number }[] = [];
+  const readErrors: { stage: 'connection' | 'account' | 'account_details' | 'capabilities' | 'risk' | 'performance'; code: string; at: number }[] = [];
   const failed = (stage: typeof readErrors[number]['stage'], error: unknown) => {
     // Provider messages can contain URLs or credentials. Only known local codes
     // belong in an owner-visible report; never forward arbitrary exception text.
@@ -24,6 +27,7 @@ export async function executionReport() {
       ? error.message : `report_${stage}_unavailable`, at: Math.floor(Date.now() / 1000) });
   };
   let venue: Venue | null = null, live: Account | null = null;
+  let accountReadMethod = 'execution_account';
   let capabilities: Awaited<ReturnType<Venue['capabilities']>> | null = null;
   try { venue = await connectedVenue(); } catch (error) { failed('connection', error); }
   if (venue) {
@@ -31,7 +35,16 @@ export async function executionReport() {
       const snapshot = await venue.account();
       if (snapshot.id !== CONFIG.accountId) throw new Error('account_mismatch');
       live = snapshot;
-    } catch (error) { failed('account', error); }
+    } catch (error) {
+      failed('account', error);
+      if (venue.reportAccount) {
+        try {
+          const snapshot = await venue.reportAccount();
+          if (snapshot.id !== CONFIG.accountId) throw new Error('account_mismatch');
+          live = snapshot; accountReadMethod = 'source_order_details_for_reporting';
+        } catch (detailError) { failed('account_details', detailError); }
+      }
+    }
     try { capabilities = await venue.capabilities(); } catch (error) { failed('capabilities', error); }
   }
   // Source failure must not hide the independently stored protection heartbeat,
@@ -61,6 +74,7 @@ export async function executionReport() {
     status: connected ? ready ? state?.entriesEnabled ? 'enabled' : 'entries_paused' : 'monitoring' : 'blocked',
     enabled: ready && state?.entriesEnabled === true, entries_requested: state?.entriesEnabled ?? false,
     report_status: readErrors.length ? 'partial' as const : 'current' as const, read_errors: readErrors,
+    account_read_method: accountReadMethod,
     adapter_configured: venue !== null, account_source_configured: true, account_connected: connected,
     execution_ready: ready, order_api_connected: ready, signal_configured: true, capabilities,
     reason: connected ? ready ? 'configured' : 'execution_data_incomplete' : readErrors[0]?.code ?? 'account_connection_missing',

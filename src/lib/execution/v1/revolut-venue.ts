@@ -119,7 +119,8 @@ export class ConnectedRevolutVenue implements CancellationPort {
       console.info(JSON.stringify({ type: 'execution.v1.source_archive', ...result }));
     }
   }
-  async account(options: { protectionOnly?: boolean; preSubmitKey?: string } = {}): Promise<Account> {
+  async reportAccount(): Promise<Account> { return this.account({ reportDetails: true }); }
+  async account(options: { protectionOnly?: boolean; preSubmitKey?: string; reportDetails?: boolean } = {}): Promise<Account> {
     const balances = await this.source.client.getBalances();
     const observedAt = balances.length ? Math.min(...balances.map(b => seconds(b.observedAt))) : this.clock();
     const eur = balances.find(b => b.currency === 'EUR');
@@ -145,6 +146,24 @@ export class ConnectedRevolutVenue implements CancellationPort {
       if (needed.some(d => !d.source && !rawOrders.some(o => o.clientOrderId === d.sourceIdentity?.clientOrderId))) rawOrders = await this.source.client.getOrders();
       for (const decision of needed) if (decision.source && !rawOrders.some(o => o.id === decision.source!.id)) rawOrders.push(await this.source.client.getOrder(decision.source.id));
     } else rawOrders = await this.source.client.getOrders();
+    if (options.reportDetails) {
+      // List endpoints can omit fees and execution prices. The report may read
+      // full details, but cannot replace the engine's validation or persist a
+      // reconciled decision. A source failure remains visible to the operator.
+      const targets = rawOrders.filter(o => identities.has(o.clientOrderId) && decimal(o.filledQuantity).gt(0));
+      if (!this.source.client.getOrder && targets.length) throw new Error('report_order_details_unavailable');
+      if (targets.length > 12) throw new Error('report_order_details_limit');
+      const details = new Map<string, RevolutOrder>();
+      for (const order of targets) {
+        const detail = await this.source.client.getOrder!(order.id);
+        if (detail.id !== order.id || detail.clientOrderId !== order.clientOrderId
+          || detail.symbol !== order.symbol || detail.side !== order.side
+          || seconds(detail.updatedAt) < seconds(order.updatedAt)
+          || decimal(detail.filledQuantity).lt(order.filledQuantity)) throw new Error('source_order_identity_mismatch');
+        details.set(order.id, detail);
+      }
+      rawOrders = rawOrders.map(order => details.get(order.id) ?? order);
+    }
     const orders = rawOrders.map(order => {
       const decision = identities.get(order.clientOrderId);
       return decision ? ownedOrder(order, decision) : sourceOrder(order);

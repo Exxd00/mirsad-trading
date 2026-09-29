@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, query } from '../src/lib/db';
 import { BrokerApiError, type RevolutOrder, type RevolutTransaction } from '../src/lib/brokers/revolut';
 import { SqlJournal, initialState } from '../src/lib/execution/v1/journal';
-import { CONFIG, type BuyIntent } from '../src/lib/execution/v1/model';
+import { CONFIG, decimal, type BuyIntent } from '../src/lib/execution/v1/model';
 import { ConnectedRevolutVenue } from '../src/lib/execution/v1/revolut-venue';
 import { syncSourceArchive } from '../src/lib/execution/v1/source-archive';
 import { planBuy } from '../src/lib/execution/v1/planner';
@@ -123,6 +123,32 @@ describe('source identity attached to the durable execution intent', () => {
     await j.release(lease);
     await expect(venue.lookup('a'.repeat(64), lease)).rejects.toThrow('execution_lock_lost');
     expect(client.getOrders).not.toHaveBeenCalled();
+  });
+  it('reads full order details for a report when summary fees regress, without repairing the trading journal', async () => {
+    const j = new SqlJournal(), lease = (await j.acquire(CONFIG.accountId))!, { client, venue } = setup(j), i = intent();
+    await j.begin(lease, i, NOW);
+    const raw: RevolutOrder = { ...sourceOrder(i, (await j.decision(lease, i.key))!.sourceIdentity!.clientOrderId),
+      status: 'filled', filledQuantity: i.quantity, averageFillPrice: '100', fee: '0.0001', feeCurrency: 'AAA' };
+    const summary = { ...raw, fee: undefined, feeCurrency: undefined, averageFillPrice: '99' };
+    client.getOrders.mockResolvedValue([summary]); client.getOrder.mockResolvedValue(raw);
+    await venue.lookup(i.key, lease);
+    const quantity = decimal(i.quantity).sub('0.0001').toFixed();
+    await j.saveProtection(lease, { entryKey: i.key, entryOrderId: raw.id, symbol: raw.symbol,
+      quantity, entryFilled: i.quantity, exitedQuantity: '0.0001', averageFillPrice: '100', stop: '98', originalStop: '98', target: '104',
+      sourceAt: NOW, updatedAt: NOW, status: 'watching', trigger: null, lastError: null });
+    await j.release(lease);
+    const before = await j.accountDecisions(CONFIG.accountId), protection = await j.protections(CONFIG.accountId);
+    await expect(venue.account()).rejects.toThrow('managed_exit_fill_mismatch');
+    const report = await venue.reportAccount();
+    expect(report.positions.find(p => p.managed)).toMatchObject({ quantity, averageFillPrice: '100' });
+    expect(report.orders[0]).toMatchObject({ baseFeeQuantity: '0.0001', feeEur: '0.01', averageFillPrice: '100' });
+    expect(await j.accountDecisions(CONFIG.accountId)).toEqual(before);
+    expect(await j.protections(CONFIG.accountId)).toEqual(protection);
+    expect(client.submitOrder).not.toHaveBeenCalled(); expect(client.cancelOrder).not.toHaveBeenCalled();
+    // The report does not silently remove the existing execution blocker.
+    await expect(venue.account()).rejects.toThrow('managed_exit_fill_mismatch');
+    client.getOrder.mockResolvedValueOnce({ ...raw, id: 'different-source-id' });
+    await expect(venue.reportAccount()).rejects.toThrow('source_order_identity_mismatch');
   });
 });
 
