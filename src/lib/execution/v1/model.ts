@@ -47,7 +47,7 @@ export type Account = { id: string; sourceAt: number; readAt: number; availableE
   balances: { currency: string; total: string; available: string; reserved: string }[];
   equityEur: string | null; valuationAt: number | null; valuationComplete: boolean;
   positions: Position[]; orders: SourceOrder[]; trades: ClosedTrade[]; equityHistory: EquityObservation[];
-  fills: SourceFill[] | null;
+  fills: SourceFill[] | null; reportEvidence?: import('./report-evidence').ReportEvidence;
   tradeHistoryComplete: boolean; archiveStart: number | null; dataBlockers?: string[] };
 export type RiskState = { reduced: boolean; dailyHaltDate: string | null };
 export type RiskResult = { state: RiskState; allocation: string; reason: string;
@@ -63,3 +63,4 @@ export type SellIntent = { side: 'sell'; symbol: string; positionId: string; key
 export type Intent = BuyIntent | SellIntent;
 export type Block = { symbol?: string; reason: string };
 export const terminal = (order: SourceOrder) => ['filled', 'cancelled', 'rejected', 'expired'].includes(order.status);
+

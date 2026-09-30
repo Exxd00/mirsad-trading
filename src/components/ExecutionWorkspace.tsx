@@ -131,6 +131,11 @@ export function ExecutionWorkspace() {
       <section className={styles.panel}>
         <div className={styles.panelHeading}><h2>توثيق نتائج الصفقات</h2></div>
         <p className={styles.sectionNote}>النجاح نتيجة موجبة لصفقة مغلقة مؤكدة بعد الرسوم. تُسجّل الخسائر والتعادل أيضًا، وتبقى المراكز المفتوحة منفصلة. نقص التغطية أو الرسوم لا يُعامل كصفر.</p>
+        {report.source_reconciliation && <div role="status" className={`${styles.message} ${report.source_reconciliation.status === 'matched' ? styles.warning : styles.error}`}>
+          <p>مطابقة تفاصيل الأوامر والتعبئات: {report.source_reconciliation.status === 'matched' ? 'متطابقة عند القراءة' : report.source_reconciliation.status === 'unavailable' ? 'تعذرت القراءة الحالية؛ النتائج غير مؤكدة' : 'يوجد اختلاف؛ لا تُعتمد النتائج الصافية حتى تسويته'}.</p>
+          <p dir="ltr">{new Date(report.source_reconciliation.readAt * 1000).toISOString()}</p>
+          {report.source_reconciliation.orders.map(item => <p key={item.orderId}>{item.orderId}: متوسط الأمر <bdi>{shown(item.orderAveragePrice)}</bdi> · متوسط التعبئات <bdi>{shown(item.fillAveragePrice)}</bdi> · الرسم من المصدر <bdi>{shown(item.feeAmount)} {item.feeCurrency}</bdi></p>)}
+        </div>}
         {report.performance ? <div className={styles.scroll}><table className={styles.table}>
           <thead><tr><th>الفترة</th><th>التغطية</th><th>مغلقة مؤكدة ضمن المتاح</th><th>رابحة</th><th>خاسرة</th><th>صافي المحقق EUR</th><th>الرسوم EUR</th><th>نسبة النجاح</th><th>معامل الربح</th><th>التوقع R</th></tr></thead>
           <tbody>{(['last24h', 'berlinToday'] as const).map(key => {
@@ -168,3 +173,4 @@ export function ExecutionWorkspace() {
     </>}
   </main>;
 }
+

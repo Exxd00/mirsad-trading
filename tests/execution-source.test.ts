@@ -5,6 +5,7 @@ import { SqlJournal, initialState } from '../src/lib/execution/v1/journal';
 import { CONFIG, decimal, type BuyIntent } from '../src/lib/execution/v1/model';
 import { ConnectedRevolutVenue } from '../src/lib/execution/v1/revolut-venue';
 import { syncSourceArchive } from '../src/lib/execution/v1/source-archive';
+import type { RevolutFill } from '../src/lib/brokers/revolut';
 import { planBuy } from '../src/lib/execution/v1/planner';
 import { evaluateRisk } from '../src/lib/execution/v1/risk';
 import { NOW, account, instrument, quote, signal } from './execution-fixtures';
@@ -26,6 +27,7 @@ function setup(journal: SqlJournal) {
     { accountId: 'revolut-x' as const, currency: 'AAA', total: '1', available: '0', reserved: '1', observedAt: new Date(atMs).toISOString() },
   ]), getOrders: vi.fn<() => Promise<RevolutOrder[]>>(async () => []), getOrder: vi.fn<() => Promise<RevolutOrder>>(),
   getTransactionsPage: vi.fn(async () => ({ transactions: [] as RevolutTransaction[], nextCursor: null as string | null, sourceAt: new Date(atMs).toISOString() })),
+  getFillsForOrders: vi.fn(async () => ({ fills: [] as RevolutFill[], truncated: false })),
   submitOrder: vi.fn(), cancelOrder: vi.fn() };
   return { client, venue: new ConnectedRevolutVenue({ client, journal, instruments: async () => [], candles: async () => [],
     market: async () => { throw new Error('unused'); } }, () => NOW) };
@@ -131,6 +133,9 @@ describe('source identity attached to the durable execution intent', () => {
       status: 'filled', filledQuantity: i.quantity, averageFillPrice: '100', fee: '0.0001', feeCurrency: 'AAA' };
     const summary = { ...raw, fee: undefined, feeCurrency: undefined, averageFillPrice: '99' };
     client.getOrders.mockResolvedValue([summary]); client.getOrder.mockResolvedValue(raw);
+    client.getFillsForOrders.mockResolvedValue({ truncated: false, fills: [{ id: 'fresh-fill', orderId: raw.id,
+      accountId: 'revolut-x', symbol: raw.symbol, side: raw.side, quantity: raw.filledQuantity, price: '100',
+      baseCurrency: 'AAA', quoteCurrency: 'EUR', createdAt: raw.createdAt, maker: false }] });
     await venue.lookup(i.key, lease);
     const quantity = decimal(i.quantity).sub('0.0001').toFixed();
     await j.saveProtection(lease, { entryKey: i.key, entryOrderId: raw.id, symbol: raw.symbol,
@@ -142,6 +147,13 @@ describe('source identity attached to the durable execution intent', () => {
     const report = await venue.reportAccount();
     expect(report.positions.find(p => p.managed)).toMatchObject({ quantity, averageFillPrice: '100' });
     expect(report.orders[0]).toMatchObject({ baseFeeQuantity: '0.0001', feeEur: '0.01', averageFillPrice: '100' });
+    expect(report.reportEvidence?.status).toBe('matched');
+    expect(report.fills?.[0].price).toBe('100');
+    client.getFillsForOrders.mockRejectedValueOnce(new Error('sensitive provider failure'));
+    const unavailable = await venue.reportAccount();
+    expect(unavailable).toMatchObject({ fills: null, tradeHistoryComplete: false,
+      reportEvidence: { status: 'unavailable', issues: ['report_fills_unavailable'] } });
+    expect(unavailable.orders[0].feeEur).toBeNull();
     expect(await j.accountDecisions(CONFIG.accountId)).toEqual(before);
     expect(await j.protections(CONFIG.accountId)).toEqual(protection);
     expect(client.submitOrder).not.toHaveBeenCalled(); expect(client.cancelOrder).not.toHaveBeenCalled();
@@ -230,3 +242,4 @@ describe('source transactions on the existing monitoring cycle', () => {
     expect(client.submitOrder).not.toHaveBeenCalled(); expect(client.cancelOrder).not.toHaveBeenCalled(); await j.release(lease);
   });
 });
+

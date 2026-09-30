@@ -37,12 +37,17 @@ export async function executionReport() {
       live = snapshot;
     } catch (error) {
       failed('account', error);
-      if (venue.reportAccount) {
-        try {
-          const snapshot = await venue.reportAccount();
-          if (snapshot.id !== CONFIG.accountId) throw new Error('account_mismatch');
-          live = snapshot; accountReadMethod = 'source_order_details_for_reporting';
-        } catch (detailError) { failed('account_details', detailError); }
+    }
+    if (venue.reportAccount) {
+      try {
+        const snapshot = await venue.reportAccount();
+        if (snapshot.id !== CONFIG.accountId) throw new Error('account_mismatch');
+        snapshot.dataBlockers = [...new Set([...(live?.dataBlockers ?? []), ...(snapshot.dataBlockers ?? [])])];
+        live = snapshot; accountReadMethod = 'source_order_details_for_reporting';
+      } catch (detailError) {
+        failed('account_details', detailError);
+        if (live) live = { ...live, fills: null, tradeHistoryComplete: false,
+          trades: live.trades.map(t => ({ ...t, netPnlEur: null, feesEur: null, slippageEur: null })) };
       }
     }
     try { capabilities = await venue.capabilities(); } catch (error) { failed('capabilities', error); }
@@ -73,7 +78,7 @@ export async function executionReport() {
     version: '1.0.0' as const, strategy_version: VERSION, mode: 'execution-core' as const,
     status: connected ? ready ? state?.entriesEnabled ? 'enabled' : 'entries_paused' : 'monitoring' : 'blocked',
     enabled: ready && state?.entriesEnabled === true, entries_requested: state?.entriesEnabled ?? false,
-    report_status: readErrors.length ? 'partial' as const : 'current' as const, read_errors: readErrors,
+    report_status: readErrors.length || (live?.reportEvidence && live.reportEvidence.status !== 'matched') ? 'partial' as const : 'current' as const, read_errors: readErrors,
     account_read_method: accountReadMethod,
     adapter_configured: venue !== null, account_source_configured: true, account_connected: connected,
     execution_ready: ready, order_api_connected: ready, signal_configured: true, capabilities,
@@ -89,6 +94,7 @@ export async function executionReport() {
     read_at: Math.floor(Date.now() / 1000), available_eur: live?.availableEur ?? null,
     balances: live?.balances ?? null, positions: live?.positions ?? null,
     orders: live?.orders ?? null, closed_trades: live?.trades ?? null, fills: live?.fills ?? null,
+    source_reconciliation: live?.reportEvidence ?? null,
     trade_history_complete: live?.tradeHistoryComplete ?? false, performance, saved_records_are_v1_results: false,
     accounting: { equity_eur: live?.equityEur ?? null, valuation_at: live?.valuationAt ?? null,
       valuation_complete: live?.valuationComplete ?? false, checked_at: evidence?.checkedAt ?? null,
@@ -107,3 +113,4 @@ export async function executionReport() {
 }
 export type ExecutionReport = Awaited<ReturnType<typeof executionReport>>;
 export const runExecution = runHost;
+

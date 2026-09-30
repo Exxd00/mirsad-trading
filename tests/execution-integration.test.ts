@@ -162,8 +162,23 @@ describe('scoped native account integration and authenticated endpoints', () => 
       instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [],
     }));
     const report = await executionReport();
-    expect(report).toMatchObject({ closed_trades: [], fills: null, trade_history_complete: false,
+    expect(report).toMatchObject({ closed_trades: [], fills: [], trade_history_complete: false,
       performance: { last24h: { coverageComplete: false, confirmedClosedTrades: 0, realizedNetPnlEur: null, wins: null, winRate: null },
         berlinToday: { coverageComplete: false, realizedNetPnlEur: null } } });
   });
+  it('runs current fill verification even when the engine account is readable and retains both sets of blockers', async () => {
+    const venue = new ConnectedRevolutVenue({ client: { getBalances: async () => [], getOrders: async () => [] },
+      instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [] });
+    vi.spyOn(venue, 'account').mockResolvedValue({ ...fixtureAccount(), dataBlockers: ['accounting_evidence_stale'] });
+    const audit = vi.spyOn(venue, 'reportAccount').mockResolvedValue({ ...fixtureAccount(), tradeHistoryComplete: false,
+      reportEvidence: { readAt: 1, status: 'conflict', issues: ['report_fill_price_mismatch'], orders: [] },
+      dataBlockers: ['report_fill_price_mismatch'] });
+    host.connectedVenue.mockResolvedValue(venue);
+    const report = await executionReport();
+    expect(audit).toHaveBeenCalledOnce();
+    expect(report).toMatchObject({ report_status: 'partial', execution_ready: false,
+      source_reconciliation: { status: 'conflict' } });
+    expect(report.blockers).toEqual(expect.arrayContaining(['accounting_evidence_stale', 'report_fill_price_mismatch']));
+  });
 });
+

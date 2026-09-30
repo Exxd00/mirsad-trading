@@ -30,7 +30,9 @@ export async function cancelDeadline(port: CancellationPort, journal: Journal, k
       catch { cancellationIssue = 'cancellation_outcome_unknown'; }
     }
     await port.reconcile(lease);
-    const final = await port.lookup(key, lease), account = await port.account();
+    // Deadline protection needs live position/order details, not entry-risk
+    // accounting. The same narrow path is used by the protection monitor.
+    const final = await port.lookup(key, lease), account = await port.account({ protectionOnly: true });
     if (final.order && (final.order.id !== found.order.id || final.order.clientKey !== key || final.order.purpose !== 'entry'
       || final.order.side !== 'buy' || final.order.symbol !== decision.intent.symbol)) throw new Error('deadline_order_mismatch');
     if (account.id !== port.accountId) throw new Error('deadline_account_mismatch');
@@ -44,3 +46,4 @@ export async function cancelDeadline(port: CancellationPort, journal: Journal, k
     return { status: final.order.status, retryAt: null };
   } finally { await journal.release(lease); }
 }
+
