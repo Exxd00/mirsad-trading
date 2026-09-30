@@ -140,6 +140,21 @@ describe('durable SQL ownership and orchestration', () => {
     const next = (await j.acquire(CONFIG.accountId))!;
     expect((await j.decision(next, intent.key))?.status).toBe('attempting'); await j.release(next);
   });
+  it('finishes a filled-order deadline through live protection data even when entry accounting cannot be read', async () => {
+    const j = new SqlJournal(), { port, a } = makePort();
+    const intent = planBuy(a, signal(), instrument(), quote(), evaluateRisk(initialState().risk, [], a.equityHistory, true, NOW), NOW).intent!;
+    const lease = (await j.acquire(CONFIG.accountId))!; await j.begin(lease, intent, NOW); await j.release(lease);
+    const filled = { ...order(), clientKey: intent.key, status: 'filled' as const, filledQuantity: '0.4' };
+    vi.mocked(port.lookup).mockResolvedValue({ order: filled, authoritative: true });
+    a.positions = [{ ...position(), quantity: '0.4', available: '0.4' }];
+    vi.mocked(port.account).mockImplementation(async options => {
+      if (!options?.protectionOnly) throw new Error('managed_exit_fill_mismatch');
+      return structuredClone(a);
+    });
+    expect(await cancelDeadline(port, j, intent.key, NOW + 60)).toMatchObject({ status: 'filled', retryAt: null });
+    expect(port.ensureProtection).toHaveBeenCalledOnce();
+    expect(port.cancelRemainder).not.toHaveBeenCalled(); expect(port.submit).not.toHaveBeenCalled();
+  });
 });
 describe('daily read-only reporting', () => {
   it('preserves the last good snapshot on failure and deduplicates the Berlin day', async () => {
@@ -206,3 +221,4 @@ describe('public candle contract and durable timer', () => {
     expect(JSON.stringify(warning.mock.calls)).not.toContain('test-secret');
   });
 });
+

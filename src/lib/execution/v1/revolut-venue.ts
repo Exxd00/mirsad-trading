@@ -13,6 +13,7 @@ import { evaluateRisk } from './risk';
 import { FEE_SCHEDULE, revolutCosts } from './costs';
 import { sameAmounts, sourceAmounts, sourceTradeResults } from './accounting';
 import { refreshSourceAccounting } from './account-evidence';
+import { reconcileReportFills } from './report-evidence';
 
 type Source = {
   client: Pick<RevolutXClient, 'getBalances' | 'getOrders'> & Partial<Pick<RevolutXClient,
@@ -119,7 +120,41 @@ export class ConnectedRevolutVenue implements CancellationPort {
       console.info(JSON.stringify({ type: 'execution.v1.source_archive', ...result }));
     }
   }
-  async reportAccount(): Promise<Account> { return this.account({ reportDetails: true }); }
+  async reportAccount(): Promise<Account> {
+    const account = await this.account({ reportDetails: true });
+    const filled = account.orders.filter(o => o.managed && decimal(o.filledQuantity).gt(0));
+    try {
+      if (filled.length > 12 || (filled.length && (!this.source.client.getOrder || !this.source.client.getFillsForOrders))) throw new Error('report_fills_unavailable');
+      const decisions = await this.source.journal?.accountDecisions(this.accountId) ?? [];
+      const details: RevolutOrder[] = [];
+      for (const order of filled) {
+        const raw = await this.source.client.getOrder!(order.id);
+        const decision = decisions.find(d => d.key === order.clientKey);
+        if (!decision) throw new Error('report_fills_unavailable');
+        const mapped = ownedOrder(raw, decision);
+        // The detail reread and fills must describe the same source snapshot.
+        if (raw.id !== order.id || raw.accountId !== this.accountId || raw.symbol !== order.symbol || raw.side !== order.side
+          || mapped.sourceAt !== order.sourceAt || !decimal(raw.filledQuantity).eq(order.filledQuantity)
+          || mapped.averageFillPrice !== order.averageFillPrice || mapped.feeEur !== order.feeEur
+          || mapped.baseFeeQuantity !== order.baseFeeQuantity) throw new Error('report_fills_unavailable');
+        details.push(raw);
+      }
+      const result = details.length ? await this.source.client.getFillsForOrders!(details, 12) : { fills: [], truncated: false };
+      const verified = reconcileReportFills(details, result.fills, this.clock(), result.truncated);
+      account.reportEvidence = verified.evidence; account.fills = verified.fills;
+    } catch {
+      account.reportEvidence = { readAt: this.clock(), status: 'unavailable', issues: ['report_fills_unavailable'], orders: [] };
+      // A failed live read must not present the saved fills as current evidence.
+      account.fills = null;
+    }
+    if (account.reportEvidence.status !== 'matched') {
+      account.dataBlockers = [...new Set([...(account.dataBlockers ?? []), ...account.reportEvidence.issues])];
+      account.tradeHistoryComplete = false;
+      account.trades = account.trades.map(t => ({ ...t, netPnlEur: null, feesEur: null, slippageEur: null }));
+      account.orders = account.orders.map(o => o.baseFeeQuantity === undefined ? o : { ...o, feeEur: null });
+    }
+    return account;
+  }
   async account(options: { protectionOnly?: boolean; preSubmitKey?: string; reportDetails?: boolean } = {}): Promise<Account> {
     const balances = await this.source.client.getBalances();
     const observedAt = balances.length ? Math.min(...balances.map(b => seconds(b.observedAt))) : this.clock();
@@ -419,3 +454,4 @@ export class ConnectedRevolutVenue implements CancellationPort {
   }
   async armCancellation(key: string, expiresAt: number) { await scheduleCancellation(key, expiresAt); }
 }
+
