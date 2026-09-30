@@ -49,7 +49,7 @@ export function ExecutionWorkspace() {
   return <main className={styles.page} dir="rtl">
     <nav className={styles.nav}>
       <Link href="/" className={styles.brand}>مرصاد</Link>
-      <div className={styles.navLinks}><Link href="/">الحسابات</Link><Link href="/automation">الأتمتة</Link></div>
+      <div className={styles.navLinks}><Link href="/">الحسابات</Link><Link href="/automation">الأتمتة</Link><Link href="/discovery">رصد العملات الجديدة</Link></div>
     </nav>
     <header className={styles.hero}>
       <div><p className={styles.kicker}>محرك التنفيذ · 1.0.0</p><h1>حالة الأتمتة</h1>
