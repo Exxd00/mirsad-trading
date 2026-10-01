@@ -10,6 +10,13 @@ const fill: RevolutFill = { id: 'fill', orderId: 'order', accountId: 'revolut-x'
   quantity: '0.00073403', price: '2357.43', baseCurrency: 'ETH', quoteCurrency: 'EUR',
   createdAt: '2026-09-28T12:45:23Z', maker: false };
 describe('current source evidence for reports', () => {
+  it('exposes a quote-amount discrepancy without assuming it proves a rounding rule', () => {
+    const result = reconcileReportFills([{ ...order, filledQuantity: '1', averageFillPrice: '101', filledAmount: '101' }],
+      [{ ...fill, quantity: '1', price: '100' }], now);
+    expect(result.evidence).toMatchObject({ status: 'conflict', orders: [{
+      orderFilledAmount: '101', fillNotional: '100', quoteAmountDifference: '1',
+    }] });
+  });
   it('exposes a real-sized order/fill discrepancy without rewriting either price or inventing a fee', () => {
     const result = reconcileReportFills([order], [fill], now);
     expect(result.evidence).toMatchObject({ status: 'conflict', issues: ['report_fill_price_mismatch'],

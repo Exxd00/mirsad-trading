@@ -115,7 +115,7 @@ describe('source identity attached to the durable execution intent', () => {
     expect(snapshot.orders[0]).toMatchObject({ clientKey: i.key, managed: true });
     expect(snapshot.orders[1]).toMatchObject({ id: 'existing-protection', managed: false, purpose: 'protection' });
     expect(snapshot.positions[0]).toMatchObject({ managed: false, quantity: '1', available: '0', reserved: '1', protectionIds: ['existing-protection'] });
-    expect(snapshot).toMatchObject({ equityEur: null, valuationComplete: false, equityHistory: [], fills: null });
+    expect(snapshot).toMatchObject({ equityEur: null, valuationComplete: false, equityHistory: [], fills: [] });
     expect(client.cancelOrder).not.toHaveBeenCalled(); await j.release(lease);
   });
 
@@ -126,7 +126,7 @@ describe('source identity attached to the durable execution intent', () => {
     await expect(venue.lookup('a'.repeat(64), lease)).rejects.toThrow('execution_lock_lost');
     expect(client.getOrders).not.toHaveBeenCalled();
   });
-  it('reads full order details for a report when summary fees regress, without repairing the trading journal', async () => {
+  it('uses authoritative details for engine and report when summaries omit base fees, without rewriting the journal', async () => {
     const j = new SqlJournal(), lease = (await j.acquire(CONFIG.accountId))!, { client, venue } = setup(j), i = intent();
     await j.begin(lease, i, NOW);
     const raw: RevolutOrder = { ...sourceOrder(i, (await j.decision(lease, i.key))!.sourceIdentity!.clientOrderId),
@@ -143,12 +143,15 @@ describe('source identity attached to the durable execution intent', () => {
       sourceAt: NOW, updatedAt: NOW, status: 'watching', trigger: null, lastError: null });
     await j.release(lease);
     const before = await j.accountDecisions(CONFIG.accountId), protection = await j.protections(CONFIG.accountId);
-    await expect(venue.account()).rejects.toThrow('managed_exit_fill_mismatch');
+    const live = await venue.account();
     const report = await venue.reportAccount();
+    expect(live).toEqual(report);
     expect(report.positions.find(p => p.managed)).toMatchObject({ quantity, averageFillPrice: '100' });
     expect(report.orders[0]).toMatchObject({ baseFeeQuantity: '0.0001', feeEur: '0.01', averageFillPrice: '100' });
     expect(report.reportEvidence?.status).toBe('matched');
     expect(report.fills?.[0].price).toBe('100');
+    client.getOrders.mockResolvedValueOnce([]);
+    expect((await venue.account()).positions.find(p => p.managed)).toMatchObject({ quantity, averageFillPrice: '100' });
     client.getFillsForOrders.mockRejectedValueOnce(new Error('sensitive provider failure'));
     const unavailable = await venue.reportAccount();
     expect(unavailable).toMatchObject({ fills: null, tradeHistoryComplete: false,
@@ -157,10 +160,27 @@ describe('source identity attached to the durable execution intent', () => {
     expect(await j.accountDecisions(CONFIG.accountId)).toEqual(before);
     expect(await j.protections(CONFIG.accountId)).toEqual(protection);
     expect(client.submitOrder).not.toHaveBeenCalled(); expect(client.cancelOrder).not.toHaveBeenCalled();
-    // The report does not silently remove the existing execution blocker.
+    // Missing fee evidence in full details is still a real quantity regression.
+    client.getOrder.mockResolvedValueOnce(summary);
     await expect(venue.account()).rejects.toThrow('managed_exit_fill_mismatch');
     client.getOrder.mockResolvedValueOnce({ ...raw, id: 'different-source-id' });
     await expect(venue.reportAccount()).rejects.toThrow('source_order_identity_mismatch');
+    client.getOrder.mockRejectedValueOnce(new Error('unavailable'));
+    await expect(venue.account()).rejects.toThrow('unavailable');
+    // A fresh but contradictory fill must block the actual entry planner, too.
+    client.getFillsForOrders.mockResolvedValueOnce({ truncated: false, fills: [{ id: 'conflicting-fill', orderId: raw.id,
+      accountId: 'revolut-x', symbol: raw.symbol, side: 'buy', quantity: raw.filledQuantity, price: '98',
+      baseCurrency: 'AAA', quoteCurrency: 'EUR', createdAt: raw.createdAt, maker: false }] });
+    const conflict = await venue.account();
+    expect(conflict).toMatchObject({ reportEvidence: { status: 'conflict' },
+      dataBlockers: ['report_fill_price_mismatch'], tradeHistoryComplete: false });
+    const ready = account();
+    expect(planBuy({ ...ready, dataBlockers: conflict.dataBlockers }, signal(), instrument(), quote(),
+      evaluateRisk(initialState().risk, [], ready.equityHistory, true, NOW), NOW))
+      .toMatchObject({ intent: null, reason: 'report_fill_price_mismatch' });
+    expect(await j.accountDecisions(CONFIG.accountId)).toEqual(before);
+    expect(await j.protections(CONFIG.accountId)).toEqual(protection);
+    expect(client.submitOrder).not.toHaveBeenCalled(); expect(client.cancelOrder).not.toHaveBeenCalled();
   });
 });
 

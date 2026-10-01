@@ -38,6 +38,15 @@ beforeEach(async () => {
 });
 afterEach(async () => { vi.useRealTimers(); await closeDatabase(); vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 describe('durable SQL ownership and orchestration', () => {
+  it.each(['conflict', 'unavailable'] as const)('keeps the strategy cycle blocked on %s source evidence, including would-be exits', async status => {
+    const j = new SqlJournal(); await seed(j); const { port, a } = makePort();
+    a.positions = [position()];
+    a.reportEvidence = { readAt: NOW, status, issues: ['report_fill_price_mismatch'], orders: [] };
+    vi.mocked(port.quotes).mockImplementation(async symbols => symbols.map(s => ({ ...quote(s), bid: '97' })));
+    expect(await cycle(port, j, ['AAA-EUR'], () => NOW)).toMatchObject({ status: 'blocked', reason: 'report_fill_price_mismatch' });
+    expect(port.prepareExit).not.toHaveBeenCalled(); expect(port.submit).not.toHaveBeenCalled();
+    expect(port.armCancellation).not.toHaveBeenCalled();
+  });
   it('uses the dashboard watchlist including its defaults and preserves an explicitly empty selection', async () => {
     expect(await configuredSymbols()).toEqual(await configuredWatchlist());
     expect(await configuredSymbols()).toEqual(['BTC-EUR', 'ETH-EUR', 'SOL-EUR']);

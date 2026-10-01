@@ -16,7 +16,8 @@ const reportErrorCodes = new Set(['account_mismatch', 'source_balance_missing', 
   'invalid_decimal', 'conflicting_trade', 'conflicting_fill', 'conflicting_valuation',
   'managed_entry_source_missing', 'managed_entry_fill_mismatch', 'managed_exit_source_missing',
   'managed_exit_fill_mismatch', 'multiple_managed_entries', 'managed_source_balance_mismatch',
-  'report_order_details_unavailable', 'report_order_details_limit']);
+  'report_order_details_unavailable', 'report_order_details_limit',
+  'source_order_details_unavailable', 'source_order_details_limit']);
 
 export async function executionReport() {
   const readErrors: { stage: 'connection' | 'account' | 'account_details' | 'capabilities' | 'risk' | 'performance'; code: string; at: number }[] = [];

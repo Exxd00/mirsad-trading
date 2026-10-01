@@ -121,7 +121,9 @@ export class ConnectedRevolutVenue implements CancellationPort {
     }
   }
   async reportAccount(): Promise<Account> {
-    const account = await this.account({ reportDetails: true });
+    return this.account();
+  }
+  private async verifySourceFills(account: Account): Promise<Account> {
     const filled = account.orders.filter(o => o.managed && decimal(o.filledQuantity).gt(0));
     try {
       if (filled.length > 12 || (filled.length && (!this.source.client.getOrder || !this.source.client.getFillsForOrders))) throw new Error('report_fills_unavailable');
@@ -155,7 +157,7 @@ export class ConnectedRevolutVenue implements CancellationPort {
     }
     return account;
   }
-  async account(options: { protectionOnly?: boolean; preSubmitKey?: string; reportDetails?: boolean } = {}): Promise<Account> {
+  async account(options: { protectionOnly?: boolean; preSubmitKey?: string } = {}): Promise<Account> {
     const balances = await this.source.client.getBalances();
     const observedAt = balances.length ? Math.min(...balances.map(b => seconds(b.observedAt))) : this.clock();
     const eur = balances.find(b => b.currency === 'EUR');
@@ -181,23 +183,33 @@ export class ConnectedRevolutVenue implements CancellationPort {
       if (needed.some(d => !d.source && !rawOrders.some(o => o.clientOrderId === d.sourceIdentity?.clientOrderId))) rawOrders = await this.source.client.getOrders();
       for (const decision of needed) if (decision.source && !rawOrders.some(o => o.id === decision.source!.id)) rawOrders.push(await this.source.client.getOrder(decision.source.id));
     } else rawOrders = await this.source.client.getOrders();
-    if (options.reportDetails) {
-      // List endpoints can omit fees and execution prices. The report may read
-      // full details, but cannot replace the engine's validation or persist a
-      // reconciled decision. A source failure remains visible to the operator.
+    if (!options.protectionOnly) {
+      // A list row is discovery, not complete execution evidence: it can omit
+      // base-currency fees already included in a saved protection quantity.
+      // Use the same detail-backed snapshot for entry checks and reports.
+      // This is read-only; a saved decision is never rewritten here.
       const targets = rawOrders.filter(o => identities.has(o.clientOrderId) && decimal(o.filledQuantity).gt(0));
-      if (!this.source.client.getOrder && targets.length) throw new Error('report_order_details_unavailable');
-      if (targets.length > 12) throw new Error('report_order_details_limit');
+      const outsideList = decisions.filter(d => d.source && decimal(d.source.filledQuantity).gt(0)
+        && !rawOrders.some(o => o.id === d.source!.id));
+      if (!this.source.client.getOrder && targets.length + outsideList.length) throw new Error('source_order_details_unavailable');
+      if (targets.length + outsideList.length > 12) throw new Error('source_order_details_limit');
       const details = new Map<string, RevolutOrder>();
       for (const order of targets) {
         const detail = await this.source.client.getOrder!(order.id);
-        if (detail.id !== order.id || detail.clientOrderId !== order.clientOrderId
+        if (detail.accountId !== this.accountId || detail.id !== order.id || detail.clientOrderId !== order.clientOrderId
           || detail.symbol !== order.symbol || detail.side !== order.side
           || seconds(detail.updatedAt) < seconds(order.updatedAt)
           || decimal(detail.filledQuantity).lt(order.filledQuantity)) throw new Error('source_order_identity_mismatch');
         details.set(order.id, detail);
       }
       rawOrders = rawOrders.map(order => details.get(order.id) ?? order);
+      // The default history window is not evidence that an older fill vanished.
+      // Re-read its durable source ID rather than trusting an incomplete archive.
+      for (const decision of outsideList) {
+        const detail = await this.source.client.getOrder!(decision.source!.id);
+        ownedOrder(detail, decision);
+        rawOrders.push(detail);
+      }
     }
     const orders = rawOrders.map(order => {
       const decision = identities.get(order.clientOrderId);
@@ -229,7 +241,8 @@ export class ConnectedRevolutVenue implements CancellationPort {
       balances: balances.map(({ currency, total, available, reserved }) => ({ currency, total, available, reserved })),
       positions, orders, equityEur: null, valuationAt: null, valuationComplete: false,
       trades: [], equityHistory: [], fills: null, tradeHistoryComplete: false, archiveStart: null };
-    if (options.protectionOnly || !this.source.client.getOrderBook || !this.source.journal) return account;
+    if (options.protectionOnly || !this.source.journal) return account;
+    if (!this.source.client.getOrderBook) return this.verifySourceFills(account);
     const evidence = await this.source.journal.accounting(this.accountId);
     const blockers: string[] = [];
     // A balances snapshot cannot establish today's opening holdings when a
@@ -277,7 +290,9 @@ export class ConnectedRevolutVenue implements CancellationPort {
     if (!results.complete) blockers.push('trade_history_incomplete');
     if (results.trades.some(t => t.feesEur === null || t.netPnlEur === null)) blockers.push('closed_trade_costs_missing');
     account.dataBlockers = [...new Set(blockers)];
-    return account;
+    // Contradictory/missing fills block the engine as well as its report. Fixing
+    // a missing summary fee must not accidentally bypass source reconciliation.
+    return this.verifySourceFills(account);
   }
   async instruments(): Promise<Instrument[]> {
     return (await this.source.instruments()).map(i => ({ symbol: i.symbol, active: i.status === 'active',

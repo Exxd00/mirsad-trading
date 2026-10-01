@@ -36,6 +36,14 @@ function assertSigned(url: string | URL | Request, init?: RequestInit) {
 }
 
 describe('Revolut X adapter with isolated mocked transport', () => {
+  it('preserves quote settlement amounts separately from the average execution price', async () => {
+    const transport = vi.fn<typeof fetch>(async (url, init) => {
+      assertSigned(url, init);
+      expect(String(url)).toBe(`https://revx.revolut.com/api/1.0/orders/${orderId}`);
+      return Response.json({ data: { ...baseOrder, average_fill_price: '75000.00', filled_amount: '3.75' } });
+    });
+    expect(await makeClient(transport).getOrder(orderId)).toMatchObject({ averageFillPrice: '75000.00', filledAmount: '3.75' });
+  });
   it('reads signed book depth and rejects levels from a different pair', async () => {
     let currency = 'BTC';
     const transport = vi.fn<typeof fetch>(async (url, init) => {
