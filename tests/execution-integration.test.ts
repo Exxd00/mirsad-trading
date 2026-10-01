@@ -162,7 +162,8 @@ describe('scoped native account integration and authenticated endpoints', () => 
       instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [],
     }));
     const report = await executionReport();
-    expect(report).toMatchObject({ closed_trades: [], fills: [], trade_history_complete: false,
+    // Without the ownership journal there is no verified fill archive.
+    expect(report).toMatchObject({ closed_trades: [], fills: null, trade_history_complete: false,
       performance: { last24h: { coverageComplete: false, confirmedClosedTrades: 0, realizedNetPnlEur: null, wins: null, winRate: null },
         berlinToday: { coverageComplete: false, realizedNetPnlEur: null } } });
   });

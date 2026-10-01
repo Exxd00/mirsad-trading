@@ -4,6 +4,7 @@ import { D, decimal, type SourceFill } from './model';
 export type ReportEvidence = { readAt: number; status: 'matched' | 'conflict' | 'unavailable';
   issues: string[]; orders: { orderId: string; quantity: string; fillQuantity: string;
     orderAveragePrice: string | null; fillAveragePrice: string | null; priceDifference: string | null;
+    orderFilledAmount: string | null; fillNotional: string; quoteAmountDifference: string | null;
     feeAmount: string | null; feeCurrency: string | null; issues: string[] }[] };
 
 /** Read-only comparison. Neither the order nor the journal is rewritten to make
@@ -27,7 +28,8 @@ export function reconcileReportFills(orders: RevolutOrder[], records: RevolutFil
   const rows = orders.map(order => {
     const fills = [...unique.values()].filter(f => f.orderId === order.id);
     const quantity = fills.reduce((n, f) => n.add(f.quantity), new D(0));
-    const average = quantity.gt(0) ? fills.reduce((n, f) => n.add(decimal(f.quantity).mul(f.price)), new D(0)).div(quantity) : null;
+    const notional = fills.reduce((n, f) => n.add(decimal(f.quantity).mul(f.price)), new D(0));
+    const average = quantity.gt(0) ? notional.div(quantity) : null;
     const rowIssues: string[] = [];
     if (!quantity.eq(order.filledQuantity)) rowIssues.push('report_fill_coverage_incomplete');
     // Preserve the exact difference, allowing only the reported average's own
@@ -38,6 +40,10 @@ export function reconcileReportFills(orders: RevolutOrder[], records: RevolutFil
     return { orderId: order.id, quantity: order.filledQuantity, fillQuantity: quantity.toFixed(),
       orderAveragePrice: order.averageFillPrice ?? null, fillAveragePrice: average?.toFixed() ?? null,
       priceDifference: average && order.averageFillPrice ? decimal(order.averageFillPrice).sub(average).toFixed() : null,
+      // Preserve quote settlement evidence separately from execution prices.
+      // A small notional difference alone does not prove a rounding rule.
+      orderFilledAmount: order.filledAmount ?? null, fillNotional: notional.toFixed(),
+      quoteAmountDifference: order.filledAmount === undefined ? null : decimal(order.filledAmount).sub(notional).toFixed(),
       feeAmount: order.fee ?? null, feeCurrency: order.feeCurrency ?? null, issues: rowIssues };
   });
   const evidence: ReportEvidence = { readAt, status: issues.length ? 'conflict' : 'matched', issues: [...new Set(issues)], orders: rows };

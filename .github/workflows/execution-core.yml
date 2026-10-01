@@ -17,5 +17,6 @@ jobs:
       - run: corepack enable && corepack prepare pnpm@11.25.0 --activate
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm exec vitest run tests/execution-core.test.ts tests/execution-integration.test.ts tests/execution-runtime.test.ts
+      - run: pnpm exec vitest run tests/brokers.test.ts tests/execution-source.test.ts tests/execution-report-evidence.test.ts tests/execution-protection.test.ts tests/execution-connection.test.ts
       - run: pnpm exec vitest run tests/discovery-*.test.ts
       - run: pnpm typecheck

@@ -21,7 +21,7 @@ const orderSchema = z.object({
   id: z.string(), client_order_id: z.string(), symbol: z.string(), side: sideSchema,
   type: z.enum(['market', 'limit', 'conditional', 'tpsl', 'twap']),
   quantity: DECIMAL.optional(), filled_quantity: DECIMAL, status: statusSchema,
-  price: DECIMAL.optional(), average_fill_price: DECIMAL.optional(),
+  price: DECIMAL.optional(), average_fill_price: DECIMAL.optional(), filled_amount: DECIMAL.optional(),
   created_date: z.number().int(), updated_date: z.number().int(),
   total_fee: DECIMAL.optional(), fee_currency: z.string().optional(),
   previous_order_id: z.string().optional(), reject_reason: z.string().optional(),
@@ -44,7 +44,7 @@ export interface RevolutOrder {
   id: string; clientOrderId: string; accountId: 'revolut-x'; symbol: string;
   side: 'buy' | 'sell'; type: 'market' | 'limit' | 'conditional' | 'tpsl' | 'twap';
   quantity: string | null; filledQuantity: string;
-  status: z.infer<typeof statusSchema>; price?: string; averageFillPrice?: string;
+  status: z.infer<typeof statusSchema>; price?: string; averageFillPrice?: string; filledAmount?: string;
   createdAt: string; updatedAt: string; fee?: string; feeCurrency?: string;
   previousOrderId?: string; rejectReason?: string;
 }
@@ -168,7 +168,7 @@ function normalizeOrder(raw: z.infer<typeof orderSchema>): RevolutOrder {
     id: raw.id, clientOrderId: raw.client_order_id, accountId: 'revolut-x',
     symbol: raw.symbol.replace('/', '-'), side: raw.side, type: raw.type,
     quantity: raw.quantity ?? null, filledQuantity: raw.filled_quantity,
-    status: raw.status, price: raw.price, averageFillPrice: raw.average_fill_price,
+    status: raw.status, price: raw.price, averageFillPrice: raw.average_fill_price, filledAmount: raw.filled_amount,
     createdAt: iso(raw.created_date), updatedAt: iso(raw.updated_date),
     fee: raw.total_fee, feeCurrency: raw.fee_currency,
     previousOrderId: raw.previous_order_id, rejectReason: raw.reject_reason,

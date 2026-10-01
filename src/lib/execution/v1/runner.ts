@@ -12,7 +12,7 @@ export interface VenuePort {
   refreshAccounting?(): Promise<void>;
   reconcile(lease: Lease, options?: { transactions?: boolean }): Promise<void>;
   account(options?: { protectionOnly?: boolean }): Promise<Account>;
-  /** Read-only diagnostic projection. Never used by execution or protection. */
+  /** Read-only report projection; the connected adapter shares entry evidence. */
   reportAccount?(): Promise<Account>;
   quotes(symbols: string[]): Promise<Quote[]>;
   instruments(): Promise<Instrument[]>;
@@ -66,6 +66,10 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
       const eur = a.balances.find(b => b.currency === 'EUR');
       if (!eur || !decimal(eur.available).eq(a.availableEur) || new Set(a.balances.map(b => b.currency)).size !== a.balances.length
         || a.balances.some(b => decimal(b.available).lt(0) || decimal(b.reserved).lt(0) || !decimal(b.available).add(b.reserved).eq(b.total))) throw new Error('source_balance_mismatch');
+      // A repaired account read must not resume strategic buys or reverse-cross
+      // sells against contradictory fills. The independent protection-only
+      // watcher retains its existing source/quantity checks and trigger levels.
+      if (a.reportEvidence && a.reportEvidence.status !== 'matched') throw new Error(a.reportEvidence.issues[0] ?? 'report_fills_unavailable');
     };
     const valuationMatches = (a: Account) => {
       const last = a.equityHistory.filter(v => v.at <= clock()).sort((x, y) => x.at - y.at).at(-1);
