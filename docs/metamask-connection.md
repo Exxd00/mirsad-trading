@@ -1,6 +1,8 @@
 # MetaMask on Mirsad
 
-The owner opens `/wallet` in a signed-in Chrome profile. Connecting the extension displays the selected EVM account, network and native balance. Creating an automatic trial also records the selected address and its limits in the private Mirsad database.
+Open `/wallet` in Chrome with the MetaMask extension or in the MetaMask mobile app's browser. After you select an account, Mirsad displays the address, network and native balance. Base Sepolia is identified by chain ID 84532.
+
+When the browser does not detect MetaMask, the link and QR code open the production wallet page inside the phone app. Sign in to Mirsad there if prompted. The phone reads its own wallet connection; scanning the code does not pair it with the desktop or cloud browser. This mobile flow is for reading only. The Chrome extension's separate automatic trial records the selected address and its limits in the private Mirsad database when you create a trial.
 
 ## Buying and selling with the browser closed
 

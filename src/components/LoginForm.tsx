@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { BrandMark, Icon } from "./Icons";
 
-export function LoginForm({ csrfToken }: { csrfToken: string }) {
+export function LoginForm({ csrfToken, destination }: { csrfToken: string; destination: '/' | '/wallet' }) {
   const [password, setPassword] = useState("");
   const [visible, setVisible] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -16,7 +16,7 @@ export function LoginForm({ csrfToken }: { csrfToken: string }) {
       const response = await fetch("/api/auth/login", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-CSRF-Token": token }, body: JSON.stringify({ password }) });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(typeof body.error === "string" ? body.error : body.error?.message || "تعذّر تسجيل الدخول. تحقق من كلمة المرور وحاول مجدداً.");
-      setPassword(""); window.location.assign("/");
+      setPassword(""); window.location.assign(destination);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "تعذّر الاتصال بالخادم."); }
     finally { setBusy(false); }
   }
