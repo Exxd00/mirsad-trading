@@ -7,7 +7,7 @@ import styles from '../automation/page.module.css';
 
 export const dynamic = 'force-dynamic';
 export default async function WalletPage() {
-  if (!await pageSession()) redirect('/login');
+  if (!await pageSession()) redirect('/login?resume=wallet');
   const mode = orderConnection();
   return <main dir="rtl" className={styles.page}>
     <nav className={styles.nav} aria-label="التنقل الرئيسي"><Link href="/" className={styles.brand}>مرصاد</Link>

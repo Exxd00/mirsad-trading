@@ -19,5 +19,5 @@ jobs:
       - run: pnpm exec vitest run tests/execution-core.test.ts tests/execution-integration.test.ts tests/execution-runtime.test.ts
       - run: pnpm exec vitest run tests/brokers.test.ts tests/execution-source.test.ts tests/execution-report-evidence.test.ts tests/execution-protection.test.ts tests/execution-connection.test.ts
       - run: pnpm exec vitest run tests/discovery-*.test.ts
-      - run: pnpm exec vitest run tests/wallet-offline.test.ts
+      - run: pnpm exec vitest run tests/metamask.test.ts tests/wallet-login.test.ts tests/wallet-offline.test.ts
       - run: pnpm typecheck

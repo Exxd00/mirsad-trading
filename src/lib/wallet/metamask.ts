@@ -12,7 +12,7 @@ export interface WalletProvider {
 export interface Snapshot { address: string; chainId: string; nativeBalance: string; }
 export type WalletView =
   | { status: 'missing' | 'ambiguous' | 'ready' | 'pending' | 'declined' | 'error' }
-  | { status: 'connected'; wallet: Snapshot };
+  | { status: 'connected'; wallet: Snapshot; canManageTrial: boolean };
 
 const accountPattern = /^0x[0-9a-fA-F]{40}$/;
 const quantityPattern = /^0x(?:0|[1-9a-fA-F][0-9a-fA-F]{0,63})$/;
@@ -49,6 +49,7 @@ export async function readWallet(provider: WalletProvider): Promise<Snapshot | n
 const networks: Record<string, readonly [string, string]> = {
   '1': ['Ethereum', 'ETH'], '10': ['OP Mainnet', 'ETH'], '56': ['BNB Smart Chain', 'BNB'],
   '137': ['Polygon PoS', 'POL'], '8453': ['Base', 'ETH'], '42161': ['Arbitrum One', 'ETH'],
+  '84532': ['Base Sepolia (testnet)', 'ETH'],
   '11155111': ['Ethereum Sepolia (testnet)', 'ETH'],
 };
 export function displayWallet({ chainId, nativeBalance }: Snapshot) {
@@ -62,7 +63,7 @@ export function displayWallet({ chainId, nativeBalance }: Snapshot) {
 }
 
 export function watchMetaMask(target: EventTarget, render: (view: WalletView) => void) {
-  const candidates = new Set<WalletProvider>();
+  const candidates = new Map<WalletProvider, string>();
   let current: WalletProvider | undefined, revision = 0, session = 0;
   let alive = true, requested = false, asking = false;
   const send = (view: WalletView) => { if (alive) render(view); };
@@ -76,7 +77,7 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
       const wallet = await readWallet(provider);
       if (!alive || ticket !== revision) return;
       if (!wallet) requested = false;
-      send(wallet ? { status: 'connected', wallet } : { status: 'ready' });
+      send(wallet ? { status: 'connected', wallet, canManageTrial: candidates.get(provider) === 'io.metamask' } : { status: 'ready' });
     } catch {
       if (alive && ticket === revision) send({ status: 'error' });
     }
@@ -92,11 +93,12 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
   const announce = (event: Event) => {
     const detail = (event as CustomEvent).detail;
     const p = detail?.provider as WalletProvider | undefined;
-    if (!alive || detail?.info?.rdns !== 'io.metamask' || !p || typeof p.request !== 'function'
+    const rdns = detail?.info?.rdns;
+    if (!alive || (rdns !== 'io.metamask' && rdns !== 'io.metamask.mobile') || !p || typeof p.request !== 'function'
       || typeof p.on !== 'function' || typeof p.removeListener !== 'function' || candidates.has(p)) return;
     // rdns is self-reported, not an identity proof. Never auto-pick between
     // competing claimants or use window.ethereum / isMetaMask as a fallback.
-    candidates.add(p);
+    candidates.set(p, rdns);
     if (current) subscribe(current, true);
     reset(); current = candidates.size === 1 ? p : undefined;
     if (current) subscribe(current);
@@ -109,6 +111,7 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
     async trialAction(plan: Plan, side: Side, action: 'sign' | 'revoke') {
       const provider = current, epoch = session;
       if (!alive || !provider || !requested || asking || plan.chainId !== 84532) throw new Error('راجع اتصال حساب التجربة.');
+      if (candidates.get(provider) !== 'io.metamask') throw new Error('الاتصال عبر الهاتف للقراءة فقط.');
       const assertOwner = async () => {
         const bound = await binding(provider);
         if (!alive || current !== provider || session !== epoch || !requested || bound.chainId !== '84532' ||
