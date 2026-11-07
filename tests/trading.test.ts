@@ -146,6 +146,20 @@ describe("fail-closed account, price and permission checks", () => {
     await expect(previewOrder(draft({ accountId: "revolut-x", mode: "live" }), sessionId, port)).rejects.toMatchObject({ code: "PREVIEW_LOCKED" });
     vi.stubEnv("VERCEL_ENV", "");
   });
+  it.each([['metamask', 'wallet_execution_not_configured'], ['metmask', 'invalid_order_connection']])(
+    'blocks a fresh or already-previewed live order after a connection change to %s', async (selected, code) => {
+      const previous = process.env.MIRSAD_ORDER_CONNECTION;
+      try {
+        vi.stubEnv('MIRSAD_ORDER_CONNECTION', 'revolut-x');
+        const { port } = fixture(context({ accountId: 'revolut-x', liveEnabled: true }));
+        const input = draft({ accountId: 'revolut-x', mode: 'live' });
+        const p = await previewOrder(input, sessionId, port);
+        vi.stubEnv('MIRSAD_ORDER_CONNECTION', selected);
+        await expect(previewOrder(input, sessionId, port)).rejects.toMatchObject({ code });
+        await expect(confirmOrder(confirmation(p), sessionId, port)).rejects.toMatchObject({ code });
+        expect(port.submit).not.toHaveBeenCalled();
+      } finally { vi.stubEnv('MIRSAD_ORDER_CONNECTION', previous); }
+    });
 });
 
 describe("uncertain and partial order outcomes", () => {

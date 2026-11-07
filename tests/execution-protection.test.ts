@@ -9,6 +9,7 @@ import { protectionCycle } from '../src/lib/execution/v1/managed-protection';
 import { planBuy, planExit } from '../src/lib/execution/v1/planner';
 import { evaluateRisk } from '../src/lib/execution/v1/risk';
 import { scheduleProtectionWatch } from '../src/lib/execution/v1/scheduler';
+import { runHost, entrySwitch } from '../src/lib/execution/v1/host';
 import { NOW, account, instrument, quote, signal } from './execution-fixtures';
 import worker, { OrderDeadline } from '../automation/execution-v1-worker.mjs';
 
@@ -67,6 +68,17 @@ async function setup(options: { armed?: boolean; fill?: string; entryStatus?: Re
 }
 
 describe('server-managed protection from actual source fills', () => {
+  it('blocks a legacy strategy/arm/buy after switching to the wallet while an existing managed partial still exits once', async () => {
+    const s = await setup({ bid: '97', fill: '0.4', entryStatus: 'partially_filled' });
+    vi.stubEnv('MIRSAD_ORDER_CONNECTION', 'metamask');
+    await expect(runHost()).resolves.toMatchObject({ status: 'blocked', reason: 'wallet_execution_not_configured' });
+    await expect(entrySwitch(true)).resolves.toMatchObject({ status: 'blocked', entriesEnabled: false });
+    await expect(s.venue.submit(s.buy)).rejects.toMatchObject({ code: 'wallet_execution_not_configured' });
+    expect(s.client.submitOrder).not.toHaveBeenCalled();
+    await protectionCycle(s.venue, s.journal, () => NOW);
+    expect(s.client.cancelOrder).toHaveBeenCalledExactlyOnceWith(s.entry.id);
+    expect(s.client.submitOrder).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ quantity: '0.4', side: 'sell' }));
+  });
   it('persists partial-fill levels without requiring native TP/SL or an open browser', async () => {
     const s = await setup({ fill: '0.4', entryStatus: 'partially_filled' });
     expect(await protectionCycle(s.venue, s.journal, () => NOW)).toMatchObject({ status: 'watching', managedPositions: 1, checkedPositions: 1 });

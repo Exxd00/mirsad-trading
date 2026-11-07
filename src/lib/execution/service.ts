@@ -1,4 +1,5 @@
 import 'server-only';
+import { legacyOrderBlock, orderConnection } from '../order-connection';
 import { query } from '../db';
 import { CONFIG, VERSION, type Account } from './v1/model';
 import { connectedVenue, runHost } from './v1/host';
@@ -69,7 +70,8 @@ export async function executionReport() {
     catch (error) { failed('risk', error); }
     try { performance = buildReport(live, now); } catch (error) { failed('performance', error); }
   }
-  const blockers = [...new Set([...readErrors.map(error => error.code), ...(live ? [...(live.dataBlockers ?? []),
+  const orderBlock = legacyOrderBlock();
+  const blockers = [...new Set([...(orderBlock ? [orderBlock] : []), ...readErrors.map(error => error.code), ...(live ? [...(live.dataBlockers ?? []),
     ...(!capabilities || !executionCapabilitiesReady(capabilities) ? ['execution_capabilities_missing'] : []),
     ...(currentRisk?.entryBlocked ? [currentRisk.entryBlocked] : [])] : [venue ? 'account_read_unavailable' : 'account_connection_missing'])])];
   const ready = connected && blockers.length === 0;
@@ -91,6 +93,7 @@ export async function executionReport() {
       target: CONFIG.targetFraction, maximum_positions: CONFIG.maximumPositions, maximum_exposure: CONFIG.maximumExposure,
       maximum_cost: CONFIG.maximumRoundTripCost, daily_loss: CONFIG.dailyLossLimit },
     account_id: CONFIG.accountId, account_name: 'Revolut X · الحساب المتصل',
+    new_order_connection: orderConnection(),
     source_at: live?.sourceAt ?? null, source_timestamp_basis: 'response_observed_at',
     read_at: Math.floor(Date.now() / 1000), available_eur: live?.availableEur ?? null,
     balances: live?.balances ?? null, positions: live?.positions ?? null,

@@ -4,6 +4,7 @@ import Decimal from 'decimal.js';
 import { z } from 'zod';
 import { query, transaction } from './db';
 import { AppError, fail } from './errors';
+import { requireRevolutOrders } from './order-connection';
 
 const positive = z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/).max(40).refine(v=>new Decimal(v).gt(0));
 export const draftSchema=z.object({accountId:z.enum(['revolut-x','simulation']),symbol:z.string().regex(/^[A-Z0-9]{2,16}-[A-Z0-9]{2,12}$/),side:z.enum(['buy','sell']),quantity:positive,type:z.enum(['market','limit']),limitPrice:positive.optional(),mode:z.enum(['live','simulation']).default('live'),scenario:z.enum(['fill','partial','reject','unknown']).default('fill'),idempotencyKey:z.uuid()});
@@ -58,6 +59,7 @@ function validateContext(d:Draft,c:TradingContext,sessionId?:string){
 function previewResponse(i:Intent){return {intentId:i.id,confirmationToken:token(i.id,i.request.sessionId),expiresAt:new Date(i.expires_at).toISOString(),summary:i.request.summary,mode:i.request.draft.mode,state:i.state};}
 export async function previewOrder(raw:unknown,sessionId:string,port:TradingPort){
  const parsed=draftSchema.safeParse(raw);if(!parsed.success)fail('INVALID_ORDER',400,'تحقق من الحقول والكمية ونوع الأمر.');const draft=parsed.data;
+ if(draft.mode==='live')requireRevolutOrders();
  const prior=(await query<Intent>('SELECT * FROM order_intents WHERE idempotency_key=$1',[draft.idempotencyKey])).rows[0];
  if(prior){if(prior.request.sessionId!==sessionId||canonicalDraft(prior.request.draft)!==canonicalDraft(draft))fail('IDEMPOTENCY_CONFLICT',409,'معرّف المحاولة مستخدم لأمر آخر.');return previewResponse(prior);}
  const unresolved=await query("SELECT id FROM order_intents WHERE account_id=$1 AND state IN ('SUBMITTING','UNKNOWN') LIMIT 1",[draft.accountId]);
@@ -76,6 +78,7 @@ export async function confirmOrder(raw:unknown,sessionId:string,port:TradingPort
  if(!intent||intent.request.sessionId!==sessionId)fail('ORDER_NOT_FOUND',404,'الأمر غير موجود في هذه الجلسة.');
  if(!same(intent.confirmation_hash,digest(data.data.confirmationToken)))fail('CONFIRMATION_INVALID',403,'رمز التأكيد غير صالح.');
  if(intent.state!=='PREVIEW')return {intentId:intent.id,state:intent.state,order:intent.response,replayed:true};
+ if(intent.request.draft.mode==='live')requireRevolutOrders();
  if(new Date(intent.expires_at).getTime()<Date.now())fail('PREVIEW_EXPIRED',409,'انتهت صلاحية الملخص؛ أنشئ مراجعة جديدة.');
  const context=await port.context(intent.request.draft,sessionId);
  const refreshedSummary=validateContext(intent.request.draft,context,sessionId);

@@ -49,16 +49,16 @@ export function ExecutionWorkspace() {
   return <main className={styles.page} dir="rtl">
     <nav className={styles.nav}>
       <Link href="/" className={styles.brand}>مرصاد</Link>
-      <div className={styles.navLinks}><Link href="/">الحسابات</Link><Link href="/automation">الأتمتة</Link><Link href="/discovery">رصد العملات الجديدة</Link></div>
+      <div className={styles.navLinks}><Link href="/">الحسابات</Link><Link href="/wallet">محفظة MetaMask</Link><Link href="/automation">الأتمتة</Link><Link href="/discovery">رصد العملات الجديدة</Link></div>
     </nav>
     <header className={styles.hero}>
       <div><p className={styles.kicker}>محرك التنفيذ · 1.0.0</p><h1>حالة الأتمتة</h1>
-        <p className={styles.description}>يقرأ المحرك الحساب المتصل في الصفحة الرئيسية ويحسب تقاطعات EMA من الشموع المكتملة.</p></div>
+        <p className={styles.description}>يعرض هذا التقرير حساب Revolut X وسجل أوامره وحماية مراكزه. يمكنك مراجعة حساب MetaMask من صفحة المحفظة.</p></div>
       {report && <span className={`${styles.state} ${styles.paused}`}>{error ? 'حالة سابقة · تعذر التحديث' : report.report_status === 'partial' ? 'تقرير جزئي · يحتاج مراجعة' : report.enabled ? 'المحرك مفعّل' : report.account_connected ? 'الحساب متصل · الدخول غير جاهز أو متوقف' : 'بانتظار اتصال الحساب'}</span>}
     </header>
     <div className={styles.controls}><button className={styles.button} disabled={loading || mutating} onClick={() => void refresh()}>{loading ? 'جارٍ التحديث…' : 'تحديث الحالة'}</button>
       {report?.adapter_configured && <button className={styles.button} disabled={mutating || loading || Boolean(error)} onClick={() => void action('check')}>{mutating ? 'جارٍ الفحص…' : 'فحص الجاهزية الآن'}</button>}
-      {report?.account_connected && <button className={styles.button} disabled={mutating || loading || Boolean(error) || (!report.entries_requested && (!report.execution_ready || !report.protection.heartbeat_fresh))}
+      {report?.new_order_connection === 'revolut-x' && report.account_connected && <button className={styles.button} disabled={mutating || loading || Boolean(error) || (!report.entries_requested && (!report.execution_ready || !report.protection.heartbeat_fresh))}
         onClick={() => void action('settings', !report.entries_requested)}>{report.entries_requested ? 'إيقاف الدخول الجديد' : 'تفعيل الشراء والبيع الآلي'}</button>}
     </div>
     {error && <p role="alert" className={`${styles.message} ${styles.error}`}>{error}</p>}
@@ -69,7 +69,9 @@ export function ExecutionWorkspace() {
         <p>تعذر إكمال قراءة المصدر. البيانات الناقصة غير متاحة، وتظهر أدناه آخر حالة محفوظة للمراقبة بأوقاتها؛ لا تؤكد هذه الحالة سلامة التنفيذ الآن.</p>
         <ul>{report.read_errors.map(item => <li key={item.stage}>{item.stage}: <code>{item.code}</code></li>)}</ul>
       </div>}
-      <p role="status" className={`${styles.message} ${styles.warning}`}>{report.account_connected
+      <p role="status" className={`${styles.message} ${styles.warning}`}>{report.new_order_connection !== 'revolut-x'
+        ? 'الأوامر الجديدة على Revolut X مغلقة. تبقى متابعة الأوامر السابقة وحماية المراكز التي يديرها مرصاد على حسابها الأصلي.'
+        : report.account_connected
         ? report.enabled ? 'الدخول الآلي مفعّل. يدير مرصاد حماية المراكز التي يفتحها هذا الإصدار.' : report.entries_requested ? 'طلب التفعيل محفوظ، لكن بيانات هذه القراءة لا تؤكد جاهزية الدخول. راجع أسباب المنع وحالة الحماية.' : 'الحساب متصل بـRevolut X. الحماية مضبوطة داخل مرصاد؛ إرسال الأوامر متوقف حتى اكتمال جاهزية التنفيذ وتفعيله. المراكز والأوامر السابقة تبقى خارج إدارته.'
         : report.adapter_configured ? 'الاتصال مُعدّ، لكن قراءة الحساب لم تكتمل. لا توجد أرصدة أو أرباح حالية مؤكدة في هذا التقرير.' : 'تعذر العثور على اتصال الحساب الموجود. راجع اتصال الحساب في الصفحة الرئيسية.'}</p>
       {report.account_connected && <section className={styles.panel}>
