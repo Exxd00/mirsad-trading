@@ -1,4 +1,5 @@
 import { timingSafeEqual, createHash } from 'node:crypto';
+import { after } from 'next/server';
 import { z } from 'zod';
 import { requireMutation, requireSession, refreshSessionCookie } from '@/lib/auth';
 import { json, failure, body } from '@/lib/http';
@@ -49,6 +50,12 @@ export async function POST(request: Request, context: Context) {
     }
     if (action !== 'run' && action !== 'tick') return json({ error: 'المسار غير موجود.' }, 404);
     z.object({}).strict().parse(data);
+    if (action === 'tick' && process.env.VERCEL_ENV === 'production' && process.env.MIRSAD_WALLET_TESTNET_ENABLED !== 'false') {
+      // Existing authenticated cron only. Test assets, ledger and signer are
+      // independent of the live account and never change the legacy tick result.
+      const trial = import('@/lib/wallet/trial-service').then(module => module.runWalletTrial()).catch(() => { console.warn('wallet_testnet_tick_unavailable'); });
+      after(() => trial.then(() => undefined));
+    }
     const result = action === 'tick' ? await runTick() : await runExecution(); return json(result, result.status === 'blocked' ? 409 : 200);
   } catch (error) {
     if (error instanceof z.ZodError) return json({ code: 'INVALID_EXECUTION_INPUT', error: 'بيانات الطلب غير صالحة.' }, 400);

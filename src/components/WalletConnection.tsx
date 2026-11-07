@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { displayWallet, watchMetaMask, type WalletView } from '@/lib/wallet/metamask';
 import styles from '@/app/automation/page.module.css';
+import { WalletTrial } from './WalletTrial';
 
 const captions: Record<WalletView['status'], string> = {
   missing: 'لم يجد مرصاد إضافة MetaMask في هذا المتصفح. افتح الصفحة في بروفايل Chrome الذي تستخدم فيه الإضافة.',
@@ -22,7 +23,7 @@ export function WalletConnection() {
     return () => { client.close(); session.current = null; };
   }, []);
   const details = view?.status === 'connected' ? displayWallet(view.wallet) : null;
-  return <section className={styles.panel} aria-labelledby="wallet-heading">
+  return <><section className={styles.panel} aria-labelledby="wallet-heading">
     <div className={styles.panelHeading}><h2 id="wallet-heading">محفظة MetaMask</h2></div>
     <div className={styles.reportDetails}>
       <p role="status">{view ? captions[view.status] : 'جارٍ البحث عن الإضافة…'}</p>
@@ -36,5 +37,10 @@ export function WalletConnection() {
         <div className={styles.controls}><button type="button" className={styles.button} disabled={view.status === 'pending'}
           onClick={() => void session.current?.connect()}>{view.status === 'connected' ? 'تحديث المحفظة' : 'ربط MetaMask'}</button></div>}
     </div>
-  </section>;
+  </section><WalletTrial key={view?.status === 'connected' ? view.wallet.address + ':' + view.wallet.chainId : 'detached'}
+    wallet={view?.status === 'connected' ? view.wallet : null}
+    ownerAction={(plan, side, action) => {
+      if (!session.current) throw new Error('أعد ربط المحفظة.');
+      return session.current.trialAction(plan, side, action);
+    }}/></>;
 }

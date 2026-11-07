@@ -1,10 +1,11 @@
-// The browser extension is the only transport. This module has no submission,
-// signing, token allowance, network switching, persistence or server API.
-type Method = 'eth_requestAccounts' | 'eth_accounts' | 'eth_chainId' | 'eth_getBalance';
+import type { Plan, Side } from './mandate';
+// Connection and refresh only read the wallet. The separate owner action below is
+// restricted to a locally reconstructed Base Sepolia grant or its revocation.
+type Method = 'eth_requestAccounts' | 'eth_accounts' | 'eth_chainId' | 'eth_getBalance' | 'eth_signTypedData_v4' | 'eth_sendTransaction';
 type WalletEvent = 'accountsChanged' | 'chainChanged' | 'disconnect';
 type Listener = (...args: unknown[]) => void;
 export interface WalletProvider {
-  request(args: { method: Method; params?: string[] }): Promise<unknown>;
+  request(args: { method: Method; params?: (string | { from: string; to: string; data: string; value: string })[] }): Promise<unknown>;
   on(event: WalletEvent, callback: Listener): unknown;
   removeListener(event: WalletEvent, callback: Listener): unknown;
 }
@@ -105,6 +106,32 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
   target.addEventListener('eip6963:announceProvider', announce);
   target.dispatchEvent(new Event('eip6963:requestProvider'));
   return {
+    async trialAction(plan: Plan, side: Side, action: 'sign' | 'revoke') {
+      const provider = current, epoch = session;
+      if (!alive || !provider || !requested || asking || plan.chainId !== 84532) throw new Error('راجع اتصال حساب التجربة.');
+      const assertOwner = async () => {
+        const bound = await binding(provider);
+        if (!alive || current !== provider || session !== epoch || !requested || bound.chainId !== '84532' ||
+          bound.address?.toLowerCase() !== plan.owner.toLowerCase()) throw new Error('تغيّر الحساب أو الشبكة. راجع التفويض من جديد.');
+      };
+      const [{ grant, revokeData, trialMarket }, { getTypesForEIP712Domain, serializeTypedData }] = await Promise.all([
+        import('./mandate'), import('viem'),
+      ]);
+      await assertOwner();
+      let value: unknown;
+      if (action === 'sign') {
+        const typed = grant(plan, side).typed;
+        const document = serializeTypedData({ ...typed, types: { EIP712Domain: getTypesForEIP712Domain({ domain: typed.domain }), ...typed.types } });
+        value = await provider.request({ method: 'eth_signTypedData_v4', params: [plan.owner, document] });
+      } else {
+        value = await provider.request({ method: 'eth_sendTransaction', params: [{ from: plan.owner, to: trialMarket.environment.DelegationManager,
+          value: '0x0', data: revokeData(plan, side) }] });
+      }
+      await assertOwner();
+      const pattern = action === 'sign' ? /^0x[0-9a-f]{130}$/i : /^0x[0-9a-f]{64}$/i;
+      if (typeof value !== 'string' || !pattern.test(value)) throw new Error('تعذّر التحقق من رد المحفظة.');
+      return value;
+    },
     async connect() {
       const provider = current;
       if (!alive || !provider || asking) return;

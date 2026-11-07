@@ -1,18 +1,25 @@
-# MetaMask connection on Mirsad
+# MetaMask on Mirsad
 
-`/wallet` requires the existing owner login. On desktop Chrome it discovers the MetaMask EVM extension via EIP-6963. The owner chooses the account in the extension. The address, selected chain and native balance stay in browser memory. A connection is not a wallet login to Mirsad, proof of ownership, a transfer, trade approval or an unattended signing mandate. There is no wallet key, new domain, database migration or RPC service to buy for this step.
+The owner opens `/wallet` in a signed-in Chrome profile. Connecting the extension displays the selected EVM account, network and native balance. Creating an automatic trial also records the selected address and its limits in the private Mirsad database.
 
-| Server setting `MIRSAD_ORDER_CONNECTION` | New orders | Earlier Revolut activity |
-| --- | --- | --- |
-| Unset or exactly `revolut-x` | Existing behaviour; visiting `/wallet` does not switch trading. | Existing behaviour. |
-| Exactly `metamask` | The homepage leads to the wallet. Manual broker orders (including old previews), strategy runs and re-arming Revolut are blocked; wallet swaps are not implemented. No fallback. | Source reads, daily report, the existing protection watcher and managed cancellation deadlines remain on Revolut. |
-| Any other supplied value | Blocked, including on a typo. | Same legacy monitoring. |
+## Buying and selling with the browser closed
 
-## Production handover
+The working pilot uses test USDC and WETH on Base Sepolia (chain 84532) and a MetaMask EIP-7702 smart account. On the production site, choose the test network and enter the USDC per purchase, maximum number of rounds, expiry and price tolerance. Review the quoted minimums, total USDC cap, wallet recipient and separate gas address. The owner's wallet signs two typed delegations during setup, one for each direction. The dedicated gas address needs test ETH on Base Sepolia. The smart account needs test USDC for the chosen amount.
 
-1. In the owner's authenticated IXA Chrome profile, reconcile Revolut's open orders, positions, outstanding submissions and protective watches against current source data. Do not treat an old report or conflicting fills as zero exposure. Keep legacy credentials and protection while any obligation remains.
-2. Verify the browser extension, chain and account in the owner's profile. Use only **Connect**. There is no transfer from Revolut and no transaction to sign for this check. The wallet balance here is the native asset, not the token portfolio or legacy EUR balance.
-3. Before using the setting in production, agree on the desired chain, token pair/router and signing mode. The settings apply per deployment: coordinate the scheduler target and all live hostnames, wait for old in-flight invocations, then recheck outstanding intents and source records. The setting does not drain an old deployment or disarm a pending Revolut order. Do not revert to permissive legacy settings while old live/entry requests are still armed.
-4. For real wallet execution build a chain-specific quotation, simulation, exact approvals if needed, fee and slippage limits, transaction reconciliation and protected exits. A standard extension calls for the owner's confirmation per transaction; closed-browser execution additionally needs an explicitly signed, revocable policy bounded by chain, contracts, assets, amounts and expiry. No seed phrase or unrestricted wallet signer belongs on Mirsad. Do not claim a fill before its on-chain receipt and settlement evidence.
+Mirsad uses the existing authenticated Cloudflare execution tick. The test job starts independently of the Revolut cycle. The browser, Windows PC and daily 05:00 Berlin review have no role in signing or waking the server. The wallet panel shows the last scheduler check, pending transaction and finalized receipts. The public test pool can move outside the signed price band, in which case the server waits.
 
-Sources: [MetaMask EVM connection](https://docs.metamask.io/metamask-connect/evm/guides/manage-user-accounts/), [EIP-6963](https://eips.ethereum.org/EIPS/eip-6963), [MetaMask transaction confirmation](https://docs.metamask.io/metamask-connect/evm/reference/json-rpc-api/eth_sendTransaction/), [delegation toolkit](https://docs.metamask.io/smart-accounts-kit/).
+Every successful direction executes a fixed atomic batch through the MetaMask DelegationManager. The first call approves the exact input to the fixed Uniswap V3 router. The second swaps into the owner's address with the signed minimum output, and the third clears the allowance. Framework enforcers restrict the entire batch, sender, number of uses and expiration on chain. Each direction has its own signature and counters. The server orders the two legs and starts a sell after a confirmed buy. It sells the signed minimum quantity from that buy. Any excess WETH stays in the owner's wallet.
+
+The host encrypts signatures, the independent test gas signer and pending transaction bytes in its private database. A database row lock serializes preparation. The host saves the signed bytes before broadcasting and reconciles the same hash across restarts. A fill requires a successful canonical finalized receipt and matching net input and output token transfers. “Pause” stops preparation of new submissions. Reconcile any already-prepared hash. The two on-chain revocation buttons invalidate the corresponding permissions and require owner confirmation and test gas.
+
+Production accepts grants only for Base Sepolia. Preview deployments show the controls without accepting grants. Local development uses a separate journal and requires `MIRSAD_WALLET_TESTNET_ENABLED=true`. The setting `false` disables the scheduled trial. The public RPC endpoint defaults to Base Sepolia and can be overridden with `MIRSAD_WALLET_TESTNET_RPC_URL`. The server verifies the chain ID, recent block and the owner's EIP-7702 implementation.
+
+## Live cutover
+
+The trial alternates the exact approved swaps to verify execution. Using the real portfolio requires the owner's chain, token pair, individual and aggregate funding limits, duration, and explicit on-chain authorization. Real entry signals, stop/target handling, gas and fee budgets and account risk reconciliation must be checked on that chain before switching the actual venue.
+
+`MIRSAD_ORDER_CONNECTION` controls the legacy entry route. Unset or `revolut-x` uses the existing route. Selecting `metamask` sends the homepage to the wallet and blocks new Revolut orders, including old order previews and strategy re-arming. Any other provided value also blocks new entries. The legacy report, existing protection watcher and managed cancellation deadlines continue to use their original account. Reconcile current positions and unresolved orders across all live deployments before changing that setting.
+
+The local automated proof uses contract bytecode from MetaMask, a temporary Anvil node and two fixture tokens and a fixed-price fixture router. It signs both grants, drops a submission acknowledgment after the node accepts the transaction, resumes from the encrypted journal, confirms both fills and exercises the on-chain use limit, revocation and expiry. The proof uses artificial prices.
+
+[MetaMask smart accounts](https://docs.metamask.io/smart-accounts-kit/) · [Framework enforcers](https://github.com/MetaMask/delegation-framework/tree/v1.3.0/src/enforcers) · [Uniswap V3 Base deployments](https://developers.uniswap.org/docs/protocols/v3/deployments/v3-base-deployments) · [Circle USDC addresses](https://developers.circle.com/stablecoins/usdc-contract-addresses).
