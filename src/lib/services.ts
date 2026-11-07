@@ -8,6 +8,7 @@ import { AppError, fail } from './errors';
 import { getPublicInstruments, getPublicMarket, RevolutXClient, BrokerApiError, type RevolutMarket, type RevolutInstrument, type RevolutOrder } from './brokers/revolut';
 import type { Draft, NormalOrder, TradingPort } from './trading';
 import { loadCandles } from './execution/v1/feed';
+import { requireRevolutOrders } from './order-connection';
 
 export async function setting<T>(key:string,fallback:T):Promise<T>{const r=await query<{value:T}>('SELECT value FROM app_settings WHERE key=$1',[key]);return r.rows[0]?.value??fallback;}
 export async function setSetting(key:string,value:unknown){await query('INSERT INTO app_settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=NOW()',[key,JSON.stringify(value)]);}
@@ -57,6 +58,7 @@ export async function credentials(){
  return {client:new RevolutXClient(secret),metadata:row.metadata};
 }
 export async function connectRevolut(raw:unknown){
+ requireRevolutOrders();
  if(isPreview())fail('PREVIEW_LOCKED',403,'إدخال بيانات الوسيط متاح في الموقع الرئيسي فقط.');
  const parsed=z.object({broker:z.literal('revolut-x'),apiKey:z.string().trim().min(8).max(512),privateKey:z.string().min(64).max(8192),tradePermissionAcknowledged:z.boolean().default(false),regionConfirmed:z.literal(true)}).safeParse(raw);
  if(!parsed.success)fail('INVALID_CREDENTIALS',400,'أدخل مفتاح API والمفتاح الخاص وأكد منطقة EEA.');
@@ -170,6 +172,7 @@ export function createTradingPort():TradingPort{
    if(draft.scenario==='unknown')throw new Error('Simulated connection loss after venue acceptance');
    return order;
   }
+  requireRevolutOrders();
   const c=boundConnection;if(!c)fail('NOT_CONNECTED',409,'انقطع ربط الوسيط.');
   try{return normalized(await c.client.submitOrder({clientOrderId:id,symbol:draft.symbol,side:draft.side,type:draft.type,quantity:draft.quantity,limitPrice:draft.limitPrice}));}
   catch(error){if(error instanceof BrokerApiError&&error.status&&[400,401,403,404,422,429].includes(error.status))throw new AppError('BROKER_REJECTED',error.status,'رفض الوسيط الطلب.');throw error;}
@@ -182,6 +185,7 @@ export async function settings(){
  return {databaseReady:true,encryptionReady:!!process.env.ENCRYPTION_KEY,preview:isPreview(),liveEnabled:!isPreview()&&await setting('live_enabled',false),revolut:{configured:!!row&&!isPreview(),readVerified:row?.metadata.readVerified??false,tradePermissionAcknowledged:row?.metadata.tradePermissionAcknowledged??false,regionConfirmed:row?.metadata.regionConfirmed??false,verifiedAt:row?.metadata.verifiedAt??null},ibkr:{configured:false,requiresGateway:true,reason:'لا توجد بوابة دائمة أو جلسة API متحققة.'}};
 }
 export async function toggleLive(enabled:boolean){
+ if(enabled)requireRevolutOrders();
  if(isPreview()){if(enabled)fail('PREVIEW_LOCKED',403,'إرسال الأوامر محظور في المعاينة.');return {liveEnabled:false};}
  if(enabled){if(isPreview())fail('PREVIEW_LOCKED',403,'إرسال الأوامر محظور في المعاينة.');const c=await credentials();if(!c||!c.metadata.regionConfirmed||!c.metadata.tradePermissionAcknowledged)fail('PERMISSIONS_REQUIRED',409,'تحقق من الحساب ونطاق مفتاح التداول ومنطقة EEA أولاً.');await c.client.getBalances();}
  await setSetting('live_enabled',enabled);await audit(enabled?'live.enabled':'live.disabled');return {liveEnabled:enabled};

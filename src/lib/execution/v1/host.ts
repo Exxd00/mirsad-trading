@@ -13,6 +13,7 @@ import { ConnectedRevolutVenue } from './revolut-venue';
 import { protectionCycle } from './managed-protection';
 import { scheduleProtectionWatch } from './scheduler';
 import { evaluateRisk } from './risk';
+import { legacyOrderBlock } from '../../order-connection';
 export const journal = new SqlJournal();
 /** Owner-selected connection: the account already connected on the main page.
  * Credentials stay on the existing host; the scheduler receives no broker keys. */
@@ -25,6 +26,8 @@ export async function configuredSymbols() {
   return Array.isArray(selected) ? [...new Set(selected.filter((s): s is string => typeof s === 'string' && /^[A-Z0-9]{2,16}-EUR$/.test(s)))] : [];
 }
 export async function runHost() {
+  const block = legacyOrderBlock();
+  if (block) return { status: 'blocked', reason: block };
   const port = await connectedVenue(), symbols = await configuredSymbols();
   if (port) return cycle(port, journal, symbols);
   // Complete the market-analysis path while clearly retaining the missing order
@@ -73,6 +76,8 @@ export async function handleDeadline(key: string) {
 }
 export async function entrySwitch(enabled: boolean) {
   if (enabled) {
+    const block = legacyOrderBlock();
+    if (block) return { status: 'blocked', reason: block, entriesEnabled: false, orderApiConnected: false };
     const port = await connectedVenue();
     if (!port || !executionCapabilitiesReady(await port.capabilities())) {
       return { status: 'blocked', reason: 'execution_capabilities_missing', entriesEnabled: false, orderApiConnected: false };

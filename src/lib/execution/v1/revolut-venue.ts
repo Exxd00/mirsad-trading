@@ -1,5 +1,6 @@
 import 'server-only';
 import { isDeepStrictEqual } from 'node:util';
+import { requireRevolutOrders } from '../../order-connection';
 import type { RevolutXClient, RevolutInstrument, RevolutMarket, RevolutOrder } from '../../brokers/revolut';
 import { BrokerUnknownOutcomeError } from '../../brokers/revolut';
 import { CONFIG, D, decimal, fresh, positive, terminal, type Account, type Candle, type Instrument, type Intent, type Position, type Quote, type SellIntent, type SourceOrder } from './model';
@@ -408,6 +409,9 @@ export class ConnectedRevolutVenue implements CancellationPort {
     return { ready: true, quantity: quantity.toFixed() };
   }
   async submit(intent?: Intent, lease?: Lease): Promise<SourceOrder> {
+    // The legacy independent watcher may still protect a pre-cutover position.
+    // All discretionary/strategy orders stay at the selected connection.
+    if (!intent || intent.side === 'buy' || !intent.reduceOnly || (intent.reason !== 'stop' && intent.reason !== 'target')) requireRevolutOrders();
     const journal = await this.authority(lease);
     if (!intent || !lease || !this.source.client.submitOrder) throw new Error('source_write_unavailable');
     const decision = await journal.decision(lease, intent.key);
