@@ -30,6 +30,14 @@ pnpm build
 
 Use the existing database and secrets. Production requires durable Postgres via `DATABASE_URL`; local PGlite is for development. Keep `ENCRYPTION_KEY` unchanged over existing encrypted data. Environment names are listed in [.env.example](.env.example); never put secret values in Git, client code, logs, screenshots or the Sheet.
 
+## Administrative password recovery
+
+`INITIAL_PASSWORD_HASH` seeds a missing owner only; changing it never replaces an existing password. An authorized production recovery can run `pnpm exec tsx scripts/reset-owner-password.ts` as an explicit, one-off server build step. It is separate from normal authentication, application startup and the normal build command.
+
+Supply `MIRSAD_OWNER_RESET_HASH` as a Secret containing the existing scrypt format, a unique UUID in `MIRSAD_OWNER_RESET_ID`, and the independently verified public reporting-key SHA256 in `MIRSAD_OWNER_RESET_EXPECTED_PUBLIC_KEY_SHA256`. The script requires the production environment, the application origin and an existing Postgres owner. It verifies database identity before updating the owner, revoking sessions and recording an audit event in one transaction. Never put a password or its hash in a command argument or source file.
+
+The database commit precedes any subsequent application build: a later build failure does not undo the password change. Retry the same operation UUID and hash to obtain an idempotent result without restoring an older password or revoking later sessions. After verifying login, remove or clear the temporary reset variables and deploy the same source with the normal build command. Update the production bootstrap hash separately if future owner initialization should use the new password.
+
 ## Historical evidence
 
 Existing database history and `reports/**` remain historical evidence with their original source, account, timestamps and costs. They are not a wallet balance, wallet performance sample or permission to trade. The migration does not reset those records or transplant their identifiers into wallet state.
