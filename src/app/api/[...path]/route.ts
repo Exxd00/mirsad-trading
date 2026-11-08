@@ -17,7 +17,7 @@ export async function GET(request:Request,ctx:Context){
  };
  try{
   const path=(await ctx.params).path.join('/');
-  if(path==='automation/public-key'){try{return json(await monitorPublicKey());}catch{return json({error:'Reporting is not initialized.'},503);}}
+  if(path==='automation/public-key'){try{return json(await monitorPublicKey(),200,{'X-Mirsad-Release':'wallet-only-20261108'});}catch{return json({error:'Reporting is not initialized.'},503);}}
   if(path==='auth/csrf'){const csrf=issueLoginCsrf();const response=json({csrfToken:csrf.csrfToken});response.headers.append('Set-Cookie',csrf.cookie);return response;}
   const session=await requireSession(request);
   // Workspace reads and scheduled reads both keep the authenticated browser

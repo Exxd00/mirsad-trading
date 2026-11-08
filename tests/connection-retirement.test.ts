@@ -17,7 +17,9 @@ describe('explicit connection retirement', () => {
     await query("INSERT INTO order_intents(id,idempotency_key,broker,account_id,instrument,request,state) VALUES('historic','historic-key','revolut-x','revolut-x','ETH-EUR','{}','FILLED')");
     await query("INSERT INTO audit_events(event,detail) VALUES('historic.trade','{\"preserved\":true}')");
     const first = await retireLegacyConnection();
-    expect(first).toEqual({ credentialsRemoved: 1, cachedResponsesRemoved: 1, financialHistoryRetained: true, liveEnabled: false });
+    expect(first).toMatchObject({ credentialsRemoved: 1, cachedResponsesRemoved: 1, remainingCredentials: 0,
+      financialHistoryRetained: true, liveEnabled: false, legacyEntriesEnabled: false, legacyExecutionArmed: false,
+      countsBefore: { credentials: 1, financialOrders: 1, auditEvents: 1 }, countsAfter: { credentials: 0, financialOrders: 1, auditEvents: 2 } });
     expect((await query('SELECT broker FROM broker_credentials')).rows).toEqual([{ broker: 'unrelated' }]);
     expect((await query("SELECT id FROM order_intents WHERE id='historic'")).rowCount).toBe(1);
     expect((await query("SELECT detail FROM audit_events WHERE event='historic.trade'")).rows).toEqual([{ detail: { preserved: true } }]);
