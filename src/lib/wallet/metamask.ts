@@ -2,7 +2,7 @@ import type { Plan, Side } from './mandate';
 // Connection and refresh only read the wallet. The separate owner action below is
 // restricted to a locally reconstructed Base Sepolia grant or its revocation.
 type Method = 'eth_requestAccounts' | 'eth_accounts' | 'eth_chainId' | 'eth_getBalance' | 'eth_signTypedData_v4' | 'eth_sendTransaction';
-type WalletEvent = 'accountsChanged' | 'chainChanged' | 'disconnect';
+type WalletEvent = 'accountsChanged' | 'chainChanged' | 'connect' | 'disconnect';
 type Listener = (...args: unknown[]) => void;
 export interface WalletProvider {
   request(args: { method: Method; params?: (string | { from: string; to: string; data: string; value: string })[] }): Promise<unknown>;
@@ -65,28 +65,74 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
   const candidates = new Set<WalletProvider>();
   let current: WalletProvider | undefined, revision = 0, session = 0;
   let alive = true, requested = false, asking = false;
+  let snapshot: Snapshot | undefined, reading: Promise<void> | undefined, queued = false;
+  let timer: ReturnType<typeof setTimeout> | undefined, lastReadAt = 0;
+  let cancelRead: (() => void) | undefined;
   const send = (view: WalletView) => { if (alive) render(view); };
-  const reset = () => { revision++; session++; requested = false; asking = false; };
-  const refresh = async () => {
+  const clearTimer = () => { if (timer !== undefined) clearTimeout(timer); timer = undefined; };
+  const reset = () => {
+    revision++; session++; requested = false; snapshot = undefined;
+    queued = false; clearTimer();
+  };
+  const refresh = (): Promise<void> => {
     const provider = current;
-    if (!alive || !provider || !requested || asking) return;
+    if (!alive || !provider || asking) return Promise.resolve();
+    if (reading) {
+      queued = true;
+      return reading.then(() => queued ? refresh() : reading ?? Promise.resolve());
+    }
+    queued = false; clearTimer(); lastReadAt = Date.now();
     const ticket = ++revision;
     send({ status: 'pending' });
-    try {
-      const wallet = await readWallet(provider);
-      if (!alive || ticket !== revision) return;
-      if (!wallet) requested = false;
-      send(wallet ? { status: 'connected', wallet } : { status: 'ready' });
-    } catch {
-      if (alive && ticket === revision) send({ status: 'error' });
-    }
+    const pending = (async () => {
+      let readTimer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<never>((_, reject) => {
+        cancelRead = () => reject(new Error('wallet_read_unavailable'));
+        readTimer = setTimeout(cancelRead, 5000);
+      });
+      try {
+        const wallet = await Promise.race([readWallet(provider), deadline]);
+        if (!alive || current !== provider || ticket !== revision) return;
+        if (!wallet || (snapshot && (snapshot.address.toLowerCase() !== wallet.address.toLowerCase()
+          || snapshot.chainId !== wallet.chainId))) session++;
+        requested = wallet !== null; snapshot = wallet ?? undefined;
+        send(wallet ? { status: 'connected', wallet } : { status: 'ready' });
+      } catch {
+        if (alive && current === provider && ticket === revision) {
+          session++; requested = false; snapshot = undefined; send({ status: 'error' });
+        }
+      } finally {
+        if (readTimer !== undefined) clearTimeout(readTimer);
+        cancelRead = undefined;
+        reading = undefined;
+        if (queued) scheduleRefresh();
+      }
+    })();
+    reading = pending;
+    return pending;
   };
-  const changed = () => { void refresh(); };
-  const disconnected = () => { reset(); send({ status: 'ready' }); };
+  // No polling: coalesce page/provider event bursts into one read and at most
+  // one trailing refresh. Discovery waits a turn so competing announcements can
+  // invalidate selection before any RPC. All automatic methods remain read-only.
+  const scheduleRefresh = () => {
+    if (!alive || !current) return;
+    queued = true;
+    if (asking || reading || timer !== undefined) return;
+    timer = setTimeout(() => { timer = undefined; if (queued) void refresh(); }, Math.max(0, 250 - (Date.now() - lastReadAt)));
+  };
+  const changed = () => { reset(); send({ status: asking ? 'pending' : 'ready' }); scheduleRefresh(); };
+  const accountsChanged = (accounts: unknown) => {
+    reset(); send({ status: asking ? 'pending' : 'ready' });
+    // An explicit empty-account notification clears the connection immediately;
+    // a later unlock/connect or foreground event can verify permission again.
+    if (!Array.isArray(accounts) || accounts.length) scheduleRefresh();
+  };
+  const disconnected = () => { reset(); send({ status: asking ? 'pending' : 'ready' }); };
   const subscribe = (provider: WalletProvider, remove = false) => {
     const method = remove ? 'removeListener' : 'on';
-    provider[method]('accountsChanged', changed);
+    provider[method]('accountsChanged', accountsChanged);
     provider[method]('chainChanged', changed);
+    provider[method]('connect', changed);
     provider[method]('disconnect', disconnected);
   };
   const announce = (event: Event) => {
@@ -101,9 +147,12 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
     reset(); current = candidates.size === 1 ? p : undefined;
     if (current) subscribe(current);
     send({ status: current ? 'ready' : 'ambiguous' });
+    if (current) scheduleRefresh();
   };
   send({ status: 'missing' });
   target.addEventListener('eip6963:announceProvider', announce);
+  target.addEventListener('focus', scheduleRefresh);
+  target.addEventListener('pageshow', scheduleRefresh);
   target.dispatchEvent(new Event('eip6963:requestProvider'));
   return {
     async trialAction(plan: Plan, side: Side, action: 'sign' | 'revoke') {
@@ -137,22 +186,33 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
       if (!alive || !provider || asking) return;
       if (requested) return refresh();
       const ticket = ++session;
+      revision++; queued = false; clearTimer();
       asking = true; send({ status: 'pending' });
+      let readAfterPrompt = false;
       try {
         const address = firstAddress(await provider.request({ method: 'eth_requestAccounts' }));
         if (!alive || ticket !== session) return;
-        asking = false;
         if (!address) { send({ status: 'ready' }); return; }
-        requested = true; await refresh();
+        requested = true; readAfterPrompt = true;
       } catch (e) {
         if (!alive || ticket !== session) return;
-        asking = false; requested = false;
+        requested = false;
         send({ status: (e as { code?: unknown } | null)?.code === 4001 ? 'declined' : 'error' });
+      } finally {
+        // Provider/page events may invalidate the response but cannot release
+        // the actual permission prompt early and allow a parallel request.
+        asking = false;
+        if (queued) scheduleRefresh();
+        else if (alive && current === provider && ticket !== session) send({ status: 'ready' });
       }
+      if (readAfterPrompt) await refresh();
     },
     close() {
       alive = false; reset();
+      cancelRead?.();
       target.removeEventListener('eip6963:announceProvider', announce);
+      target.removeEventListener('focus', scheduleRefresh);
+      target.removeEventListener('pageshow', scheduleRefresh);
       if (current) subscribe(current, true);
     },
   };
