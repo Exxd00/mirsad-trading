@@ -36,3 +36,57 @@ A real-money delegation must bind the approved chain, owner, executor, allowed c
 Use isolated transport tests for changed mapping, stale data, repeated wakeups, lost responses, partial fills, cancellation races, finality conflicts, missing FX/fees, gas exhaustion, expiry, pause and revocation. The independent testnet proof must keep test balances and source records distinct from real account state.
 
 Before any readiness claim, separately verify the deployment revision, existing scheduler, actual grant scope and network receipts. No deployment, delegation, test cycle or scheduler activation is performed by documenting this contract. See [wallet-migration.md](wallet-migration.md).
+
+## Candidate connection implementation — 8 November 2026
+
+The existing strategy, sizing, risk, journal, reporting and scheduler remain the
+authority. The following new pieces prepare the missing connection; they do not
+install a production source or make the account financially ready:
+
+- `wallet/strategy-profile.ts` stores explicit chain/owner/executor/token mappings
+  and methodology references with revision compare-and-set. Every profile remains
+  inactive configuration and its authority remains unverified after a restart.
+- `wallet/cow-order.ts` commits the GPv2 Ethereum domain and all order fields to a
+  deterministic 56-byte UID. `cow-api.ts` only reads version/order/fill/quote data
+  from the official endpoint. A 404 is unknown, API fills are not finalized chain
+  evidence, and a gas-cost estimate is not an owner's paid transaction fee.
+- `wallet/cow-policy.ts` builds an **unsigned** candidate delegation and calldata.
+  `contracts/CoWOrderEnforcer.sol` is an **undeployed integration candidate** for
+  exact owner-received presigns and cancellation of that grant's registered UIDs.
+  It binds canonical app-data to the signed namespace, delegation and intent;
+  one intent cannot acquire another UID. Per-order and lifetime raw-token caps
+  and conservative price floors bound authority. These are not replacements for
+  the strategy's 10%/5%, EUR valuation, exposure, daily loss or cost checks.
+- `wallet/strategy-setup.ts` and the owner-authenticated read endpoint show current
+  selections, historical selections and stored configuration separately. Previous
+  symbols are not copied or silently mapped to wrapped tokens on another chain.
+
+Order validity and the cancellation timer are separate. The production orderbook
+requires a minimum validity window at acceptance, so setting expiry to the
+decision's 60-second deadline can fail after network latency. A longer permitted
+expiry does **not** replace arming the existing durable active cancellation at
+60 seconds before sending an entry. Racing fills still require reconciliation.
+
+Revoking a MetaMask delegation does not erase an existing CoW presign. Before a
+revocation flow can claim all standing orders stopped, the owner must invalidate
+and reconcile the open UIDs (or establish their expiration), and review remaining
+token allowances. The executor must never restore a presign the owner cleared.
+
+The local policy tests deploy the real packaged DelegationManager and EIP-7702
+implementation on loopback with generated keys. Their settlement is an artificial
+fixture, not the live GPv2 settlement. They prove scoped permission and rollback,
+not live trade fills, fees, liquidity, 60-second delivery, FX, funding or finality.
+No owner funds, keys, real delegation, contract deployment or market order are
+used by those tests.
+
+Primary integration references:
+
+- [Pinned orderbook API schema](https://github.com/cowprotocol/services/blob/c1e29b8b5135d5ca600b501a50b6cae4c203aa35/crates/orderbook/openapi.yml)
+- [Minimum validity validation](https://github.com/cowprotocol/services/blob/c1e29b8b5135d5ca600b501a50b6cae4c203aa35/crates/shared/src/order_validation.rs)
+- [GPv2 signing and persistent presigns](https://github.com/cowprotocol/contracts/blob/main/src/contracts/mixins/GPv2Signing.sol)
+- [Canonical app-data schema](https://github.com/cowprotocol/cow-sdk/blob/main/packages/app-data/src/schemas/v1.3.0.json)
+
+The remaining production gate includes approved market mappings, deployed-policy
+identity, finite allowances, actual authority verification, finalized transfers,
+complete market/FX/history evidence, durable prepared transaction identities and
+the concrete strategy-source bootstrap. Until those pass, entries stay blocked.
