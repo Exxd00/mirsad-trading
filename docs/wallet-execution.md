@@ -8,7 +8,13 @@ This is the acceptance contract for the main wallet strategy. The normalized typ
 
 Bind each source response to the approved chain ID, owner address, strategy account, token contract addresses, decimals and market. Persist that binding across restarts; reject changed chains/accounts and conflicting identifiers. A ticker name alone cannot identify a token.
 
-New entries use the owner's saved `wallet:strategy:watchlist`, intersected with approved market mappings and any nonempty configured symbol restriction. A missing or empty watchlist permits no new entries; it never expands to every approved market. Removing a symbol does not remove protection or exits for existing strategy-managed positions.
+The owner explicitly selected automatic opportunity selection on 8 November 2026. The versioned `wallet:strategy:selection:v1` setting records `opportunities` or `manual` separately from the watchlist. Automatic mode draws candidates only from the installed execution source's mapped markets after its current grant is verified, intersected with any nonempty configured symbol restriction. Missing, expired, revoked or changed source authority yields no candidates; paper discovery and an inactive profile never supply this universe.
+
+The unchanged EMA and risk checks determine eligible entries. Existing `rankEntries` ranks by estimated round-trip cost, then signal time and symbol; it does not claim to maximize expected return. The runner rotates candidates within its scan budget and creates at most one entry per cycle. Automatic mode does not promise that every market is scanned in one cycle.
+
+A missing selection policy retains manual behavior for existing installations. Manual mode uses the owner's saved `wallet:strategy:watchlist`, intersected with the verified mapped universe and configured restriction; a missing or empty list permits no new entries. Removing a symbol or disabling entries does not remove protection or exits for existing strategy-managed positions.
+
+Saving either selection mode is authenticated configuration only: it does not install a source, grant authority or enable entries. Selection edits share the financial account lease and reject unsettled source writes. The venue rechecks the current selection under that lease before claiming a new buy, so an old prefetched list cannot override a later saved choice.
 
 Use one documented candle source with 1,000 contiguous completed 15-minute bars and fresh executable quotes. The source identity must match the approved mapping. Replacing the removed provider with empty invented candles, another provider's prices or testnet prices is invalid.
 

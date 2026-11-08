@@ -59,6 +59,7 @@ const localReasons = new Set([
   "wallet_grant_outside_validity", "wallet_grant_unverified", "wallet_identity_invalid", "wallet_journal_missing",
   "wallet_limit_cancellation_unsupported", "wallet_market_identity_conflict", "wallet_market_mapping_invalid", "wallet_market_mapping_missing",
   "wallet_order_account_mismatch", "wallet_order_book_identity_mismatch", "wallet_quote_identity_mismatch", "wallet_unbound_ledger_not_empty",
+  "wallet_strategy_selection_invalid", "wallet_strategy_selection_changed", "wallet_opportunity_universe_unavailable",
   "warmup_requires_1000_candles", "zero_return_denominator",
 ]);
 export function executionReason(error: unknown, fallback: string): string {

@@ -3,6 +3,7 @@ import 'server-only';
 import { isDeepStrictEqual } from 'node:util';
 import { walletBindingIdentity, walletBindingIssue, type WalletExecutionBinding } from '../../wallet/execution-connection';
 import { walletOrderBlock } from '../../order-connection';
+import { strategyEntrySelection } from '../../wallet/selection-service';
 import type { SourceClient, SourceInstrument, SourceMarket, ReportedOrder } from './source-model';
 import { SourceUnknownOutcomeError } from './source-model';
 import { CONFIG, D, decimal, fresh, positive, terminal, type Account, type Candle, type Instrument, type Intent, type Position, type Quote, type SellIntent, type SourceOrder } from './model';
@@ -458,6 +459,11 @@ export class ConnectedWalletVenue implements CancellationPort {
       if (intent.side === 'buy') {
         const state = await journal.state(lease);
         if (!state.entriesEnabled) throw new Error('entries_paused');
+        // The candidate list was collected before candle I/O. Re-read the
+        // owner's current policy under the account lease before claiming a
+        // financial write; selection edits use this same lease.
+        const selection = await strategyEntrySelection(this.clock);
+        if (selection.reason || !selection.symbols.includes(intent.symbol)) throw new Error(selection.reason ?? 'wallet_strategy_selection_changed');
         const heartbeat = await journal.protectionHeartbeat(this.accountId);
         if (!heartbeat || !fresh(heartbeat.at, this.clock(), CONFIG.protectionHeartbeatMaxAgeSeconds) || !['idle', 'watching'].includes(heartbeat.status)) throw new Error('protection_monitor_stale');
         // This exact decision has just been allocated under this lease and the

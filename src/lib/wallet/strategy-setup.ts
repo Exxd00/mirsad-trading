@@ -3,6 +3,7 @@ import { query, type SqlExecutor } from '../db';
 import { CONFIG } from '../execution/v1/model';
 import { walletExecutionSource } from './execution-connection';
 import { loadStrategyProfile, StrategyProfileError } from './strategy-profile';
+import { loadStrategySelectionPolicy, StrategySelectionError } from './strategy-selection';
 
 type Selection = { status: 'missing' | 'valid' | 'invalid'; symbols: string[] };
 function selection(value: unknown): Selection {
@@ -21,6 +22,9 @@ export async function walletStrategySetup(tx: SqlExecutor = { query }, now = Mat
   const values = new Map(rows.rows.map(row => [row.key, row.value]));
   const selected = selection(values.get('wallet:strategy:watchlist'));
   const previous = selection(values.get('watchlist'));
+  let choice: Awaited<ReturnType<typeof loadStrategySelectionPolicy>> = null, choiceInvalid = false;
+  try { choice = await loadStrategySelectionPolicy(tx); }
+  catch (error) { if (!(error instanceof StrategySelectionError)) throw error; choiceInvalid = true; }
   let stored: Awaited<ReturnType<typeof loadStrategyProfile>> = null, profileInvalid = false;
   try { stored = await loadStrategyProfile(tx, now); }
   catch (error) {
@@ -33,6 +37,9 @@ export async function walletStrategySetup(tx: SqlExecutor = { query }, now = Mat
     version: 1 as const, accountId: CONFIG.accountId, strategyVersion: CONFIG.strategyVersion, readAt: now,
     sizing: { allocation: CONFIG.allocation, reducedAllocation: CONFIG.reducedAllocation, currency: 'EUR' as const },
     selectedMarkets: selected,
+    marketSelection: { status: choiceInvalid ? 'invalid' as const : choice ? 'configured' as const : 'missing' as const,
+      mode: choiceInvalid ? 'invalid' as const : choice?.policy.mode ?? 'manual' as const,
+      revision: choice?.revision ?? null, updatedAt: choice?.updatedAt ?? null },
     previousMarkets: { ...previous, purpose: 'historical-reference-only' as const },
     profile: stored ? { status: 'configuration-only' as const, revision: stored.revision,
       authorityStatus: stored.authorityStatus, lifetimeStatus: stored.lifetimeStatus,

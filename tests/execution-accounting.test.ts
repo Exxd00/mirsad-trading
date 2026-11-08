@@ -9,7 +9,9 @@ import { planBuy } from '../src/lib/execution/v1/planner';
 import { berlinBounds, evaluateRisk, neutralSeries } from '../src/lib/execution/v1/risk';
 import { CONFIG, type SourceOrder } from '../src/lib/execution/v1/model';
 import { managedPositions } from '../src/lib/execution/v1/managed-protection';
-import { ConnectedWalletVenue } from '../src/lib/execution/v1/wallet-venue';
+import { ConnectedWalletVenue, type WalletVenueSource } from '../src/lib/execution/v1/wallet-venue';
+import { installWalletExecutionSource } from '../src/lib/wallet/execution-connection';
+import { saveOwnerManualWatchlist, saveOwnerStrategySelection } from '../src/lib/wallet/selection-service';
 import { NOW, account, instrument, quote, signal } from './execution-fixtures';
 
 const leg = (netAmount: string, accountType: string, currency = 'EUR') => ({ netAmount, accountType, currency, fee: null, feeCurrency: null });
@@ -148,7 +150,7 @@ describe('source-confirmed v1 trade accounting', () => {
 
 describe('durable read-only accounting collector', () => {
   beforeEach(async () => { await closeDatabase(); vi.stubEnv('DATABASE_URL', ''); vi.stubEnv('VERCEL', ''); vi.stubEnv('NODE_ENV', 'test'); vi.stubEnv('LOCAL_DATABASE_PATH', 'memory://'); });
-  afterEach(async () => { await closeDatabase(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+  afterEach(async () => { installWalletExecutionSource(null); await closeDatabase(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
   const client = () => ({ getBalances: vi.fn(async () => [{ accountId: 'metamask-strategy-v1' as const, currency: 'EUR', total: '1000', available: '1000', reserved: '0', observedAt: new Date(NOW * 1000).toISOString() }]),
     getTransactionsPage: vi.fn(async () => ({ transactions: [] as SourceTransaction[], nextCursor: null as string | null, sourceAt: new Date(NOW * 1000).toISOString() })),
     getTransaction: vi.fn(async () => tx()), getOrderBook: vi.fn(), getValuationCandles: vi.fn() });
@@ -198,6 +200,7 @@ describe('durable read-only accounting collector', () => {
     expect(evaluateRisk(initialState().risk, snapshot.trades, snapshot.equityHistory, snapshot.tradeHistoryComplete, NOW).entryBlocked).toBe('valuation_or_transfers_missing');
   });
   it('preflights a newly allocated buy without classifying that unsent intent as missing trade history, then submits only once', async () => {
+    vi.stubEnv('MIRSAD_ORDER_CONNECTION', 'metamask');
     vi.stubEnv('EXECUTION_DEADLINE_URL', 'https://unit-test.invalid/schedule'); vi.stubEnv('EXECUTION_SCHEDULER_TOKEN', 'unit-test-only');
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ scheduled: true, mode: 'mirsad', intervalSeconds: 10 })));
     const j = new SqlJournal(), c = client(); await refreshSourceAccounting(c, j, () => NOW);
@@ -206,8 +209,11 @@ describe('durable read-only accounting collector', () => {
         clientOrderId: input.clientOrderId, symbol: input.symbol, side: 'buy' as const, type: 'limit' as const, quantity: input.quantity,
         filledQuantity: '0', price: input.limitPrice, status: 'new' as const, createdAt: new Date(NOW * 1000).toISOString(), updatedAt: new Date(NOW * 1000).toISOString() })) };
     api.getOrderBook.mockResolvedValue({ symbol: 'AAA-EUR', sourceAt: NOW * 1000, readAt: NOW * 1000, bids: [{ price: '99.99', quantity: '10' }], asks: [{ price: '100', quantity: '10' }] });
-    const venue = new ConnectedWalletVenue({ ...testWalletSource(), client: api, journal: j, candles: async () => [], market: vi.fn(),
-      instruments: async () => [{ symbol: 'AAA-EUR', base: 'AAA', quote: 'EUR', baseStep: '0.001', quoteStep: '0.01', minOrderSize: '0.001', minOrderSizeQuote: '1', maxOrderSize: '100', status: 'active', region: 'EEA', observedAt: new Date(NOW * 1000).toISOString(), costs: testWalletCosts() }] }, () => NOW);
+    const source: WalletVenueSource = { ...testWalletSource(), client: api, journal: j, candles: async () => [], market: vi.fn(),
+      instruments: async () => [{ symbol: 'AAA-EUR', base: 'AAA', quote: 'EUR', baseStep: '0.001', quoteStep: '0.01', minOrderSize: '0.001', minOrderSizeQuote: '1', maxOrderSize: '100', status: 'active', region: 'EEA', observedAt: new Date(NOW * 1000).toISOString(), costs: testWalletCosts() }] };
+    installWalletExecutionSource(source);
+    await saveOwnerManualWatchlist(['AAA-EUR']); await saveOwnerStrategySelection('manual', null);
+    const venue = new ConnectedWalletVenue(source, () => NOW);
     const snapshot = await venue.account(); expect(snapshot.dataBlockers).toEqual([]);
     const i = (await venue.instruments())[0], q = (await venue.quotes(['AAA-EUR']))[0];
     const intent = planBuy(snapshot, signal(), i, q, evaluateRisk(initialState().risk, [], snapshot.equityHistory, true, NOW), NOW).intent!;
