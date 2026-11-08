@@ -109,7 +109,14 @@ export async function runProtection() {
   return port ? protectionCycle(port, journal) : { ...unavailable(), retryAt: Math.floor(Date.now() / 1000) + CONFIG.protectionPollSeconds };
 }
 export async function runTick() {
-  const execution = await runHost();
-  const report = await dailyReport(await connectedVenue(), journal, Math.floor(Date.now() / 1000));
+  // A source/accounting failure can happen before cycle() owns its lease. A
+  // failed execution pass must not prevent the independent read-only report,
+  // or retry a possibly submitted financial action in this request.
+  let execution: Awaited<ReturnType<typeof runHost>> | { status: 'blocked'; reason: string };
+  try { execution = await runHost(); }
+  catch (error) { execution = { status: 'blocked', reason: executionReason(error, 'cycle_failed') }; }
+  let report: Awaited<ReturnType<typeof dailyReport>>;
+  try { report = await dailyReport(await connectedVenue(), journal, Math.floor(Date.now() / 1000)); }
+  catch (error) { report = { status: 'blocked', reason: executionReason(error, 'report_source_unavailable') }; }
   return { ...execution, report };
 }

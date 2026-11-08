@@ -10,7 +10,8 @@ export type RuntimeState = { risk: RiskState; indicators: Record<string, Indicat
   // Armed by the owner's execution switch, never by deployment or a scheduler.
   // Pausing entries does not remove protection from already managed fills.
   executionArmed?: boolean;
-  dailyReportDate?: string; dailyReport?: Record<string, unknown>; lastSuccessfulReport?: Record<string, unknown> };
+  dailyReportDate?: string; dailyReportAttemptAt?: number;
+  dailyReport?: Record<string, unknown>; lastSuccessfulReport?: Record<string, unknown> };
 export type DecisionRecord = { key: string; signalId: string | null; intent: Intent; status: 'attempting' | 'unknown' | 'acknowledged' | 'absent'; source: SourceOrder | null; recordedAt: number;
   // Created atomically with a new intent. Older records are never assigned a
   // replacement identity: their original source outcome must remain unresolved.
