@@ -3,7 +3,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { query, transaction, type SqlExecutor } from '../db';
 import type { DiscoveryEvent, PaperPairState, UniverseState } from './model';
 
-const prefix = 'discovery:paper:v1:';
+// The previous source's journal remains an archive. Never import its baseline or outbox.
+const prefix = 'discovery:wallet:v1:';
 export type DiscoveryRuntime = {
   universe: UniverseState; lastRunAt: number | null; lastSuccessAt: number | null;
   lastTickAt: number | null; lastError: string | null; nextSheetRow: number;

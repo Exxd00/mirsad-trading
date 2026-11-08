@@ -1,11 +1,12 @@
 import 'server-only';
 import { randomUUID } from 'node:crypto';
 import { query, transaction, type SqlExecutor } from '../../db';
-import type { RevolutTransaction } from '../../brokers/revolut';
+import type { SourceTransaction } from './source-model';
 import { VERSION, type IndicatorState, type Intent, type RiskState, type Signal, type SourceOrder } from './model';
 import type { ProtectionLevels } from './protection';
 import type { AccountingEvidence } from './accounting';
 export type RuntimeState = { risk: RiskState; indicators: Record<string, IndicatorState>; pendingSignals: Signal[]; entriesEnabled: boolean; scanCursor?: number;
+  walletIdentity?: string;
   // Armed by the owner's execution switch, never by deployment or a scheduler.
   // Pausing entries does not remove protection from already managed fills.
   executionArmed?: boolean;
@@ -38,7 +39,7 @@ export interface Journal {
   accounting(accountId: string): Promise<AccountingEvidence | null>;
   saveAccounting(lease: Lease, value: AccountingEvidence, expectedCheckedAt: number): Promise<boolean>;
   sourceArchive(lease: Lease): Promise<SourceArchiveState | null>;
-  saveSourceArchive(lease: Lease, state: SourceArchiveState, records: RevolutTransaction[]): Promise<void>;
+  saveSourceArchive(lease: Lease, state: SourceArchiveState, records: SourceTransaction[]): Promise<void>;
   protections(accountId: string): Promise<ManagedProtection[]>;
   saveProtection(lease: Lease, value: ManagedProtection): Promise<void>;
   protectionHeartbeat(accountId: string): Promise<ProtectionHeartbeat | null>;
@@ -128,7 +129,7 @@ export class SqlJournal implements Journal {
       return true;
     });
   }
-  async saveSourceArchive(lease: Lease, state: SourceArchiveState, records: RevolutTransaction[]) {
+  async saveSourceArchive(lease: Lease, state: SourceArchiveState, records: SourceTransaction[]) {
     if (records.some(record => record.accountId !== lease.key.split(':')[2])) throw new Error('source_archive_account_mismatch');
     await transaction(async tx => {
       await this.owned(tx, lease);

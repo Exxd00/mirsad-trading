@@ -1,25 +1,33 @@
 # MetaMask on Mirsad
 
-The owner opens `/wallet` in a signed-in Chrome profile. Connecting the extension displays the selected EVM account, network and native balance. Creating an automatic trial also records the selected address and its limits in the private Mirsad database.
+The owner opens `/wallet` in a signed-in browser. Reading the selected account, chain and native balance is separate from authorizing the server to spend. A read connection on Ethereum mainnet (chain 1) is not a Base Sepolia delegation or proof of automated trading.
 
-## Buying and selling with the browser closed
+## Existing transport pilot
 
-The working pilot uses test USDC and WETH on Base Sepolia (chain 84532) and a MetaMask EIP-7702 smart account. On the production site, choose the test network and enter the USDC per purchase, maximum number of rounds, expiry and price tolerance. Review the quoted minimums, total USDC cap, wallet recipient and separate gas address. The owner's wallet signs two typed delegations during setup, one for each direction. The dedicated gas address needs test ETH on Base Sepolia. The smart account needs test USDC for the chosen amount.
+The offline pilot is restricted to **Base Sepolia (84532)** with test USDC and WETH. It uses a MetaMask EIP-7702 smart account and two signed delegations, one per direction. Each delegation fixes its atomic approve/swap/clear-allowance batch, recipient, sender, use count and validity period.
 
-Mirsad uses the existing authenticated Cloudflare execution tick. The test job starts independently of the Revolut cycle. The browser, Windows PC and daily 05:00 Berlin review have no role in signing or waking the server. The wallet panel shows the last scheduler check, pending transaction and finalized receipts. The public test pool can move outside the signed price band, in which case the server waits.
+The server alternates a buy and sell only after the preceding direction settles. Signed price floors and tolerance constrain each round. Excess WETH above the signed sell input remains in the owner's wallet. This is a transport/recovery test with exact swaps, not an EMA entry/exit strategy.
 
-Every successful direction executes a fixed atomic batch through the MetaMask DelegationManager. The first call approves the exact input to the fixed Uniswap V3 router. The second swaps into the owner's address with the signed minimum output, and the third clears the allowance. Framework enforcers restrict the entire batch, sender, number of uses and expiration on chain. Each direction has its own signature and counters. The server orders the two legs and starts a sell after a confirmed buy. It sells the signed minimum quantity from that buy. Any excess WETH stays in the owner's wallet.
+The independent test gas signer, signatures and prepared transaction bytes are encrypted in private storage. A database row lock serializes preparation. Prepared signed bytes are persisted before broadcast; a lost acknowledgement is reconciled by the same hash. A successful fill requires a canonical finalized receipt with matching input/output token transfers.
 
-The host encrypts signatures, the independent test gas signer and pending transaction bytes in its private database. A database row lock serializes preparation. The host saves the signed bytes before broadcasting and reconciles the same hash across restarts. A fill requires a successful canonical finalized receipt and matching net input and output token transfers. “Pause” stops preparation of new submissions. Reconcile any already-prepared hash. The two on-chain revocation buttons invalidate the corresponding permissions and require owner confirmation and test gas.
+Pause stops preparing new submissions. Already-prepared or submitted transactions still require reconciliation. On-chain revocation is a distinct owner-confirmed operation that uses test gas.
 
-Production accepts grants only for Base Sepolia. Preview deployments show the controls without accepting grants. Local development uses a separate journal and requires `MIRSAD_WALLET_TESTNET_ENABLED=true`. The setting `false` disables the scheduled trial. The public RPC endpoint defaults to Base Sepolia and can be overridden with `MIRSAD_WALLET_TESTNET_RPC_URL`. The server verifies the chain ID, recent block and the owner's EIP-7702 implementation.
+Production grants are accepted only for Base Sepolia; previews cannot accept them. Local development requires explicit `MIRSAD_WALLET_TESTNET_ENABLED=true`; `false` disables scheduled pilot work. `MIRSAD_WALLET_TESTNET_RPC_URL` overrides the Base Sepolia endpoint. The transport verifies chain, recent block and smart-account implementation.
 
-## Live cutover
+The pilot uses the existing authenticated execution tick and does not depend on the owner's Windows computer, open browser or 05:00 review. This describes the source design; live deployment, scheduler state, current grants and successful swaps require separate dated evidence.
 
-The trial alternates the exact approved swaps to verify execution. Using the real portfolio requires the owner's chain, token pair, individual and aggregate funding limits, duration, and explicit on-chain authorization. Real entry signals, stop/target handling, gas and fee budgets and account risk reconciliation must be checked on that chain before switching the actual venue.
+## Main strategy
 
-`MIRSAD_ORDER_CONNECTION` controls the legacy entry route. Unset or `revolut-x` uses the existing route. Selecting `metamask` sends the homepage to the wallet and blocks new Revolut orders, including old order previews and strategy re-arming. Any other provided value also blocks new entries. The legacy report, existing protection watcher and managed cancellation deadlines continue to use their original account. Reconcile current positions and unresolved orders across all live deployments before changing that setting.
+The main strategy retains **`mirsad-ema-15m-v1.0.0`** and uses account identity `metamask-strategy-v1`. The pilot's fixed exact-swap grants cannot silently become dynamic strategy authority.
 
-The local automated proof uses contract bytecode from MetaMask, a temporary Anvil node and two fixture tokens and a fixed-price fixture router. It signs both grants, drops a submission acknowledgment after the node accepts the transaction, resumes from the encrypted journal, confirms both fills and exercises the on-chain use limit, revocation and expiry. The proof uses artificial prices.
+Before main strategy execution, implement and verify [wallet-execution.md](wallet-execution.md): approved chain/token mapping, stable source history, authentic limit orders with unfilled cancellation after 60 seconds, EUR valuations, documented fees and gas, confirmed fills, exposure/daily-loss controls and independent managed protection. Any missing capability keeps entries blocked.
 
-[MetaMask smart accounts](https://docs.metamask.io/smart-accounts-kit/) · [Framework enforcers](https://github.com/MetaMask/delegation-framework/tree/v1.3.0/src/enforcers) · [Uniswap V3 Base deployments](https://developers.uniswap.org/docs/protocols/v3/deployments/v3-base-deployments) · [Circle USDC addresses](https://developers.circle.com/stablecoins/usdc-contract-addresses).
+Do not substitute an immediate swap for the limit-order contract, assume USDC equals EUR, fabricate fill history or import previous account holdings into strategy ownership. There is no supported order route or data fallback to the removed broker.
+
+An operational real-money grant requires the owner's approved chain, token pair, funding caps, duration and explicit wallet authorization. Never request the owner seed phrase or private key in chat. Neither source changes nor browser read access supplies that grant.
+
+## Evidence and history
+
+The isolated proof uses temporary Anvil, fixture tokens and artificial prices. It covers both grants, acknowledgement loss, recovery, use caps, revocation and expiry; it does not prove executable market prices or returns.
+
+Historical reports and database rows retain their original provenance. External API-key revocation, production credential purging and deployment verification are separate remaining tasks in [wallet-migration.md](wallet-migration.md).

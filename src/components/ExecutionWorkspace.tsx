@@ -49,16 +49,16 @@ export function ExecutionWorkspace() {
   return <main className={styles.page} dir="rtl">
     <nav className={styles.nav}>
       <Link href="/" className={styles.brand}>مرصاد</Link>
-      <div className={styles.navLinks}><Link href="/">الحسابات</Link><Link href="/wallet">محفظة MetaMask</Link><Link href="/automation">الأتمتة</Link><Link href="/discovery">رصد العملات الجديدة</Link></div>
+      <div className={styles.navLinks}><Link href="/wallet">محفظة MetaMask</Link><Link href="/automation" aria-current="page">الأتمتة</Link><Link href="/discovery">رصد العملات الجديدة</Link></div>
     </nav>
     <header className={styles.hero}>
       <div><p className={styles.kicker}>محرك التنفيذ · 1.0.0</p><h1>حالة الأتمتة</h1>
-        <p className={styles.description}>يعرض هذا التقرير حساب Revolut X وسجل أوامره وحماية مراكزه. يمكنك مراجعة حساب MetaMask من صفحة المحفظة.</p></div>
+        <p className={styles.description}>يعرض هذا التقرير جاهزية محرك المحفظة وقواعد الاستراتيجية وسجل التنفيذ والقياس المتاح. مشاركة الحساب للقراءة لا تمنح تفويض التداول.</p></div>
       {report && <span className={`${styles.state} ${styles.paused}`}>{error ? 'حالة سابقة · تعذر التحديث' : report.report_status === 'partial' ? 'تقرير جزئي · يحتاج مراجعة' : report.enabled ? 'المحرك مفعّل' : report.account_connected ? 'الحساب متصل · الدخول غير جاهز أو متوقف' : 'بانتظار اتصال الحساب'}</span>}
     </header>
     <div className={styles.controls}><button className={styles.button} disabled={loading || mutating} onClick={() => void refresh()}>{loading ? 'جارٍ التحديث…' : 'تحديث الحالة'}</button>
       {report?.adapter_configured && <button className={styles.button} disabled={mutating || loading || Boolean(error)} onClick={() => void action('check')}>{mutating ? 'جارٍ الفحص…' : 'فحص الجاهزية الآن'}</button>}
-      {report?.new_order_connection === 'revolut-x' && report.account_connected && <button className={styles.button} disabled={mutating || loading || Boolean(error) || (!report.entries_requested && (!report.execution_ready || !report.protection.heartbeat_fresh))}
+      {report?.new_order_connection === 'metamask' && report.account_connected && <button className={styles.button} disabled={mutating || loading || Boolean(error) || (!report.entries_requested && (!report.execution_ready || !report.protection.heartbeat_fresh))}
         onClick={() => void action('settings', !report.entries_requested)}>{report.entries_requested ? 'إيقاف الدخول الجديد' : 'تفعيل الشراء والبيع الآلي'}</button>}
     </div>
     {error && <p role="alert" className={`${styles.message} ${styles.error}`}>{error}</p>}
@@ -69,16 +69,16 @@ export function ExecutionWorkspace() {
         <p>تعذر إكمال قراءة المصدر. البيانات الناقصة غير متاحة، وتظهر أدناه آخر حالة محفوظة للمراقبة بأوقاتها؛ لا تؤكد هذه الحالة سلامة التنفيذ الآن.</p>
         <ul>{report.read_errors.map(item => <li key={item.stage}>{item.stage}: <code>{item.code}</code></li>)}</ul>
       </div>}
-      <p role="status" className={`${styles.message} ${styles.warning}`}>{report.new_order_connection !== 'revolut-x'
-        ? 'الأوامر الجديدة على Revolut X مغلقة. تبقى متابعة الأوامر السابقة وحماية المراكز التي يديرها مرصاد على حسابها الأصلي.'
+      <p role="status" className={`${styles.message} ${styles.warning}`}>{report.new_order_connection !== 'metamask'
+        ? 'جهة تنفيذ المحفظة غير صالحة. إرسال الأوامر مغلق.'
         : report.account_connected
-        ? report.enabled ? 'الدخول الآلي مفعّل. يدير مرصاد حماية المراكز التي يفتحها هذا الإصدار.' : report.entries_requested ? 'طلب التفعيل محفوظ، لكن بيانات هذه القراءة لا تؤكد جاهزية الدخول. راجع أسباب المنع وحالة الحماية.' : 'الحساب متصل بـRevolut X. الحماية مضبوطة داخل مرصاد؛ إرسال الأوامر متوقف حتى اكتمال جاهزية التنفيذ وتفعيله. المراكز والأوامر السابقة تبقى خارج إدارته.'
-        : report.adapter_configured ? 'الاتصال مُعدّ، لكن قراءة الحساب لم تكتمل. لا توجد أرصدة أو أرباح حالية مؤكدة في هذا التقرير.' : 'تعذر العثور على اتصال الحساب الموجود. راجع اتصال الحساب في الصفحة الرئيسية.'}</p>
+        ? report.enabled ? 'الدخول الآلي مفعّل وفق التفويض وحدود الاستراتيجية. يدير مرصاد المراكز التي فتحها هذا الإصدار.' : report.entries_requested ? 'طلب التفعيل محفوظ، لكن بيانات هذه القراءة لا تؤكد جاهزية الدخول. راجع أسباب المنع وحالة الحماية.' : 'اكتملت قراءة حساب المحفظة؛ يبقى إرسال الأوامر متوقفًا حتى اكتمال البيانات والتفويض وجاهزية الحماية. الأرصدة السابقة لا تُعتمد مراكز يديرها المحرك تلقائيًا.'
+        : report.adapter_configured ? 'اتصال المحفظة مُعدّ، لكن قراءة الحساب لم تكتمل. لا توجد أرصدة أو أرباح حالية مؤكدة في هذا التقرير.' : 'اتصال تنفيذ المحفظة غير مكتمل. راجع إعداد المحفظة وأسباب المنع؛ لا توجد أرصدة حالية مؤكدة هنا.'}</p>
       {report.account_connected && <section className={styles.panel}>
         <div className={styles.panelHeading}><h2>التكاليف وجاهزية المخاطر</h2><span className={`${styles.state} ${styles.paused}`}>{report.execution_ready ? 'جاهز وفق البيانات الحالية' : 'الدخول معلّق لحين اكتمال البيانات'}</span></div>
         <p className={styles.sectionNote}>قيمة الحساب: {report.accounting.equity_eur === null ? 'غير مكتملة' : `${report.accounting.equity_eur} EUR`} · تقييمات محفوظة: {report.accounting.observations} · آخر جمع: {report.accounting.checked_at ? new Date(report.accounting.checked_at * 1000).toISOString() : 'لم يكتمل بعد'}</p>
-        <p className={styles.sectionNote}>تقدير الصفقة يستخدم رسوم آخذ السيولة {percent(report.accounting.fee_schedule.taker)} لكل جهة، وفرق السعر مرة واحدة، وأثر كمية البيع في دفتر الأوامر. لا يُسمح بالدخول إذا تجاوز الإجمالي {percent(report.policy.maximum_cost)} أو نقص العمق.</p>
-        <p className={styles.subtle}>تقييمات منتصف الليل والتحويلات تستخدم إغلاق آخر دقيقة مكتملة من Revolut عند الحدث؛ هي أسعار تقييم تاريخية وليست ضمانًا لسعر البيع. تظهر الرسوم الفعلية بعد تأكيد المصدر.</p>
+        <p className={styles.sectionNote}>يتطلب الدخول توثيق رسوم التنفيذ والغاز وفرق السعر والانزلاق وسيولة الخروج. يبقى الدخول متوقفًا عند نقص الدليل أو تجاوز التكلفة الإجمالية {percent(report.policy.maximum_cost)}.</p>
+        <p className={styles.subtle}>تتطلب تقييمات اليورو أسعارًا موثقة عند وقت الحدث، مع تسوية التحويلات ورسوم الشبكة. لا تُعامل العملات المستقرة كيورو تلقائيًا، ولا تُستبدل التكلفة المجهولة بصفر.</p>
         {!!report.blockers.length && <ul className={styles.sectionNote}>{report.blockers.map(reason => <li key={reason}>{({
           accounting_evidence_stale: 'يلزم تحديث سجل المخاطر؛ اضغط «فحص الجاهزية الآن».',
           valuation_or_transfers_missing: 'لم تكتمل مطابقة التقييم مع التحويلات.',
@@ -109,6 +109,11 @@ export function ExecutionWorkspace() {
           trade_history_incomplete: 'هناك نتائج أوامر تحتاج تأكيد المصدر.',
           closed_trade_costs_missing: 'رسوم صفقة مغلقة غير مؤكدة بعد.',
           execution_capabilities_missing: 'جزء من اتصال التنفيذ غير متاح.',
+          wallet_market_mapping_missing: 'لم تكتمل مطابقة أصول الشبكة بسوق الاستراتيجية وعملة التقييم.',
+          wallet_market_data_missing: 'بيانات السوق والشموع المكتملة غير متاحة من مصدر المحفظة.',
+          wallet_execution_not_configured: 'لم يكتمل إعداد تنفيذ استراتيجية المحفظة.',
+          wallet_accounting_evidence_missing: 'لم تكتمل أدلة تقييم المحفظة والتحويلات ورسوم الشبكة.',
+          wallet_delegation_missing: 'تفويض التداول المقيد غير متاح أو غير متحقق.',
         } as Record<string, string>)[reason] ?? 'تعذر تأكيد أحد بيانات المصدر. أعد الفحص؛ يبقى الدخول متوقفًا حتى اكتمال التسوية.'}</li>)}</ul>}
         {!report.entries_requested && report.execution_ready && <p className={styles.sectionNote}>الفحص لا يفعّل التداول. زر «تفعيل الشراء والبيع الآلي» يشغّل أوامر الحساب وإدارة الحماية داخل مرصاد وفق القواعد المعروضة.</p>}
       </section>}
@@ -116,7 +121,7 @@ export function ExecutionWorkspace() {
         <div className={styles.panelHeading}><h2>الحماية داخل مرصاد</h2><span className={`${styles.state} ${styles.paused}`}>{!report.protection.heartbeat_fresh ? 'المراقبة غير مؤكدة أو متأخرة'
           : report.protection.heartbeat?.status === 'blocked' ? 'تحتاج متابعة' : report.protection.heartbeat?.managedPositions ? 'تجري مراقبة المراكز' : 'المراقبة تعمل · لا مراكز مدارة'}</span></div>
         <p className={styles.sectionNote}>وقف الخسارة {percent(report.policy.stop)} والهدف {percent(report.policy.target)} من متوسط التنفيذ الفعلي. تعمل المراقبة على الخادم حتى عند إغلاق المتصفح، وتستهدف فحصًا كل {report.protection.interval_seconds} ثوانٍ بعد اكتمال الفحص السابق.</p>
-        <p className={styles.sectionNote}>إذا توقف مرصاد أو الاتصال بالمنصة فقد يتأخر البيع، وقد يختلف سعر التنفيذ عن مستوى الوقف. لا توجد أوامر وقف أو هدف لدى Revolut لهذه الحماية.</p>
+        <p className={styles.sectionNote}>إذا توقف مرصاد أو الاتصال بالشبكة فقد يتأخر البيع، وقد يختلف سعر التنفيذ عن مستوى الوقف. تشغيل الحماية يحتاج مراقبة خادمية وتفويضًا صالحًا ورصيدًا لرسوم الشبكة.</p>
         <p className={styles.subtle}>آخر فحص: {report.protection.heartbeat ? new Date(report.protection.heartbeat.at * 1000).toISOString() : 'لم يصل بعد'} · التنفيذ المالي: {report.protection.armed ? 'مفعّل للمراكز المدارة' : 'غير مفعّل'}</p>
         {report.protection.heartbeat?.errors.length ? <p role="alert" className={`${styles.message} ${styles.error}`}>تعذر إكمال فحص الحماية. راجع الاتصال والأوامر غير المحسومة قبل أي دخول جديد.</p> : null}
         {report.protection.records.some(p => p.status !== 'closed') && <div className={styles.scroll}><table className={styles.table}>
@@ -174,8 +179,10 @@ export function ExecutionWorkspace() {
       <section className={styles.panel}>
         <div className={styles.panelHeading}><h2>قواعد التنفيذ</h2></div>
         <div className={styles.rules}>
-          <div><h3>أولوية الخروج</h3><p>الخروج عند مستويات الحماية المسجلة يسبق الدخول، ويقتصر على الكمية المتاحة من المراكز المُدارة.</p></div>
+          <div><h3>إشارة الدخول</h3><p>تقاطع جديد لـ EMA20 فوق EMA50، مع إغلاق أعلى من EMA200 وصعود EMA200 مقارنةً بقيمته قبل أربع شموع. تُستخدم 1000 شمعة مغلقة متتابعة.</p></div>
+          <div><h3>أولوية الخروج</h3><p>الخروج عند الوقف أو الهدف المسجلين أو تقاطع EMA20 أسفل EMA50 يسبق الدخول، ويقتصر على الكمية المتاحة من المراكز المُدارة.</p></div>
           <div><h3>بيانات حديثة</h3><p>شموع مكتملة كل 15 دقيقة، وإشارة دخول صالحة لخمس دقائق. الأوامر غير المحسومة تُسوّى قبل أي دخول متعارض.</p></div>
+          <div><h3>حدود أمر الدخول</h3><p>أمر محدد السعر، بكمية مقربة للأسفل ومطاردة لا تتجاوز 0.3%. يُلغى الجزء غير المنفذ بعد 60 ثانية؛ غياب قدرة الإلغاء يمنع الدخول.</p></div>
           <div><h3>منع تكرار الطلب</h3><p>نية أمر واحدة في الدورة. حتى 3 مراكز وتعريض 30%، وتوقف الدخول عند خسارة يومية 1%.</p></div>
         </div>
       </section>

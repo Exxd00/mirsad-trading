@@ -1,3 +1,4 @@
+import { walletBindingIdentity } from '../src/lib/wallet/execution-connection';
 import { CONFIG, VERSION, type Account, type Candle, type EquityObservation, type Instrument, type Position, type Quote, type Signal, type SourceOrder, type ClosedTrade } from '../src/lib/execution/v1/model';
 import { signalId } from '../src/lib/execution/v1/strategy';
 import { berlinBounds } from '../src/lib/execution/v1/risk';
@@ -12,3 +13,14 @@ export const account = (): Account => ({ id: CONFIG.accountId, sourceAt: NOW, re
 export const position = (symbol = 'AAA-EUR'): Position => ({ id: `p:${symbol}`, symbol, managed: true, openedAt: NOW - 3600, quantity: '1', available: '1', reserved: '0', averageFillPrice: '100', stop: '98', originalStop: '98', target: '104', marketValueEur: '100', valuationAt: NOW, unrealizedNetPnlEur: '0', protectionState: 'active', protectionIds: ['oco:1'] });
 export const order = (symbol = 'AAA-EUR'): SourceOrder => ({ id: 'source-order', clientKey: 'key', symbol, side: 'buy', status: 'open', quantity: '1', filledQuantity: '0', remainingBudgetEur: '100', submittedAt: NOW, sourceAt: NOW, managed: true, purpose: 'entry', averageFillPrice: null, feeEur: null });
 export const trade = (id: string, pnl: string | null, at = NOW - 1): ClosedTrade => ({ id, symbol: 'AAA-EUR', version: VERSION, sourceConfirmed: true, closedAt: at, netPnlEur: pnl, feesEur: '0.2', slippageEur: '0.01', quantity: '1', averageEntryPrice: '100', originalStop: '98', sourceOrderIds: [`buy:${id}`, `sell:${id}`] });
+
+// A fully isolated typed provider binding for transport tests; never installed by production.
+export const testWalletBinding = () => ({ chainId: 84532, owner: '0x1111111111111111111111111111111111111111',
+  quoteToken: '0x2222222222222222222222222222222222222222', quoteDecimals: 6, quoteCurrency: 'EUR' as const, grantId: 'isolated-grant',
+  startsAt: NOW - 86400, expiresAt: NOW + 86400,
+  markets: ['AAA-EUR', 'ETH-EUR', 'SOL-EUR'].map((symbol, i) => ({ symbol, baseToken: '0x' + String(i + 3).repeat(40), baseDecimals: 18, quoteToken: '0x2222222222222222222222222222222222222222' })),
+  semantics: { limitOrders: true, cancelRemainder: true, idempotentSubmission: true, confirmedReceipts: true, fencedWrites: true } });
+export const testWalletIdentity = () => walletBindingIdentity(testWalletBinding());
+export const testWalletSource = () => ({ binding: testWalletBinding(), verifyGrant: async () => true, gasCostsIncluded: true });
+export const testWalletCosts = (observedAt = NOW) => ({ buyFeeRate: '0.0009', sellFeeRate: '0.0009', buyFixedEur: '0', sellFixedEur: '0',
+  buySlippageRate: '0', sellSlippageRate: '0', depthRequired: true, source: 'isolated-wallet-cost-fixture', observedAt });

@@ -1,22 +1,22 @@
 import { createHash } from 'node:crypto';
-import type { RevolutBalance, RevolutFill, RevolutTransaction } from '../../brokers/revolut';
+import type { SourceBalance, ReportedFill, SourceTransaction } from './source-model';
 import type { DecisionRecord } from './journal';
 import { D, VERSION, decimal, positive, terminal, type ClosedTrade, type EquityObservation, type SourceOrder } from './model';
 import { berlinBounds } from './risk';
 
 export type AccountingAnchor = { at: number; amounts: Record<string, string> };
 export type AccountingEvidence = { version: 1; checkedAt: number; lastError: string | null;
-  anchor: AccountingAnchor | null; observations: EquityObservation[]; transactions: RevolutTransaction[]; fills: RevolutFill[] };
+  anchor: AccountingAnchor | null; observations: EquityObservation[]; transactions: SourceTransaction[]; fills: ReportedFill[] };
 export const emptyAccounting = (): AccountingEvidence => ({ version: 1, checkedAt: 0, lastError: null,
   anchor: null, observations: [], transactions: [], fills: [] });
-export const transactionHash = (t: RevolutTransaction) => createHash('sha256').update(JSON.stringify([
+export const transactionHash = (t: SourceTransaction) => createHash('sha256').update(JSON.stringify([
   t.id, t.status, t.type, t.processedAt, t.source?.netAmount, t.source?.currency, t.source?.accountType,
   t.destination?.netAmount, t.destination?.currency, t.destination?.accountType,
 ])).digest('hex');
-export function sourceAmounts(balances: RevolutBalance[]) {
+export function sourceAmounts(balances: SourceBalance[]) {
   const amounts: Record<string, string> = {};
   for (const b of balances) {
-    if (b.accountId !== 'revolut-x' || !/^[A-Z0-9]{2,16}$/.test(b.currency) || b.currency in amounts
+    if (b.accountId !== 'metamask-strategy-v1' || !/^[A-Z0-9]{2,16}$/.test(b.currency) || b.currency in amounts
       || decimal(b.total).lt(0) || decimal(b.available).lt(0) || decimal(b.reserved).lt(0)
       || !decimal(b.available).add(b.reserved).eq(b.total)) throw new Error('accounting_balance_invalid');
     if (b.staked && !decimal(b.staked).eq(0)) throw new Error('accounting_staked_valuation_missing');
@@ -27,10 +27,10 @@ export function sourceAmounts(balances: RevolutBalance[]) {
 }
 export const sameAmounts = (a: Record<string, string>, b: Record<string, string>) =>
   [...new Set([...Object.keys(a), ...Object.keys(b)])].every(c => decimal(a[c] ?? '0').eq(b[c] ?? '0'));
-export type Movement = { transaction: RevolutTransaction; at: number; delta: Record<string, string>;
+export type Movement = { transaction: SourceTransaction; at: number; delta: Record<string, string>;
   flow: Record<string, string> };
-export function transactionMovement(t: RevolutTransaction): Movement | null {
-  if (t.accountId !== 'revolut-x') throw new Error('accounting_account_mismatch');
+export function transactionMovement(t: SourceTransaction): Movement | null {
+  if (t.accountId !== 'metamask-strategy-v1') throw new Error('accounting_account_mismatch');
   if (t.status === 'pending') throw new Error('accounting_transaction_pending');
   // A reverted transaction has an unspecified effective reversal time. It must
   // never silently erase an earlier flow or rewrite an already measured return.
@@ -43,7 +43,7 @@ export function transactionMovement(t: RevolutTransaction): Movement | null {
   for (const leg of [t.source, t.destination].filter(x => x !== null)) {
     if (!leg.accountType || !/^[A-Z0-9]{2,16}$/.test(leg.currency) || decimal(leg.netAmount).lt(0)) throw new Error('accounting_leg_identity_missing');
   }
-  const outgoing = t.source?.accountType === 'revolut_x', incoming = t.destination?.accountType === 'revolut_x';
+  const outgoing = t.source?.accountType === 'wallet', incoming = t.destination?.accountType === 'wallet';
   if (!outgoing && !incoming) throw new Error('accounting_current_account_leg_missing');
   if (outgoing) add(delta, t.source!.currency, decimal(t.source!.netAmount).negated().toFixed());
   if (incoming) add(delta, t.destination!.currency, t.destination!.netAmount);
@@ -70,7 +70,7 @@ export function transactionMovement(t: RevolutTransaction): Movement | null {
     if (t.destination?.currency === leg.currency) principal = t.destination.netAmount;
     else if (leg.fee !== null && leg.feeCurrency === leg.currency) principal = decimal(leg.netAmount).sub(leg.fee).toFixed();
     else {
-      const feeState = (part: RevolutTransaction['source']) => part?.fee == null ? 'missing'
+      const feeState = (part: SourceTransaction['source']) => part?.fee == null ? 'missing'
         : part.feeCurrency === leg.currency ? 'source_currency' : part.feeCurrency === t.destination?.currency ? 'destination_currency' : 'other_currency';
       throw new Error(`accounting_transfer_fee_missing:type_${t.type}:source_${leg.currency}:destination_${t.destination?.currency ?? 'missing'}:source_fee_${feeState(leg)}:destination_fee_${feeState(t.destination)}:order_${t.orderId ? 'present' : 'missing'}`);
     }
@@ -100,7 +100,7 @@ export function markedValue(amounts: Record<string, string>, at: number, marks: 
  * complete source movements. These amounts are NEVER an available balance or
  * an order authority. Event prices use the last completed one-minute source
  * close, explicitly recorded; they are not historical executable bid quotes. */
-export function extendValuations(old: AccountingEvidence, anchor: AccountingAnchor, transactions: RevolutTransaction[], marks: Mark[], currentEquity: string) {
+export function extendValuations(old: AccountingEvidence, anchor: AccountingAnchor, transactions: SourceTransaction[], marks: Mark[], currentEquity: string) {
   const start = old.anchor?.at ?? berlinBounds(anchor.at).start;
   if (anchor.at <= start) throw new Error('accounting_snapshot_not_new');
   for (const prior of old.transactions) {
@@ -113,7 +113,7 @@ export function extendValuations(old: AccountingEvidence, anchor: AccountingAnch
     && Date.parse(t.processedAt) / 1000 <= start && !old.transactions.some(p => p.id === t.id))) {
     throw new Error('accounting_late_transaction');
   }
-  const unique = new Map<string, RevolutTransaction>();
+  const unique = new Map<string, SourceTransaction>();
   for (const t of transactions) {
     const previous = unique.get(t.id);
     if (previous && transactionHash(previous) !== transactionHash(t)) throw new Error('accounting_transaction_conflict');

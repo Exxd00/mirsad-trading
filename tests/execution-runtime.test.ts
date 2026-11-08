@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, query } from '../src/lib/db';
 import { SqlJournal, initialState } from '../src/lib/execution/v1/journal';
 import { configuredSymbols } from '../src/lib/execution/v1/host';
-import { configuredWatchlist, setSetting } from '../src/lib/services';
+import { installWalletExecutionSource } from '../src/lib/wallet/execution-connection';
+import { testWalletSource } from './execution-fixtures';
 import { CONFIG, type Intent, type SourceOrder } from '../src/lib/execution/v1/model';
 import { cycle } from '../src/lib/execution/v1/runner';
 import { cancelDeadline, type CancellationPort } from '../src/lib/execution/v1/deadline';
@@ -36,7 +37,7 @@ async function seed(j: SqlJournal, symbols = ['AAA-EUR'], entriesEnabled = true)
 beforeEach(async () => {
   await closeDatabase(); vi.stubEnv('DATABASE_URL', ''); vi.stubEnv('VERCEL', ''); vi.stubEnv('NODE_ENV', 'test'); vi.stubEnv('LOCAL_DATABASE_PATH', 'memory://');
 });
-afterEach(async () => { vi.useRealTimers(); await closeDatabase(); vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(async () => { installWalletExecutionSource(null); vi.useRealTimers(); await closeDatabase(); vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 describe('durable SQL ownership and orchestration', () => {
   it.each(['conflict', 'unavailable'] as const)('keeps the strategy cycle blocked on %s source evidence, including would-be exits', async status => {
     const j = new SqlJournal(); await seed(j); const { port, a } = makePort();
@@ -47,12 +48,14 @@ describe('durable SQL ownership and orchestration', () => {
     expect(port.prepareExit).not.toHaveBeenCalled(); expect(port.submit).not.toHaveBeenCalled();
     expect(port.armCancellation).not.toHaveBeenCalled();
   });
-  it('uses the dashboard watchlist including its defaults and preserves an explicitly empty selection', async () => {
-    expect(await configuredSymbols()).toEqual(await configuredWatchlist());
-    expect(await configuredSymbols()).toEqual(['BTC-EUR', 'ETH-EUR', 'SOL-EUR']);
-    await setSetting('watchlist', ['SOL-EUR', 'SOL-EUR', 'BTC-USD']);
-    expect(await configuredSymbols()).toEqual(['SOL-EUR']);
-    await setSetting('watchlist', []); expect(await configuredSymbols()).toEqual([]);
+  it('uses only approved wallet market mappings and has no default token substitution', async () => {
+    expect(await configuredSymbols(NOW)).toEqual([]);
+    const source = { ...testWalletSource(), client: { getBalances: async () => [], getOrders: async () => [] },
+      instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [] };
+    installWalletExecutionSource(source);
+    expect(await configuredSymbols(NOW)).toEqual(['AAA-EUR', 'ETH-EUR', 'SOL-EUR']);
+    source.binding.markets = [];
+    expect(await configuredSymbols(NOW)).toEqual([]);
   });
   it('grants one concurrent lock and fences stale owners without releasing another owner', async () => {
     const j = new SqlJournal(); const locks = await Promise.all([j.acquire(CONFIG.accountId), j.acquire(CONFIG.accountId)]); const one = locks.find(Boolean)!;
@@ -191,14 +194,14 @@ describe('public candle contract and durable timer', () => {
     fetcher.mockResolvedValueOnce(Response.json({ scheduled: true, expiresAt: NOW + 600 }));
     await expect(scheduleCancellation('a'.repeat(64), NOW + 60, fetcher)).rejects.toThrow('deadline_not_acknowledged');
   });
-  it('requests all 1000 bars, uses milliseconds, and never accepts a truncated warmup', async () => {
+  it('requests all 1000 wallet-source bars and never accepts a truncated warmup', async () => {
     const bars = Array.from({ length: 1000 }, (_, i) => candle(i));
-    const data = bars.map(c => ({ start: c.openTime * 1000, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume }));
-    const fetcher = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => Response.json({ data, metadata: { region: 'EEA', timestamp: 900000000 } }));
-    expect(await loadCandles('AAA-EUR', 900000, null, fetcher)).toHaveLength(1000);
-    expect(String(fetcher.mock.calls[0][0])).toContain('since=0&until=900000000&region=EEA');
-    fetcher.mockResolvedValueOnce(Response.json({ data: data.slice(1), metadata: { region: 'EEA', timestamp: 900000000 } }));
-    await expect(loadCandles('AAA-EUR', 900000, null, fetcher)).rejects.toThrow('1000');
+    const provider = vi.fn(async () => bars);
+    expect(await loadCandles('AAA-EUR', 900000, null, provider)).toHaveLength(1000);
+    expect(provider).toHaveBeenCalledWith({ symbol: 'AAA-EUR', start: 0, end: 900000, timeframeSeconds: 900 });
+    provider.mockResolvedValueOnce(bars.slice(1));
+    await expect(loadCandles('AAA-EUR', 900000, null, provider)).rejects.toThrow('1000');
+    await expect(loadCandles('AAA-EUR', 900000, null)).rejects.toThrow('wallet_candle_provider_missing');
   });
   it('keeps deadline retries durable and never extends an existing deadline', async () => {
     const data = new Map<string, unknown>();

@@ -1,5 +1,5 @@
 import 'server-only';
-import { legacyOrderBlock, orderConnection } from '../order-connection';
+import { walletOrderBlock, orderConnection } from '../order-connection';
 import { query } from '../db';
 import { CONFIG, VERSION, type Account } from './v1/model';
 import { connectedVenue, runHost } from './v1/host';
@@ -7,9 +7,9 @@ import type { RuntimeState, SourceArchiveState, ManagedProtection, ProtectionHea
 import { executionCapabilitiesReady } from './v1/runner';
 import { fresh } from './v1/model';
 import { evaluateRisk } from './v1/risk';
-import { FEE_SCHEDULE } from './v1/costs';
 import { buildReport } from './v1/reporting';
 import type { AccountingEvidence } from './v1/accounting';
+import { accountEntryBlockers } from './v1/readiness';
 
 type Venue = NonNullable<Awaited<ReturnType<typeof connectedVenue>>>;
 const reportErrorCodes = new Set(['account_mismatch', 'source_balance_missing', 'source_balance_mismatch',
@@ -70,8 +70,8 @@ export async function executionReport() {
     catch (error) { failed('risk', error); }
     try { performance = buildReport(live, now); } catch (error) { failed('performance', error); }
   }
-  const orderBlock = legacyOrderBlock();
-  const blockers = [...new Set([...(orderBlock ? [orderBlock] : []), ...readErrors.map(error => error.code), ...(live ? [...(live.dataBlockers ?? []),
+  const orderBlock = walletOrderBlock();
+  const blockers = [...new Set([...(orderBlock ? [orderBlock] : []), ...readErrors.map(error => error.code), ...(live ? [...accountEntryBlockers(live, state?.risk ?? { reduced: false, dailyHaltDate: null }, now),
     ...(!capabilities || !executionCapabilitiesReady(capabilities) ? ['execution_capabilities_missing'] : []),
     ...(currentRisk?.entryBlocked ? [currentRisk.entryBlocked] : [])] : [venue ? 'account_read_unavailable' : 'account_connection_missing'])])];
   const ready = connected && blockers.length === 0;
@@ -83,7 +83,7 @@ export async function executionReport() {
     enabled: ready && state?.entriesEnabled === true, entries_requested: state?.entriesEnabled ?? false,
     report_status: readErrors.length || (live?.reportEvidence && live.reportEvidence.status !== 'matched') ? 'partial' as const : 'current' as const, read_errors: readErrors,
     account_read_method: accountReadMethod,
-    adapter_configured: venue !== null, account_source_configured: true, account_connected: connected,
+    adapter_configured: venue !== null, account_source_configured: venue !== null, account_connected: connected,
     execution_ready: ready, order_api_connected: ready, signal_configured: true, capabilities,
     reason: connected ? ready ? 'configured' : 'execution_data_incomplete' : readErrors[0]?.code ?? 'account_connection_missing',
     protection: { mode: CONFIG.protectionMode, interval_seconds: CONFIG.protectionPollSeconds,
@@ -92,7 +92,7 @@ export async function executionReport() {
     policy: { allocation: CONFIG.allocation, reduced_allocation: CONFIG.reducedAllocation, stop: CONFIG.stopFraction,
       target: CONFIG.targetFraction, maximum_positions: CONFIG.maximumPositions, maximum_exposure: CONFIG.maximumExposure,
       maximum_cost: CONFIG.maximumRoundTripCost, daily_loss: CONFIG.dailyLossLimit },
-    account_id: CONFIG.accountId, account_name: 'Revolut X · الحساب المتصل',
+    account_id: CONFIG.accountId, account_name: 'MetaMask · حساب الاستراتيجية',
     new_order_connection: orderConnection(),
     source_at: live?.sourceAt ?? null, source_timestamp_basis: 'response_observed_at',
     read_at: Math.floor(Date.now() / 1000), available_eur: live?.availableEur ?? null,
@@ -104,7 +104,7 @@ export async function executionReport() {
       valuation_complete: live?.valuationComplete ?? false, checked_at: evidence?.checkedAt ?? null,
       history_start: evidence?.observations[0]?.at ?? null, observations: evidence?.observations.length ?? 0,
       transactions: evidence?.transactions.length ?? 0, last_error: evidence?.lastError ?? null,
-      current_risk: currentRisk, fee_schedule: FEE_SCHEDULE, cost_method: 'taker_both_legs_plus_one_spread_and_size_specific_sell_depth',
+      current_risk: currentRisk, fee_schedule: null, cost_method: 'wallet_verified_fees_gas_eur_valuation_and_size_specific_exit_depth',
       historical_mark_method: 'last_completed_source_minute_close' },
     last_cycle: cycleRow.rows[0]?.detail ?? null, indicators: state?.indicators ?? {}, risk: state?.risk ?? null,
     daily_report: state?.dailyReport ?? null, last_successful_report: state?.lastSuccessfulReport ?? null,

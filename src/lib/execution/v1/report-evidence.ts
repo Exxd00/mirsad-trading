@@ -1,4 +1,4 @@
-import type { RevolutFill, RevolutOrder } from '../../brokers/revolut';
+import type { ReportedFill, ReportedOrder } from './source-model';
 import { D, decimal, type SourceFill } from './model';
 
 export type ReportEvidence = { readAt: number; status: 'matched' | 'conflict' | 'unavailable';
@@ -9,12 +9,12 @@ export type ReportEvidence = { readAt: number; status: 'matched' | 'conflict' | 
 
 /** Read-only comparison. Neither the order nor the journal is rewritten to make
  * contradictory source records agree. Duplicate fill IDs cannot inflate totals. */
-export function reconcileReportFills(orders: RevolutOrder[], records: RevolutFill[], readAt: number, truncated = false) {
+export function reconcileReportFills(orders: ReportedOrder[], records: ReportedFill[], readAt: number, truncated = false) {
   const issues: string[] = truncated ? ['report_fill_coverage_incomplete'] : [];
-  const unique = new Map<string, RevolutFill>();
+  const unique = new Map<string, ReportedFill>();
   for (const fill of records) {
     const order = orders.find(o => o.id === fill.orderId);
-    if (!order || fill.accountId !== 'revolut-x' || fill.symbol !== order.symbol || fill.side !== order.side
+    if (!order || fill.accountId !== 'metamask-strategy-v1' || fill.symbol !== order.symbol || fill.side !== order.side
       || fill.baseCurrency !== order.symbol.split('-')[0] || fill.quoteCurrency !== 'EUR'
       || !decimal(fill.quantity).gt(0) || !decimal(fill.price).gt(0)
       || !Number.isFinite(Date.parse(fill.createdAt)) || Date.parse(fill.createdAt) / 1000 > readAt + 1) {

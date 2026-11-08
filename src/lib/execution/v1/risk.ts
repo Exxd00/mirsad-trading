@@ -1,3 +1,4 @@
+import { executionReason } from './errors';
 import { CONFIG, VERSION, D, decimal, type ClosedTrade, type EquityObservation, type RiskResult, type RiskState } from './model';
 const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' });
 export const berlinDay = (at: number) => {
@@ -69,7 +70,7 @@ export function evaluateRisk(old: RiskState, trades: ClosedTrade[], observations
     const pnl = decimal(t.netPnlEur); wins = pnl.gt(0) ? wins + 1 : 0; losses = pnl.lt(0) ? losses + 1 : 0;
   }
   let series: ReturnType<typeof neutralSeries>['series'];
-  try { series = neutralSeries(observations, now).series; } catch (e) { return fail(e instanceof Error ? e.message : 'risk_missing'); }
+  try { series = neutralSeries(observations, now).series; } catch (e) { return fail(executionReason(e, 'risk_missing')); }
   const last = series.at(-1)!, drawdown = decimal(last.drawdown), beginning = series.find(p => p.at === day.start);
   if (losses >= 2 || drawdown.gte(CONFIG.reduceDrawdown)) state.reduced = true;
   else if (state.reduced && wins >= 3 && drawdown.lt(CONFIG.restoreDrawdown)) state.reduced = false;

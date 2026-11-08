@@ -1,3 +1,4 @@
+import { executionReason } from './errors';
 import { CONFIG, VERSION, fresh, type Account } from './model';
 import { accountMetrics, measurementWindows } from './metrics';
 import { berlinDay } from './risk';
@@ -34,7 +35,7 @@ export async function dailyReport(port: VenuePort | null, journal: Journal, now:
       report = buildReport(source, now); state.lastSuccessfulReport = report;
     } catch (error) {
       report = { id: `${VERSION}:report:${date}`, version: VERSION, readAt: now, sourceAt: null,
-        status: 'blocked', reason: error instanceof Error ? error.message : 'report_source_unavailable',
+        status: 'blocked', reason: executionReason(error, 'report_source_unavailable'),
         nextStep: 'Restore the documented source connection; preserve the last successful report.' };
     }
     state.dailyReportDate = date; state.dailyReport = report;

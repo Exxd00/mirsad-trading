@@ -1,12 +1,13 @@
 import 'server-only';
 import { DiscoveryJournal } from './journal';
-import { observeUniverse, readPublicMarket, readPublicUniverse } from './market';
+import { observeUniverse, readPublicMarket, readPublicUniverse, type WalletDiscoverySource } from './market';
 import { advancePaperPair, createPaperPairState } from './paper';
 import { PAPER_CONFIG, type DiscoveryEvent, type PaperPairState } from './model';
 import { sheetsConfigured, syncSheetEvents } from './sheets';
 
 export type DiscoveryReport = {
   mode: 'paper-only'; version: 'discovery-paper-v1'; baselineAt: number | null;
+  source: 'unconfigured' | 'wallet-provider';
   lastRunAt: number | null; lastSuccessAt: number | null; lastError: string | null;
   scheduler: { configured: boolean; lastTickAt: number | null; healthy: boolean };
   universe: { total: number; baselineAt: number | null; lastObservedAt: number | null };
@@ -16,19 +17,20 @@ export type DiscoveryReport = {
   limitations: string[];
 };
 const journal = new DiscoveryJournal();
-export async function discoveryReport(store = journal): Promise<DiscoveryReport> {
+export async function discoveryReport(store = journal, marketSource?: WalletDiscoverySource): Promise<DiscoveryReport> {
   const [runtime, pairs, events, pending] = await Promise.all([store.runtime(), store.pairs(), store.events(), store.pendingCount()]);
   return {
-    mode: 'paper-only', version: 'discovery-paper-v1', baselineAt: runtime.universe.baselineAt,
+    mode: 'paper-only', version: 'discovery-paper-v1', source: marketSource ? 'wallet-provider' : 'unconfigured', baselineAt: runtime.universe.baselineAt,
     lastRunAt: runtime.lastRunAt, lastSuccessAt: runtime.lastSuccessAt, lastError: runtime.lastError,
-    scheduler: { configured: (process.env.DISCOVERY_SCHEDULER_TOKEN?.length ?? 0) >= 32, lastTickAt: runtime.lastTickAt, healthy: runtime.lastTickAt !== null && Date.now() - runtime.lastTickAt < 180_000 && runtime.lastSuccessAt !== null && Date.now() - runtime.lastSuccessAt < 180_000 && !runtime.lastError },
+    scheduler: { configured: (process.env.DISCOVERY_SCHEDULER_TOKEN?.length ?? 0) >= 32, lastTickAt: runtime.lastTickAt, healthy: !!marketSource && runtime.lastTickAt !== null && Date.now() - runtime.lastTickAt < 180_000 && runtime.lastSuccessAt !== null && Date.now() - runtime.lastSuccessAt < 180_000 && !runtime.lastError },
     universe: { total: Object.keys(runtime.universe.pairs).length, baselineAt: runtime.universe.baselineAt, lastObservedAt: runtime.universe.lastObservedAt },
     pairs: pairs.sort((a, b) => b.firstSeenAt - a.firstSeenAt), recentEvents: events.map(e => e.event),
     sync: { configured: sheetsConfigured(), ...runtime.sync, pending },
     config: { paperQuoteBudget: PAPER_CONFIG.budgetQuote, feeRate: PAPER_CONFIG.feeRatePerSide, maxSpreadPct: PAPER_CONFIG.maxSpread * 100, maxSlippagePct: PAPER_CONFIG.maxSlippage * 100, stopLossPct: Math.abs(PAPER_CONFIG.stopReturn) * 100, takeProfitPct: PAPER_CONFIG.targetReturn * 100, maxHoldingMs: PAPER_CONFIG.maxHoldMs, delayedMinObservations: PAPER_CONFIG.delayedMinObservations, delayedMinElapsedMs: PAPER_CONFIG.delayedWaitMs },
     limitations: [
       'أول قراءة تؤسس قائمة مرجعية؛ أول ظهور لاحق لدينا لا يثبت تاريخ إطلاق العملة أو إدراجها.',
-      'النتائج افتراضية غير مؤكدة؛ لا يرسل هذا المسار أوامر إلى الوسيط ولا يستخدم مفاتيح التداول.',
+      'النتائج افتراضية غير مؤكدة؛ لا يرسل هذا المسار أوامر مالية ولا يستخدم مفاتيح التداول.',
+      'مصدر سوق المحفظة غير مهيأ افتراضيًا. سجل المحفظة مستقل؛ أرشيف المصدر السابق لا يُدمج فيه ولا يؤسس قراءته المرجعية.',
       'حجم الاختبار 10 من عملة التسعير لكل سيناريو، ورسوم 0.1% لكل جهة افتراض غير مؤكد. لا تجمع EUR وUSD.',
       'سجل الصفقات العام محدود؛ الحجم المرصود ليس دليلًا على كامل حجم السوق أو خلوه من التلاعب.',
       'تباعد القراءات ونقص العمق قد يمنعان التسعير. لا توجد تعبئة مضمونة عند الوقف أو الهدف.',
@@ -38,17 +40,24 @@ export async function discoveryReport(store = journal): Promise<DiscoveryReport>
 }
 
 type Dependencies = {
-  store?: DiscoveryJournal; universe?: typeof readPublicUniverse; market?: typeof readPublicMarket;
+  store?: DiscoveryJournal; source?: WalletDiscoverySource;
+  /** Test injection remains explicit and passes through the same evidence validation. */
+  universe?: WalletDiscoverySource['universe']; market?: WalletDiscoverySource['market'];
   sync?: typeof syncSheetEvents; now?: () => number;
 };
 export function safeDiscoveryError(error: unknown): string {
   const message = error instanceof Error ? error.message : '';
+  if (message === 'public_wallet_market_source_unavailable') return 'discovery_source_unavailable';
   // Allow only our operational codes, never raw provider bodies/URLs/credentials.
   return /^(?:discovery|public|market|universe|sheets)_[a-z0-9_]{1,90}$/.test(message) ? message : 'discovery_source_unavailable';
 }
-/** Has no import path to a broker, execution engine, order table or account secret. */
+/** Has no import path to an execution engine, order table or account secret. */
 export async function runDiscovery(source: 'manual' | 'scheduler', dependencies: Dependencies = {}) {
   const store = dependencies.store ?? journal, now = dependencies.now ?? Date.now;
+  const marketSource = dependencies.source ?? (dependencies.universe ? {
+    universe: dependencies.universe,
+    market: dependencies.market ?? (() => Promise.reject(new Error('public_wallet_market_source_missing'))),
+  } : undefined);
   const startedAt = now(), lease = await store.acquire();
   if (!lease) return { status: 'busy' as const };
   try {
@@ -60,7 +69,7 @@ export async function runDiscovery(source: 'manual' | 'scheduler', dependencies:
     const changed: PaperPairState[] = [], events: DiscoveryEvent[] = [];
     let attemptedMarkets = 0;
     try {
-      const pairs = await (dependencies.universe ?? readPublicUniverse)();
+      const pairs = await readPublicUniverse({ source: marketSource, now });
       const observed = observeUniverse(runtime.universe, pairs, now());
       runtime.universe = observed.state;
       events.push(...observed.events);
@@ -81,7 +90,7 @@ export async function runDiscovery(source: 'manual' | 'scheduler', dependencies:
         attemptedMarkets++;
         try {
           const current = runtime.universe.pairs[state.symbol] ?? { ...state.pair, status: 'unavailable' };
-          const snapshot = await (dependencies.market ?? readPublicMarket)(current);
+          const snapshot = await readPublicMarket(current, { source: marketSource, now });
           if (snapshot.issues.length) marketIncomplete = true;
           const advanced = advancePaperPair({ ...state, pair: current }, snapshot);
           const at = changed.findIndex(p => p.symbol === state.symbol);
@@ -101,11 +110,15 @@ export async function runDiscovery(source: 'manual' | 'scheduler', dependencies:
       else { runtime.lastSuccessAt = now(); runtime.lastError = null; }
     } catch (error) {
       runtime.lastError = safeDiscoveryError(error);
+      if (['public_universe_incomplete', 'public_wallet_market_pair_invalid', 'public_wallet_market_number_invalid', 'public_symbol_invalid'].includes(runtime.lastError)) {
+        events.push({ id: `universe-invalid:${startedAt}`, kind: 'universe_rejected', symbol: null, observedAt: now(),
+          reasons: [runtime.lastError], evidence: { sourceValidationFailed: true, baselinePreserved: true } });
+      }
       events.push({ id: `scan-error:${startedAt}`, kind: 'scan_failed', symbol: null, observedAt: now(), reasons: [runtime.lastError], evidence: { baselinePreserved: true, confirmedExecution: false } });
     }
     await store.save(lease, runtime, changed, events);
     // Writing the sheet is optional and never erases the durable audit trail.
-    if (sheetsConfigured() && now() - startedAt < 10_000) {
+    if (marketSource && sheetsConfigured() && now() - startedAt < 10_000) {
       const records = await store.pending();
       if (records.length) {
         try {

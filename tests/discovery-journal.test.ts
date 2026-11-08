@@ -23,7 +23,7 @@ describe('durable paper discovery journal', () => {
     expect(leases.filter(Boolean)).toHaveLength(1);
     const original = leases.find(Boolean)!;
     await store.save(original, initialRuntime(), [], [event('one')]);
-    await query("UPDATE app_settings SET value=jsonb_set(value,'{expires}','0'::jsonb) WHERE key='discovery:paper:v1:lock'");
+    await query("UPDATE app_settings SET value=jsonb_set(value,'{expires}','0'::jsonb) WHERE key='discovery:wallet:v1:lock'");
     const replacement = (await store.acquire())!; expect(replacement.owner).not.toBe(original.owner);
     await expect(store.save(original, initialRuntime())).rejects.toThrow('discovery_lock_lost');
     await expect(store.acknowledge(original, await store.pending(), at)).rejects.toThrow('discovery_lock_lost');
@@ -54,7 +54,7 @@ describe('durable paper discovery journal', () => {
   it('rolls back pair state, event insertion, row allocation and runtime together on a database failure', async () => {
     const store = new DiscoveryJournal(), lease = (await store.acquire())!;
     await store.save(lease, initialRuntime());
-    await query("ALTER TABLE app_settings ADD CONSTRAINT discovery_test_runtime CHECK (key <> 'discovery:paper:v1:runtime' OR value->>'lastError' IS DISTINCT FROM 'force_rollback')");
+    await query("ALTER TABLE app_settings ADD CONSTRAINT discovery_test_runtime CHECK (key <> 'discovery:wallet:v1:runtime' OR value->>'lastError' IS DISTINCT FROM 'force_rollback')");
     const runtime = await store.runtime(); runtime.lastError = 'force_rollback';
     try {
       await expect(store.save(lease, runtime, [createPaperPairState(pair)], [event('must_rollback')])).rejects.toThrow();

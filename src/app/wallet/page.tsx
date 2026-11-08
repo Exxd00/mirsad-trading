@@ -11,14 +11,14 @@ export default async function WalletPage() {
   const mode = orderConnection();
   return <main dir="rtl" className={styles.page}>
     <nav className={styles.nav} aria-label="التنقل الرئيسي"><Link href="/" className={styles.brand}>مرصاد</Link>
-      <div className={styles.navLinks}><Link href="/automation">حالة Revolut X والحماية</Link><Link href="/discovery">رصد العملات</Link></div>
+      <div className={styles.navLinks}><Link href="/automation">المحرك والحماية</Link><Link href="/discovery">رصد العملات</Link></div>
     </nav>
-    <header className={styles.hero}><div><p className={styles.kicker}>ربط الحسابات</p><h1>ربط المحفظة بمرصاد</h1>
+    <header className={styles.hero}><div><p className={styles.kicker}>محفظة MetaMask</p><h1>ربط المحفظة بمرصاد</h1>
       <p className={styles.description}>اربط الحساب لعرض الشبكة ورصيد عملتها. عند إنشاء تجربة تلقائية، يحفظ مرصاد العنوان وحدود التفويض ليعمل من الخادم.</p>
     </div></header>
     <WalletConnection />
-    <p className={styles.message}>{mode === 'revolut-x' ? 'ما زال Revolut X هو مسار الأوامر الحالي. ربط المحفظة هنا لا يغيّر هذا الإعداد.' :
-      mode === 'metamask' ? 'المحفظة هي الربط المختار. التنفيذ التلقائي المتاح هنا يخصّ تجربة Base Sepolia. تعرض صفحة الأتمتة متابعة حساب Revolut X وحمايته.' :
-      'إعداد وجهة الأوامر غير صالح. إرسال أوامر جديدة مغلق؛ تظل متابعة الأوامر السابقة على حسابها الأصلي.'}</p>
+    <p className={styles.message}>{mode === 'metamask'
+      ? 'MetaMask هي جهة التنفيذ الوحيدة. ربط الحساب للقراءة لا يفعّل التداول. تجربة Base Sepolia منفصلة عن استراتيجية المحرك؛ راجع صفحة الأتمتة لمعرفة جاهزيتها.'
+      : 'إعداد جهة التنفيذ غير صالح. إرسال الأوامر مغلق حتى تصحيح إعداد المحفظة.'}</p>
   </main>;
 }

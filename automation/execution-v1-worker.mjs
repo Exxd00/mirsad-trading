@@ -46,7 +46,9 @@ export default {
   },
 };
 function watchProtection(env) {
-  return env.DEADLINES.getByName('mirsad-protection:revolut-x').fetch(new Request('https://deadline.internal/watch', { method: 'POST', body: JSON.stringify({ kind: 'protection' }) }));
+  // Wallet strategy state is isolated from archived account jobs. Do not rename,
+  // delete or adopt an existing Durable Object when changing the active account.
+  return env.DEADLINES.getByName('mirsad-protection:metamask-strategy-v1').fetch(new Request('https://deadline.internal/watch', { method: 'POST', body: JSON.stringify({ kind: 'protection' }) }));
 }
 export class OrderDeadline {
   constructor(ctx, env) { this.ctx = ctx; this.env = env; }

@@ -69,9 +69,10 @@ export function WalletTrial({ wallet, ownerAction }: Props) {
     setNotice('حُفظ التوقيعان. يتابع المجدول التجربة ضمن الأسعار المعتمدة.');
   });
   return <section className={styles.panel} aria-labelledby="trial-heading">
-    <div className={styles.panelHeading}><h2 id="trial-heading">تجربة الشراء والبيع والمتصفح مغلق</h2></div>
+    <div className={styles.panelHeading}><h2 id="trial-heading">اختبار تنفيذ مستقل على Base Sepolia</h2></div>
     <div className={styles.reportDetails}>
       <p>تشتري التجربة WETH باستخدام USDC الاختباري على Base Sepolia، ثم تبيع الكمية المعتمدة بعد تأكيد الشراء. تحدد أنت المبالغ وعدد الدورات والمدة في تفويضين يوقّعان عند الإعداد.</p>
+      <p className={styles.sectionNote}>تتناوب هذه التجربة بين الشراء والبيع لاختبار التفويض والتسوية. لا تشغّل إشارات EMA أو قواعد استراتيجية المحرك، ولا تثبت جاهزية التداول بأموال حقيقية.</p>
       {error && <p role="alert" className={styles.error}>{error}</p>}{notice && <p role="status">{notice}</p>}
       {report && !report.enabled && <p>تتوفر تواقيع التجربة في النسخة التي يتصل بها المجدول. يمكنك هنا مراجعة طريقة التشغيل.</p>}
       {report?.enabled && canDraft && wallet?.chainId === '84532' && <form className={styles.form} onSubmit={prepare}>

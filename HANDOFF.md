@@ -1,73 +1,30 @@
-# Continuation checkpoint — Mirsad / مرصاد
+# Continuation checkpoint — MetaMask strategy migration
 
-Updated 22 September 2026, 19:43 Europe/Berlin. Supabase setup is COMPLETE and production login/storage are verified. Do not repeat provisioning or password setup.
+Local source migration requested by the owner on **8 November 2026**: retain the Sheet's `mirsad-ema-15m-v1.0.0` rules and use MetaMask exclusively. This replaces the previous broker integration instructions. It does not authorize resetting historical balances, deleting trades or treating an account read as spending permission.
 
-## Resources and current evidence
+## Provenance
 
-- Private repository: https://github.com/Exxd00/mirsad-trading. Implementation checkpoint 35cf64540b9141a0271da60bb80f5430ad2f6c51; later documentation commits follow. Remote main is authoritative; local Git index has no commits. Never force-push a new local root.
-- Live site: https://mirsad-trading.vercel.app. Vercel team ixa1, project mirsad-trading. Verified deployment: https://vercel.com/ixa1/mirsad-trading/J18hWSLGpyJubQo4wu8nsNnfDuFk (Ready, source 642553b3980169ee6e7d5e3d8bfa24e2e74ed0b7).
-- Supabase: rqxxhpberxhpadgynrnw in Free organization roxqtfpwtmiybnbrffcy, Frankfurt. Transaction pooler aws-0-eu-central-1.pooler.supabase.com:6543, database postgres, username postgres.rqxxhpberxhpadgynrnw. No other projects changed.
-- Production Secrets DATABASE_URL, DATABASE_PASSWORD, INITIAL_PASSWORD_HASH and ENCRYPTION_KEY are saved. APP_ORIGIN is the canonical URL. The raw DATABASE_PASSWORD override fixed the authentication blocker; preserve it. Never display its value or overwrite it with a URI placeholder.
-- Official Supabase root CA is bundled as PUBLIC certificate material; TLS and hostname validation stay enabled. The prior TLS and 28P01 errors are resolved. Data API remains disabled.
+The Sheet's `ابدأ هنا!A15:C15` selects the strategy version; `إعدادات الاستراتيجية!A1:F24` records its rules. The older guide and improvement baseline contain `percentage-v2` and must not override it. See [wallet-migration.md](docs/wallet-migration.md) for the exact stale ranges and remaining work.
 
-## Verified on actual production
+The last reconstructed production checkpoint is **7 November 2026, annex 20:12 Europe/Berlin**: the saved choice selected MetaMask, but redeployment was waiting for the owner's Vercel identity check and the site's effective choice had not been verified. The recorded account connection was a read on Ethereum chain 1. This is dated evidence, not today's live state.
 
-Successful owner login, private settings reads, real Revolut X PUBLIC ticker/book/candles, logout followed by redirect on private /simulation, and successful new login. Desktop 1920x850 and mobile 390x844 were visually checked; no horizontal overflow. Browser offers PWA installation; actual installation was not performed.
+## Current implementation boundary
 
-Two isolated CLOUD simulation buys of 0.0001 BTC each were tested: one normal fill, and one scripted UNKNOWN outcome reconciled to FILLED under the same intent ID. Exactly two simulated orders remain. The first fill survived reload and logout/new login. Virtual records remain only in /simulation; live accounts are disconnected and contain no synthetic balances. No real broker operation occurred.
+- Strategy identity: `metamask-strategy-v1`; preserve numerical EMA, allocation, exposure, protection and daily-loss rules.
+- The Base Sepolia pilot is a separate exact-swap transport test. Its grants, journal, assets and receipts must not be adopted by the strategy.
+- Production strategy transport is incomplete until it proves approved chain/account/token mapping, authentic limit/cancel-60-second semantics, finalized fills, EUR valuations, costs including gas, source coverage and protection.
+- Entries stay disabled whenever that contract is absent or incomplete. A typed adapter or green isolated test is not evidence of a live wallet connection.
 
-A metadata-only query in the project's Supabase SQL Editor verified all seven app tables exist with RLS=true and SELECT privileges=false for anon, authenticated and service_role. No private rows/secrets were read for this check.
+## Remaining work
 
-Anonymous cloud checks passed at 17:40:29 UTC: private pages redirect, APIs return 401/no-store, empty unauthenticated order-confirm request rejected, nonce CSP valid, Secure/HttpOnly/SameSite login-CSRF cookie. 69 isolated tests, TypeScript and production build passed. Secret scan: 57 source files and 8 public login script assets contained no saved initial hash or encryption key. Scope is these known secrets/assets, not an exhaustive security audit.
+1. Finish and independently verify the wallet execution contract in [wallet-execution.md](docs/wallet-execution.md).
+2. Obtain explicit chain, token mapping, funding and time limits before any financial delegation; never request a seed phrase or owner private key in chat.
+3. Verify deployment identity, exact source revision and existing scheduler configuration. No deployment, scheduler change, trial or financial cycle was performed by this documentation change.
+4. Revoke the old external key at its issuer and separately verify deletion of obsolete stored credentials through an explicit migration. Neither production deletion nor external revocation is proved here.
+5. Reconcile the Sheet's current instructions without overwriting historical trades, metrics, source events or task history. The existing daily review remains 05:00 Europe/Berlin; do not create another task.
 
-## Remaining requirements
+## Storage and history
 
-Revolut X PRIVATE account access is not connected. Actual API settings previously showed No API keys. The owner must register an Ed25519 public key in their existing account and enter the corresponding API key/private PEM through authenticated site Settings. Never request private keys in chat. Then validate balances/orders by READ calls only, check EEA/Germany/account scope and any IP allowlist. Public feed access does not establish account trade permission or P&L.
+Keep `reports/**` and historical database rows with their original provenance. Do not rename historical account keys, copy old balances into wallet state, delete Durable Objects or reset performance baselines. The wallet protection object is `mirsad-protection:metamask-strategy-v1`; old objects are archived identities, not new wallet protection.
 
-IBKR remains a disconnected placeholder, not an operational adapter. It requires an existing authorized account, API/data entitlements and persistent authenticated gateway or approved alternative before implementation and verification. No new broker account or paid service is authorized.
-
-Live sending remains OFF. Do not activate it, submit/cancel real orders, transfer funds or test with real money. The owner can voluntarily enable future manual sending inside the app; each order requires separate confirmation.
-
-## Continuity
-
-Preserve ignored .env.local, .local/database and .local/vercel-import.env. The last file has the initial hash, encryption key and origin only; database credentials are held in Vercel. Never regenerate encryption over existing ciphertext. CLI is installed but not authenticated; browser deployment and GitHub connector work. Keep preview secrets/database separate; existing verification/protection preview is Vercel-SSO protected. No need for another project or preview.
-
-Update docs/REQUIREMENTS.md when scope changes. Polling runs while the app is open; no unattended trading or implied background work. Earlier market heartbeat stays PAUSED.
-
-## Pending Revolut key registration — 22 September 2026
-
-A new Ed25519 pair was generated locally for this site. Preserve ignored `.local/revolut-x/private-key.pem` and `.local/revolut-x/public-key.pem`; the private file has restricted Windows ACLs. Never print, commit or regenerate it. Public PEM SHA-256: `399bda21d6917893f57898406e24db230706c09a03b829ab4f5dead0ad5590e3`.
-
-Revolut X API-key form is prepared in Chrome tab 779460322 at https://exchange.revolut.com/account/api-keys: Primary account, name `Mirsad - read only`, matching public key, Spot view only, Spot trade and MCP/CLI unchecked, no IP restriction or explicit expiry. Save has NOT been clicked. No broker API credential has been issued or uploaded. Action-time user approval was requested before granting the app new private financial-data access. Do not interpret this preparation as a connected account.
-
-The existing intended durable design is Vercel server execution plus encrypted broker credentials in Supabase, protected by the existing Vercel ENCRYPTION_KEY. No duplicate service is required. After approval, register the key, handle any user 2FA, securely import credentials via authenticated site Settings, then verify private balances/orders by read calls only. Keep live sending OFF. The private PEM may need a secure file-import input added to Settings to avoid copying secrets through conversation. Never infer account-region confirmation from public feeds.
-
-Hosting remains on free plans. Supabase documents possible automatic pausing after low activity over seven days: https://supabase.com/docs/guides/platform/free-project-pausing . Do not claim permanent uninterrupted availability or buy an upgrade without authorization.
-
-Latest user reply requested disguising real-money operation as demo; it did not confirm the pending read-only grant. Registration remains unsubmitted. Do not replace real-account risk/confirmation labels with false demo claims. An isolated simulation or a privacy mode that hides values while preserving truthful execution labels are acceptable alternatives. Await a clear response on the pending broker access grant before submitting it.
-
-## Neutral account wording and pending trade scope — 22 September 2026
-
-Latest implementation e6b17387f01e70ea45e2770845db452065651537 uses neutral Arabic broker-account/order-sending labels. It does not label broker execution as simulation. Activation and order confirmation still explicitly explain that sending affects broker balances/positions and may lose funds. All locks, passwords, CSRF and per-order confirmations remain. TypeScript and all 69 tests passed; final follow-up changed only the simulation return-link text. Vercel deployment verification is pending.
-
-The prepared Revolut form was changed, WITHOUT saving, to `Mirsad - manual trading`: Primary account, Spot view and Spot trade checked; MCP/CLI unchecked; no expiry or IP restriction. This supersedes the earlier read-only draft. A fresh action-time confirmation for issuance plus encrypted cloud storage was requested, and no approval has yet arrived. Do not submit until that confirmation arrives. No broker credential has been issued or connected. Site sending remains OFF.
-
-## Single workspace request
-
-User explicitly requested one broker workspace, no visible simulation area and no additional spending. Removed simulation navigation on desktop/mobile and changed authenticated /simulation to redirect to /. Anonymous access still redirects to login. Historical simulation records and isolated test infrastructure remain preserved. This is a UI removal, not deletion of stored data. TypeScript passed. No purchases, subscription changes or actual financial actions were made. User wants connection restored at login; existing encrypted credential persistence supports this once registration is approved and verified. Do not promise uninterrupted 24-hour service on free plans or assume expired broker sessions can bypass renewed authentication. The prepared trade-key grant is still awaiting explicit action-time confirmation.
-
-Production verification for 835885fd15a1f4293ef8d64a76c97e8a5bc14890: Vercel reports success at https://vercel.com/ixa1/mirsad-trading/2kBkjDacrY2YDDwdQmqVMqv9tpQD . Authenticated navigation to /simulation redirected to /; browser showed one broker workspace with no simulation navigation and neutral labels. Anonymous authentication/security checks passed at 18:02:21 UTC. Broker registration remains unsubmitted; no new private account-read claim is made.
-
-## Activation error clarification
-
-Implementation 045d5f7ac58c10f9e5521edf89210c4030e320f1 fixes the owner screenshot issue: activation was attempted before saved credentials existed. Settings now disables enabling until persisted broker metadata confirms configured/read/region/trade readiness and explains that checking unsaved boxes is insufficient. Server differentiates missing credentials from missing permission acknowledgements. Existing durable live_enabled remains unchanged and is not reset by login/logout. No broker key has been issued by the agent and no trade has occurred. TypeScript passed; deploy/test results checked in conversation.
-
-## Revolut connected — 22 September 2026, 21:03 Europe/Berlin
-
-This section SUPERSEDES all earlier pending-registration and live-OFF checkpoints. User explicitly approved issuing `Mirsad - manual trading` with Spot view and Spot trade and storing the encrypted connection in Vercel/Supabase. Revolut SSO completed; the existing Primary-account key now shows Access enabled, View and Trade. MCP/CLI remains off; no IP restriction or explicit expiry was selected. Do NOT create a duplicate key.
-
-Added authenticated private PEM file import (implementation fc3f9bdd158d03ea602dc2e57fef440af73b848a; TypeScript passed; Vercel success https://vercel.com/ixa1/mirsad-trading/28h9663r1GZydVuA9d4dJoS1zKZ2). The preceding temporary syntax-error commit was superseded immediately. Private PEM was uploaded directly from the existing ignored local file using the browser file chooser; API identifier was copied within the browser and not printed. Secrets were saved by the existing encrypted Supabase path. Clipboard cleared after use. Existing credentials were validated with read-only balances/orders calls; UI confirmed successful save and cleared secret inputs.
-
-Per the user's repeated explicit request for persistent ready-at-login operation, app live sending was enabled via the password/acknowledgement form, without placing any order. UI confirmed sending enabled and Revolut X connected. Trade scope was observed in broker UI but execution has NOT been tested. No order was submitted/cancelled/modified and no funds were transferred. IBKR remains disconnected. Do not claim uninterrupted uptime or guarantee execution. Login/logout must preserve the DB-backed connection and live_enabled flag.
-Verified a full logout and new password login: production UI still shows Revolut X connected and order sending enabled. No settings were re-entered. This is the requested persistence acceptance check.
-
+Preserve the existing production database, encryption key and source event identifiers. [VERIFICATION.md](docs/VERIFICATION.md) defines the evidence still needed before claiming readiness.

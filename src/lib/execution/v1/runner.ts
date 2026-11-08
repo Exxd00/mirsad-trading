@@ -1,3 +1,4 @@
+import { executionReason } from './errors';
 import { randomUUID } from 'node:crypto';
 import { CONFIG, VERSION, decimal, fresh, type Account, type Candle, type Instrument, type Intent, type Position, type Quote, type Signal, type SourceOrder } from './model';
 import { processCandles } from './strategy';
@@ -49,7 +50,7 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
     if (Date.now() - scanStart >= 15000) break;
     const symbol = scan[(cursor + scanned) % scan.length];
     try { prefetched.set(symbol, { candles: await port.candles(symbol, before.indicators[symbol]?.lastCloseTime ?? null) }); }
-    catch (e) { prefetched.set(symbol, { error: e instanceof Error ? e.message : 'candles_unavailable' }); }
+    catch (e) { prefetched.set(symbol, { error: executionReason(e, 'candles_unavailable') }); }
   }
   await port.refreshAccounting?.();
   const lease = await journal.acquire(port.accountId);
@@ -108,7 +109,7 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
         state.indicators[symbol] = parsed.state;
         state.pendingSignals = [...new Map([...state.pendingSignals, ...parsed.signals].map(s => [s.id, s])).values()];
         for (const signal of parsed.signals) await journal.event(lease, { type: 'signal', readAt: clock(), sourceAt: signal.at, signal });
-      } catch (e) { result.blocks.push({ symbol, reason: e instanceof Error ? e.message : 'candles_unavailable' }); }
+      } catch (e) { result.blocks.push({ symbol, reason: executionReason(e, 'candles_unavailable') }); }
     }
     state.pendingSignals = state.pendingSignals.filter(s => s.side === 'sell' ? account.positions.some(p => p.managed && p.symbol === s.symbol) : fresh(s.at, clock(), CONFIG.signalTtlSeconds));
     const quotes = await port.quotes(allSymbols);
@@ -193,7 +194,7 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
     await journal.event(lease, { type: 'cycle', version: VERSION, ...result });
     return result;
   } catch (error) {
-    result.status = 'blocked'; result.reason = error instanceof Error ? error.message : 'cycle_failed';
+    result.status = 'blocked'; result.reason = executionReason(error, 'cycle_failed');
     await journal.event(lease, { type: 'cycle', version: VERSION, ...result }).catch(() => undefined);
     return result;
   } finally { await journal.release(lease); }

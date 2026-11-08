@@ -1,0 +1,72 @@
+// Only fixed local reason codes may enter reports and durable audit records.
+// Transport exceptions may contain credentials, URLs or full response bodies.
+const localReasons = new Set([
+  "account_mismatch", "account_stale", "account_valuation_missing", "accounting_",
+  "accounting_account_mismatch", "accounting_backfill_required", "accounting_balance_changed", "accounting_balance_changed_during_read",
+  "accounting_balance_invalid", "accounting_current_account_leg_missing", "accounting_cursor_repeated", "accounting_eur_missing",
+  "accounting_evidence_missing", "accounting_evidence_stale", "accounting_exit_quantity_mismatch", "accounting_fill_conflict",
+  "accounting_fill_coverage_incomplete", "accounting_fill_identity_mismatch", "accounting_historical_price_conflict", "accounting_historical_price_missing",
+  "accounting_late_transaction", "accounting_leg_identity_missing", "accounting_price_coverage_incomplete", "accounting_processed_time_missing",
+  "accounting_quote_stale", "accounting_read_budget", "accounting_snapshot_not_new", "accounting_source_reconciliation_failed",
+  "accounting_source_revision", "accounting_source_stale", "accounting_source_unavailable", "accounting_source_valuation_unavailable",
+  "accounting_staked_valuation_missing", "accounting_trade_coverage_incomplete", "accounting_trade_legs_missing", "accounting_transaction_conflict",
+  "accounting_transaction_coverage_incomplete", "accounting_transaction_details_incomplete", "accounting_transaction_pending", "accounting_transaction_reverted",
+  "accounting_transfer_account_ambiguous", "accounting_transfer_amount_invalid", "accounting_transfer_fee_missing", "actual_execution_cost_components_missing",
+  "already_recorded", "archive_incomplete", "authoritatively_absent", "available_balance_invalid",
+  "base_or_restored", "budget_below_minimum", "budget_rounding_violation", "calibration_warmup_missing",
+  "cancellation_capability_missing", "cancellation_not_owned", "cancellation_outcome_pending", "cancellation_outcome_unknown",
+  "cancellation_pending", "candle_gap", "candle_incomplete", "candle_ohlcv_invalid",
+  "candle_range_incomplete", "candle_source_mismatch", "candle_time_invalid", "candles_unavailable",
+  "closed_trade_costs_missing", "configured_symbols_missing", "confirmed_entry_fill_required", "conflicting_candle",
+  "conflicting_fill", "conflicting_trade", "conflicting_valuation", "cycle_failed",
+  "daily_loss_limit", "daily_report", "day_start_valuation_missing", "deadline_account_mismatch",
+  "deadline_connection_missing", "deadline_input_invalid", "deadline_not_acknowledged", "deadline_order_mismatch",
+  "deadline_url_invalid", "decision_already_consumed", "destination_currency", "drawdown_2_percent",
+  "entries_paused", "entries_setting", "entry_capability_missing", "entry_expired_before_send",
+  "entry_price_chased", "entry_reservation_unknown", "equity_history_missing", "execution_capabilities_missing",
+  "execution_costs_invalid", "execution_costs_missing", "execution_lock_lost", "execution_not_armed",
+  "exit_cancellation_pending", "exit_capability_missing", "exit_trigger_not_confirmed", "exposure_capacity",
+  "fill_archive_incomplete", "finer_execution_data_required", "flow_valuation_mismatch", "indicator_state_missing",
+  "instrument_unavailable", "invalid_decimal", "invalid_equity", "invalid_equity_baseline",
+  "invalid_order_connection", "invalid_quote", "invalid_signal", "invalid_symbol",
+  "latched_reverse", "lookup_unconfirmed", "managed_entry_fill_mismatch", "managed_entry_source_missing",
+  "managed_entry_source_regressed", "managed_exit_fill_mismatch", "managed_exit_source_missing", "managed_source_balance_mismatch",
+  "market_missing", "matching_opening_and_closing_pnl_snapshots_required", "multiple_managed_entries", "no_closed_trades",
+  "nonpositive_value", "not_an_entry", "not_due", "order_api_not_connected",
+  "order_book_depth_insufficient", "order_book_invalid", "order_book_missing", "order_book_quote_mismatch",
+  "order_outcome_unknown", "original_risk_unavailable", "other_currency", "partially_filled",
+  "pending_new", "position_capacity", "position_or_buy_exists", "position_reservation_mismatch",
+  "position_valuation_invalid", "position_valuation_missing", "pre_flow_valuation_missing", "profit_factor_denominator_zero",
+  "protected_quantity_mismatch", "protection_account_stale", "protection_check_failed", "protection_exit_outcome_unknown",
+  "protection_heartbeat", "protection_journal_missing", "protection_levels_invalid", "protection_monitor_not_acknowledged",
+  "protection_monitor_not_connected", "protection_monitor_stale", "protection_quote_stale", "protection_reconciliation_failed",
+  "protection_record_missing", "protection_requires_resolution", "protection_residual_below_minimum", "protection_source_missing",
+  "quote_stale", "reduced_latched", "report_fill_conflict", "report_fill_coverage_incomplete",
+  "report_fill_identity_mismatch", "report_fill_price_mismatch", "report_fill_price_missing", "report_fills_unavailable",
+  "report_source_missing_or_stale", "report_source_unavailable", "reverse_cross", "risk_missing",
+  "risk_valuation_mismatch", "round_trip_cost_limit", "scan_time_budget_next_cycle", "signal_expired",
+  "slippage_missing", "source_archive", "source_archive_", "source_archive_account_mismatch",
+  "source_archive_cursor_repeated", "source_archive_timestamp_invalid", "source_archive_transaction_conflict", "source_balance_mismatch",
+  "source_balance_missing", "source_currency", "source_decision_key_invalid", "source_execution_traces_and_costs_required",
+  "source_identity_conflict", "source_identity_mismatch", "source_intent_mismatch", "source_lease_account_mismatch",
+  "source_lease_required", "source_ledger", "source_order_details_limit", "source_order_details_unavailable",
+  "source_order_identity_mismatch", "source_order_mismatch", "source_order_regressed", "source_read",
+  "source_snapshot", "source_timestamp_invalid", "source_transactions_unavailable", "source_unrealized_costs_or_valuation_missing",
+  "source_write_already_attempted", "source_write_identity_missing", "source_write_pending", "source_write_unavailable",
+  "stop_target_order_unknown", "trade_costs_missing", "trade_history_incomplete", "two_net_losses",
+  "un_stake", "valuation_missing", "valuation_or_transfers_missing", "wallet_account_changed",
+  "wallet_account_mismatch", "wallet_candle_provider_missing", "wallet_execution_transport_missing", "wallet_gas_inclusive_eur_costs_missing",
+  "wallet_grant_outside_validity", "wallet_grant_unverified", "wallet_identity_invalid", "wallet_journal_missing",
+  "wallet_limit_cancellation_unsupported", "wallet_market_identity_conflict", "wallet_market_mapping_invalid", "wallet_market_mapping_missing",
+  "wallet_order_account_mismatch", "wallet_order_book_identity_mismatch", "wallet_quote_identity_mismatch", "wallet_unbound_ledger_not_empty",
+  "warmup_requires_1000_candles", "zero_return_denominator",
+]);
+export function executionReason(error: unknown, fallback: string): string {
+  const reason = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  if (localReasons.has(reason)) return reason;
+  if (reason.startsWith('accounting_transfer_fee_missing:')) return 'accounting_transfer_fee_missing';
+  return fallback;
+}
+export function sourceErrorCode(code: string) {
+  return ['RATE_LIMIT', 'INCOMPLETE_HISTORY', 'CONNECTION_ERROR', 'INVALID_RESPONSE', 'UNKNOWN'].includes(code) ? code : 'SOURCE_API_ERROR';
+}

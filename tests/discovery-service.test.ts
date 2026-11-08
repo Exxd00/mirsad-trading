@@ -1,8 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
 import { closeDatabase, ensureSchema, query } from '../src/lib/db';
-import { DiscoveryJournal, type StoredEvent } from '../src/lib/discovery/journal';
+import { DiscoveryJournal, initialRuntime, type StoredEvent } from '../src/lib/discovery/journal';
 import { discoveryReport, runDiscovery } from '../src/lib/discovery/service';
+import { createUniverseState, observeUniverse, type WalletDiscoverySource } from '../src/lib/discovery/market';
+import { createPaperPairState } from '../src/lib/discovery/paper';
 import type { MarketPair, MarketSnapshot } from '../src/lib/discovery/model';
 import { DISCOVERY_SHEET, sheetEventRow, syncSheetEvents } from '../src/lib/discovery/sheets';
 
@@ -34,6 +36,45 @@ afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(
 afterAll(async () => { await closeDatabase(); vi.unstubAllEnvs(); });
 
 describe('paper discovery orchestration and outbox', () => {
+  it('isolates the wallet journal from archived runtime, pairs, events, outbox rows and an active old lease', async () => {
+    const legacyPrefix = 'discovery:paper:v1:', historicalAt = start - 86_400_000;
+    const historicalUniverse = observeUniverse(createUniverseState(), [pair('OLD')], historicalAt).state;
+    const historicalRuntime = { ...initialRuntime(), universe: historicalUniverse, lastRunAt: historicalAt,
+      lastSuccessAt: historicalAt, lastTickAt: historicalAt, nextSheetRow: 99 };
+    const historicalEvent: StoredEvent = { sheetRow: 98, syncedAt: null, event: { id: 'archived-source-event',
+      kind: 'baseline_created', symbol: null, observedAt: historicalAt, reasons: [], evidence: { source: 'original-source' } } };
+    const legacyRecords = [
+      { key: legacyPrefix + 'runtime', value: historicalRuntime },
+      { key: legacyPrefix + 'pair:OLD-EUR', value: createPaperPairState(historicalUniverse.pairs['OLD-EUR']) },
+      { key: legacyPrefix + 'event:archived-event', value: historicalEvent },
+      { key: legacyPrefix + 'lock', value: { owner: 'archived-owner', expires: Math.floor(Date.now() / 1000) + 600 } },
+    ];
+    await query("INSERT INTO app_settings(key,value) SELECT item->>'key',item->'value' FROM jsonb_array_elements($1::jsonb) AS item", [JSON.stringify(legacyRecords)]);
+    const archive = async () => (await query<{ key: string; value: unknown }>('SELECT key,value FROM app_settings WHERE key LIKE $1 ORDER BY key', [legacyPrefix + '%'])).rows;
+    const before = await archive(), store = new DiscoveryJournal(), empty = await discoveryReport(store);
+    expect(empty).toMatchObject({ source: 'unconfigured', baselineAt: null, lastSuccessAt: null, pairs: [], recentEvents: [],
+      universe: { total: 0, baselineAt: null, lastObservedAt: null }, sync: { pending: 0 } });
+
+    // Even configured Sheet credentials cannot make a missing market source perform network work.
+    vi.stubEnv('DISCOVERY_GOOGLE_SERVICE_EMAIL', 'unused@example.invalid'); vi.stubEnv('DISCOVERY_GOOGLE_PRIVATE_KEY', 'unused-placeholder');
+    expect(await runDiscovery('scheduler', { store, now: () => start })).toMatchObject({ status: 'partial', baselineAt: null,
+      observedPairs: 0, processedPairs: 0 });
+    expect((await store.runtime()).lastError).toBe('public_wallet_market_source_missing');
+    expect((await store.pending()).every(record => record.event.id !== historicalEvent.event.id)).toBe(true);
+    expect(await archive()).toEqual(before); expect(fetch).not.toHaveBeenCalled();
+
+    vi.stubEnv('DISCOVERY_GOOGLE_SERVICE_EMAIL', ''); vi.stubEnv('DISCOVERY_GOOGLE_PRIVATE_KEY', '');
+    const source: WalletDiscoverySource = { universe: vi.fn(async () => [pair('OLD')]), market: vi.fn(async p => available(p, start + 60_000)) };
+    expect(await runDiscovery('scheduler', { store, source, now: () => start + 60_000 })).toMatchObject({ status: 'completed',
+      baselineAt: start + 60_000, observedPairs: 1, processedPairs: 0 });
+    expect(source.market).not.toHaveBeenCalled();
+    const current = await discoveryReport(store, source);
+    expect(current.baselineAt).toBe(start + 60_000); expect(current.pairs).toEqual([]);
+    expect(current.recentEvents.some(event => event.id === historicalEvent.event.id)).toBe(false);
+    expect((await store.runtime()).universe.pairs['OLD-EUR']).toMatchObject({ firstSeenAt: start + 60_000, isBaseline: true });
+    expect(await archive()).toEqual(before); expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('establishes a baseline without fabricating new pairs, paper entries, or financial records', async () => {
     const store = new DiscoveryJournal(), universe = vi.fn(async () => [pair('BTC'), pair('ETH')]), market = vi.fn();
     const before = await financialRows();

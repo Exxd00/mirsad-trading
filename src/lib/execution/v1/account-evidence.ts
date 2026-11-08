@@ -1,17 +1,18 @@
-import type { RevolutXClient, RevolutTransaction } from '../../brokers/revolut';
-import { BrokerApiError } from '../../brokers/revolut';
+import { executionReason, sourceErrorCode } from './errors';
+import type { SourceClient, SourceTransaction } from './source-model';
+import { SourceApiError } from './source-model';
 import type { Journal } from './journal';
 import { D, decimal, fresh } from './model';
 import { berlinBounds } from './risk';
 import { emptyAccounting, extendValuations, sameAmounts, sourceAmounts, transactionHash, transactionMovement, type Mark } from './accounting';
 
-type Client = Pick<RevolutXClient, 'getBalances' | 'getTransactionsPage' | 'getTransaction' | 'getOrderBook' | 'getValuationCandles'>
-  & Partial<Pick<RevolutXClient, 'getOrder' | 'getFillsForOrders'>>;
+type Client = Pick<SourceClient, 'getBalances' | 'getTransactionsPage' | 'getTransaction' | 'getOrderBook' | 'getValuationCandles'>
+  & Partial<Pick<SourceClient, 'getOrder' | 'getFillsForOrders'>>;
 /** Read-only source work happens OUTSIDE the account execution lock. Only its
  * final evidence commit takes the existing lock, with a compare-and-set guard.
  * It cannot change runtime switches, positions, source orders or balances. */
 export async function refreshSourceAccounting(client: Client, journal: Journal, clock: () => number) {
-  const old = await journal.accounting('revolut-x') ?? emptyAccounting();
+  const old = await journal.accounting('metamask-strategy-v1') ?? emptyAccounting();
   if (old.anchor && fresh(old.anchor.at, clock(), 15) && !old.lastError) return;
   let next = structuredClone(old);
   const began = Date.now();
@@ -23,7 +24,7 @@ export async function refreshSourceAccounting(client: Client, journal: Journal, 
     const start = old.anchor?.at ?? berlinBounds(at).start;
     if (at - start > 3 * 86400) throw new Error('accounting_backfill_required');
     const from = Math.max(0, Math.min(start - 300, at - 86400));
-    const collected = new Map<string, RevolutTransaction>();
+    const collected = new Map<string, SourceTransaction>();
     let pages = 0;
     for (let begin = Math.floor(from * 1000); begin < at * 1000;) {
       const end = Math.min(Math.floor(at * 1000), begin + 86400000);
@@ -100,7 +101,7 @@ export async function refreshSourceAccounting(client: Client, journal: Journal, 
     const anchor = { at, amounts };
     const fills = new Map(old.fills.map(f => [f.id, f]));
     if (client.getOrder && client.getFillsForOrders) {
-      const decisions = await journal.accountDecisions('revolut-x');
+      const decisions = await journal.accountDecisions('metamask-strategy-v1');
       const needed = decisions.filter(d => d.source && decimal(d.source.filledQuantity).gt(0)
         && !old.fills.filter(f => f.orderId === d.source!.id).reduce((n, f) => n.add(f.quantity), new D(0)).eq(d.source.filledQuantity));
       for (const d of needed.slice(0, 6)) {
@@ -109,7 +110,7 @@ export async function refreshSourceAccounting(client: Client, journal: Journal, 
         const result = await client.getFillsForOrders([order], 1);
         if (result.truncated || !result.fills.reduce((n, f) => n.add(f.quantity), new D(0)).eq(order.filledQuantity)) throw new Error('accounting_fill_coverage_incomplete');
         for (const fill of result.fills) {
-          if (fill.orderId !== order.id || fill.symbol !== order.symbol || fill.side !== order.side || fill.accountId !== 'revolut-x') throw new Error('accounting_fill_identity_mismatch');
+          if (fill.orderId !== order.id || fill.symbol !== order.symbol || fill.side !== order.side || fill.accountId !== 'metamask-strategy-v1') throw new Error('accounting_fill_identity_mismatch');
           const prior = fills.get(fill.id);
           if (prior && (prior.orderId !== fill.orderId || prior.quantity !== fill.quantity || prior.price !== fill.price || prior.createdAt !== fill.createdAt)) throw new Error('accounting_fill_conflict');
           fills.set(fill.id, fill);
@@ -119,11 +120,10 @@ export async function refreshSourceAccounting(client: Client, journal: Journal, 
     next = { ...old, anchor, transactions: records, lastError: null,
       observations: extendValuations(old, anchor, records, marks, current.toFixed()), fills: [...fills.values()] };
   } catch (error) {
-    next.lastError = error instanceof Error && error.message.startsWith('accounting_') ? error.message
-      : error instanceof BrokerApiError ? `accounting_source_${error.code.toLowerCase()}${error.responseDiagnostic ? `:${error.responseDiagnostic}` : ''}` : 'accounting_source_unavailable';
+    next.lastError = error instanceof SourceApiError ? `accounting_source_${sourceErrorCode(error.code).toLowerCase()}` : executionReason(error, 'accounting_source_unavailable');
   }
   next.checkedAt = clock();
-  const lease = await journal.acquire('revolut-x');
+  const lease = await journal.acquire('metamask-strategy-v1');
   if (!lease) return;
   try {
     if (await journal.saveAccounting(lease, next, old.checkedAt)) {

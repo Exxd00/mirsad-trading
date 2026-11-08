@@ -1,11 +1,12 @@
+import { testWalletSource, testWalletIdentity, testWalletCosts } from './execution-fixtures';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, query } from '../src/lib/db';
-import { BrokerApiError, type RevolutOrder, type RevolutTransaction } from '../src/lib/brokers/revolut';
+import { SourceApiError, type ReportedOrder, type SourceTransaction } from '../src/lib/execution/v1/source-model';
 import { SqlJournal, initialState } from '../src/lib/execution/v1/journal';
 import { CONFIG, decimal, type BuyIntent } from '../src/lib/execution/v1/model';
-import { ConnectedRevolutVenue } from '../src/lib/execution/v1/revolut-venue';
+import { ConnectedWalletVenue } from '../src/lib/execution/v1/wallet-venue';
 import { syncSourceArchive } from '../src/lib/execution/v1/source-archive';
-import type { RevolutFill } from '../src/lib/brokers/revolut';
+import type { ReportedFill } from '../src/lib/execution/v1/source-model';
 import { planBuy } from '../src/lib/execution/v1/planner';
 import { evaluateRisk } from '../src/lib/execution/v1/risk';
 import { NOW, account, instrument, quote, signal } from './execution-fixtures';
@@ -16,26 +17,26 @@ function intent() {
   const a = account();
   return planBuy(a, signal(), instrument(), quote(), evaluateRisk(initialState().risk, [], a.equityHistory, true, NOW), NOW).intent!;
 }
-function sourceOrder(i: BuyIntent, clientOrderId: string): RevolutOrder {
-  return { id: sourceId, clientOrderId, accountId: 'revolut-x', symbol: i.symbol, side: 'buy', type: 'limit',
+function sourceOrder(i: BuyIntent, clientOrderId: string): ReportedOrder {
+  return { id: sourceId, clientOrderId, accountId: 'metamask-strategy-v1', symbol: i.symbol, side: 'buy', type: 'limit',
     quantity: i.quantity, filledQuantity: '0', status: 'new', price: i.limitPrice,
     createdAt: new Date(atMs).toISOString(), updatedAt: new Date(atMs).toISOString() };
 }
 function setup(journal: SqlJournal) {
   const client = { getBalances: vi.fn(async () => [
-    { accountId: 'revolut-x' as const, currency: 'EUR', total: '100', available: '90', reserved: '10', observedAt: new Date(atMs).toISOString() },
-    { accountId: 'revolut-x' as const, currency: 'AAA', total: '1', available: '0', reserved: '1', observedAt: new Date(atMs).toISOString() },
-  ]), getOrders: vi.fn<() => Promise<RevolutOrder[]>>(async () => []), getOrder: vi.fn<() => Promise<RevolutOrder>>(),
-  getTransactionsPage: vi.fn(async () => ({ transactions: [] as RevolutTransaction[], nextCursor: null as string | null, sourceAt: new Date(atMs).toISOString() })),
-  getFillsForOrders: vi.fn(async () => ({ fills: [] as RevolutFill[], truncated: false })),
+    { accountId: 'metamask-strategy-v1' as const, currency: 'EUR', total: '100', available: '90', reserved: '10', observedAt: new Date(atMs).toISOString() },
+    { accountId: 'metamask-strategy-v1' as const, currency: 'AAA', total: '1', available: '0', reserved: '1', observedAt: new Date(atMs).toISOString() },
+  ]), getOrders: vi.fn<() => Promise<ReportedOrder[]>>(async () => []), getOrder: vi.fn<() => Promise<ReportedOrder>>(),
+  getTransactionsPage: vi.fn(async () => ({ transactions: [] as SourceTransaction[], nextCursor: null as string | null, sourceAt: new Date(atMs).toISOString() })),
+  getFillsForOrders: vi.fn(async () => ({ fills: [] as ReportedFill[], truncated: false })),
   submitOrder: vi.fn(), cancelOrder: vi.fn() };
-  return { client, venue: new ConnectedRevolutVenue({ client, journal, instruments: async () => [], candles: async () => [],
+  return { client, venue: new ConnectedWalletVenue({ ...testWalletSource(), client, journal, instruments: async () => [], candles: async () => [],
     market: async () => { throw new Error('unused'); } }, () => NOW) };
 }
-const transaction = (): RevolutTransaction => ({ id: sourceId, accountId: 'revolut-x', type: 'receive', status: 'pending',
+const transaction = (): SourceTransaction => ({ id: sourceId, accountId: 'metamask-strategy-v1', type: 'receive', status: 'pending',
   createdAt: new Date(atMs - 1000).toISOString(), processedAt: null, orderId: null,
-  source: { netAmount: '17.3200', currency: 'EUR', accountType: 'revolut', fee: null, feeCurrency: null },
-  destination: { netAmount: '17.3200', currency: 'EUR', accountType: 'revolut_x', fee: null, feeCurrency: null } });
+  source: { netAmount: '17.3200', currency: 'EUR', accountType: 'external', fee: null, feeCurrency: null },
+  destination: { netAmount: '17.3200', currency: 'EUR', accountType: 'wallet', fee: null, feeCurrency: null } });
 
 beforeEach(async () => {
   await closeDatabase(); vi.stubEnv('DATABASE_URL', ''); vi.stubEnv('VERCEL', ''); vi.stubEnv('NODE_ENV', 'test'); vi.stubEnv('LOCAL_DATABASE_PATH', 'memory://');
@@ -109,7 +110,7 @@ describe('source identity attached to the durable execution intent', () => {
     const j = new SqlJournal(), lease = (await j.acquire(CONFIG.accountId))!, { client, venue } = setup(j), i = intent();
     await j.begin(lease, i, NOW);
     const raw = sourceOrder(i, (await j.decision(lease, i.key))!.sourceIdentity!.clientOrderId);
-    const previous: RevolutOrder = { ...raw, id: 'existing-protection', clientOrderId: 'owner-key', side: 'sell', type: 'tpsl', quantity: '1' };
+    const previous: ReportedOrder = { ...raw, id: 'existing-protection', clientOrderId: 'owner-key', side: 'sell', type: 'tpsl', quantity: '1' };
     client.getOrders.mockResolvedValue([raw, previous]);
     const snapshot = await venue.account();
     expect(snapshot.orders[0]).toMatchObject({ clientKey: i.key, managed: true });
@@ -129,12 +130,12 @@ describe('source identity attached to the durable execution intent', () => {
   it('uses authoritative details for engine and report when summaries omit base fees, without rewriting the journal', async () => {
     const j = new SqlJournal(), lease = (await j.acquire(CONFIG.accountId))!, { client, venue } = setup(j), i = intent();
     await j.begin(lease, i, NOW);
-    const raw: RevolutOrder = { ...sourceOrder(i, (await j.decision(lease, i.key))!.sourceIdentity!.clientOrderId),
+    const raw: ReportedOrder = { ...sourceOrder(i, (await j.decision(lease, i.key))!.sourceIdentity!.clientOrderId),
       status: 'filled', filledQuantity: i.quantity, averageFillPrice: '100', fee: '0.0001', feeCurrency: 'AAA' };
     const summary = { ...raw, fee: undefined, feeCurrency: undefined, averageFillPrice: '99' };
     client.getOrders.mockResolvedValue([summary]); client.getOrder.mockResolvedValue(raw);
     client.getFillsForOrders.mockResolvedValue({ truncated: false, fills: [{ id: 'fresh-fill', orderId: raw.id,
-      accountId: 'revolut-x', symbol: raw.symbol, side: raw.side, quantity: raw.filledQuantity, price: '100',
+      accountId: 'metamask-strategy-v1', symbol: raw.symbol, side: raw.side, quantity: raw.filledQuantity, price: '100',
       baseCurrency: 'AAA', quoteCurrency: 'EUR', createdAt: raw.createdAt, maker: false }] });
     await venue.lookup(i.key, lease);
     const quantity = decimal(i.quantity).sub('0.0001').toFixed();
@@ -169,7 +170,7 @@ describe('source identity attached to the durable execution intent', () => {
     await expect(venue.account()).rejects.toThrow('unavailable');
     // A fresh but contradictory fill must block the actual entry planner, too.
     client.getFillsForOrders.mockResolvedValueOnce({ truncated: false, fills: [{ id: 'conflicting-fill', orderId: raw.id,
-      accountId: 'revolut-x', symbol: raw.symbol, side: 'buy', quantity: raw.filledQuantity, price: '98',
+      accountId: 'metamask-strategy-v1', symbol: raw.symbol, side: 'buy', quantity: raw.filledQuantity, price: '98',
       baseCurrency: 'AAA', quoteCurrency: 'EUR', createdAt: raw.createdAt, maker: false }] });
     const conflict = await venue.account();
     expect(conflict).toMatchObject({ reportEvidence: { status: 'conflict' },
@@ -190,7 +191,7 @@ describe('source transactions on the existing monitoring cycle', () => {
     client.getTransactionsPage.mockResolvedValueOnce({ transactions: [record, record], nextCursor: 'page-2', sourceAt: new Date(atMs).toISOString() });
     expect(await syncSourceArchive(client, j, lease, atMs)).toMatchObject({ status: 'source_read', records: 1, morePages: true, scannedUntilMs: null });
     expect(client.getTransactionsPage).toHaveBeenCalledWith({ startDate: atMs - 86_400_000, endDate: atMs, limit: 100 });
-    const rows = await query<{ key: string; value: { record: RevolutTransaction } }>('SELECT key,value FROM app_settings WHERE key LIKE $1', [`execution:v1:${CONFIG.accountId}:source_transaction:%`]);
+    const rows = await query<{ key: string; value: { record: SourceTransaction } }>('SELECT key,value FROM app_settings WHERE key LIKE $1', [`execution:v1:${CONFIG.accountId}:source_transaction:%`]);
     expect(rows.rows).toHaveLength(1); expect(rows.rows[0].value.record).toEqual(record);
     expect(await j.sourceArchive(lease)).toMatchObject({ cursor: 'page-2', scannedUntilMs: null, lastError: null });
     await j.release(lease);
@@ -212,7 +213,7 @@ describe('source transactions on the existing monitoring cycle', () => {
     const j = new SqlJournal(), lease = (await j.acquire(CONFIG.accountId))!, { client } = setup(j);
     client.getTransactionsPage.mockResolvedValueOnce({ transactions: [transaction()], nextCursor: 'next', sourceAt: new Date(atMs).toISOString() });
     await syncSourceArchive(client, j, lease, atMs);
-    client.getTransactionsPage.mockRejectedValueOnce(new BrokerApiError('private error detail', { code: 'RATE_LIMIT', retryAfterMs: 1000 }));
+    client.getTransactionsPage.mockRejectedValueOnce(new SourceApiError('private error detail', { code: 'RATE_LIMIT', retryAfterMs: 1000 }));
     expect(await syncSourceArchive(client, j, lease, atMs + 1000)).toEqual({ status: 'unavailable', reason: 'RATE_LIMIT' });
     expect(await j.sourceArchive(lease)).toMatchObject({ cursor: 'next', lastReadAtMs: atMs, lastError: 'RATE_LIMIT' });
     await syncSourceArchive(client, j, lease, atMs + 2000);
