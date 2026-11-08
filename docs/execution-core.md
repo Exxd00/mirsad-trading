@@ -48,6 +48,10 @@ Measure confirmed closed trades separately from open positions and paper studies
 
 The daily human/assistant review remains **05:00 Europe/Berlin**, Sunday within the same task. The internal report-generation window is a separate implementation detail and does not change that task. This document creates or activates no scheduler.
 
+The internal daily report first becomes due at 09:00 Berlin. A missed wakeup can catch up later on the same local day; only a successful source read completes that day's report. A blocked read preserves the last successful snapshot and retries no sooner than the existing five-minute scan interval. Restarted and legacy blocked records cannot silently mark a report complete.
+
+An execution-stage exception does not skip the independent read-only reporting pass. Each stage reports a sanitized failure separately, and reporting failure never reruns an execution cycle or repeats an order. These recovery rules neither install a wallet source nor grant, extend or activate financial authority.
+
 Freeze v1 before evaluating a changed parameter. Record every candidate, training/evaluation windows, costs and decision, including failed candidates. Test on independent periods and keep a reversible version history. Automatic trading under fixed rules does not grant authority to change those rules or funding limits.
 
 ## History and deployment

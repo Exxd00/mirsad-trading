@@ -300,14 +300,15 @@ describe('durable SQL ownership and orchestration', () => {
   });
 });
 describe('daily read-only reporting', () => {
-  it('preserves the last good snapshot on failure and deduplicates the Berlin day', async () => {
+  it('preserves the last good snapshot on failure and waits for the next reporting retry', async () => {
     const j = new SqlJournal(); const lease = (await j.acquire(CONFIG.accountId))!;
     const state = initialState(); state.lastSuccessfulReport = { id: 'prior', sourceAt: NOW - 86400 }; await j.save(lease, state); await j.release(lease);
     const nineBerlin = Date.parse('2026-09-27T07:00:00Z') / 1000;
     expect(await dailyReport(null, j, nineBerlin)).toMatchObject({ status: 'blocked' });
-    expect(await dailyReport(null, j, nineBerlin + 120)).toMatchObject({ status: 'already_recorded' });
+    expect(await dailyReport(null, j, nineBerlin + 120)).toMatchObject({ status: 'retry_wait', retryAt: nineBerlin + 300 });
     const l = (await j.acquire(CONFIG.accountId))!; expect((await j.state(l)).lastSuccessfulReport?.id).toBe('prior'); await j.release(l);
-    expect(await dailyReport(null, j, nineBerlin + 3600)).toMatchObject({ status: 'not_due' });
+    expect(await dailyReport(null, j, nineBerlin + 3600)).toMatchObject({ status: 'blocked' });
+    expect(await dailyReport(null, j, nineBerlin - 1)).toMatchObject({ status: 'not_due' });
   });
   it('combines Sunday review with daily report and exposes archive gaps instead of old results', () => {
     const sunday = Date.parse('2026-09-27T07:00:00Z') / 1000;
