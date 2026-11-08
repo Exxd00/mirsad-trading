@@ -8,6 +8,8 @@ This is the acceptance contract for the main wallet strategy. The normalized typ
 
 Bind each source response to the approved chain ID, owner address, strategy account, token contract addresses, decimals and market. Persist that binding across restarts; reject changed chains/accounts and conflicting identifiers. A ticker name alone cannot identify a token.
 
+New entries use the owner's saved `wallet:strategy:watchlist`, intersected with approved market mappings and any nonempty configured symbol restriction. A missing or empty watchlist permits no new entries; it never expands to every approved market. Removing a symbol does not remove protection or exits for existing strategy-managed positions.
+
 Use one documented candle source with 1,000 contiguous completed 15-minute bars and fresh executable quotes. The source identity must match the approved mapping. Replacing the removed provider with empty invented candles, another provider's prices or testnet prices is invalid.
 
 EUR remains the strategy accounting unit. The transport must evidence spendable quote funds, documented EUR conversion, reservations, holdings, equity and before/after-flow valuation. USDC, USD and EUR cannot be interchanged at an assumed 1:1 rate.
