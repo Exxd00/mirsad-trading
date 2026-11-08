@@ -71,7 +71,9 @@ export async function executionReport() {
     try { performance = buildReport(live, now); } catch (error) { failed('performance', error); }
   }
   const orderBlock = walletOrderBlock();
-  const blockers = [...new Set([...(orderBlock ? [orderBlock] : []), ...readErrors.map(error => error.code), ...(live ? [...accountEntryBlockers(live, state?.risk ?? { reduced: false, dailyHaltDate: null }, now),
+  const blockers = [...new Set([...(orderBlock ? [orderBlock] : []), ...readErrors.map(error => error.code),
+    ...(!venue && !readErrors.some(error => error.stage === 'connection') ? ['wallet_execution_not_configured'] : []),
+    ...(live ? [...accountEntryBlockers(live, state?.risk ?? { reduced: false, dailyHaltDate: null }, now),
     ...(!capabilities || !executionCapabilitiesReady(capabilities) ? ['execution_capabilities_missing'] : []),
     ...(currentRisk?.entryBlocked ? [currentRisk.entryBlocked] : [])] : [venue ? 'account_read_unavailable' : 'account_connection_missing'])])];
   const ready = connected && blockers.length === 0;

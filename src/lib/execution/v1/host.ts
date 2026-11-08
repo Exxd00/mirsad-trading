@@ -11,6 +11,7 @@ import { scheduleProtectionWatch } from './scheduler';
 import { accountEntryBlockers } from './readiness';
 import { walletBindingIdentity, walletBindingIssue, walletExecutionSource } from '../../wallet/execution-connection';
 import { walletOrderBlock } from '../../order-connection';
+import { configuredWatchlist } from '../../services';
 export const journal = new SqlJournal();
 export async function connectedVenue(): Promise<ConnectedWalletVenue | null> {
   const source = walletExecutionSource();
@@ -20,8 +21,13 @@ export async function configuredSymbols(now = Math.floor(Date.now() / 1000)) {
   const source = walletExecutionSource();
   if (!source || walletBindingIssue(source.binding, now)) return [];
   const approved = source.binding!.markets.map(m => m.symbol);
-  const selected = CONFIG.symbols.length ? CONFIG.symbols : approved;
-  return [...new Set(selected.filter((s): s is string => typeof s === 'string' && approved.includes(s)))];
+  const restricted: readonly string[] = CONFIG.symbols;
+  const selected = await configuredWatchlist();
+  if (!Array.isArray(selected)) return [];
+  // Approval and config can restrict the owner's selection, never expand it.
+  // A missing or explicitly empty watchlist authorizes no new entries.
+  return [...new Set(selected.filter((s): s is string => typeof s === 'string' && approved.includes(s)
+    && (!restricted.length || restricted.includes(s))))];
 }
 const unavailable = () => ({ status: 'blocked', reason: 'wallet_execution_transport_missing',
   blocks: [{ reason: 'wallet_market_mapping_missing' }, { reason: 'wallet_limit_cancellation_unsupported' },

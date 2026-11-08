@@ -7,6 +7,17 @@ import { account, NOW } from './execution-fixtures';
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 describe('owner report shares wallet financial readiness checks', () => {
+  it('reports the missing strategy transport before a wallet account is connected', async () => {
+    vi.stubEnv('MIRSAD_ORDER_CONNECTION', 'metamask');
+    vi.mocked(connectedVenue).mockResolvedValue(null);
+    const report = await executionReport();
+    expect(report.adapter_configured).toBe(false);
+    expect(report.account_connected).toBe(false);
+    expect(report.blockers).toContain('wallet_execution_not_configured');
+    expect(report.execution_ready).toBe(false);
+    expect(report.enabled).toBe(false);
+    expect(report.balances).toBeNull();
+  });
   it.each(['valuation', 'stale', 'secret'])('does not announce readiness for a %s snapshot even if transport methods exist', async kind => {
     vi.useFakeTimers(); vi.setSystemTime(NOW * 1000); vi.stubEnv('MIRSAD_ORDER_CONNECTION', 'metamask');
     const snapshot = account();

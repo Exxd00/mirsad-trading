@@ -74,7 +74,7 @@ export function ExecutionWorkspace() {
         : report.account_connected
         ? report.enabled ? 'الدخول الآلي مفعّل وفق التفويض وحدود الاستراتيجية. يدير مرصاد المراكز التي فتحها هذا الإصدار.' : report.entries_requested ? 'طلب التفعيل محفوظ، لكن بيانات هذه القراءة لا تؤكد جاهزية الدخول. راجع أسباب المنع وحالة الحماية.' : 'اكتملت قراءة حساب المحفظة؛ يبقى إرسال الأوامر متوقفًا حتى اكتمال البيانات والتفويض وجاهزية الحماية. الأرصدة السابقة لا تُعتمد مراكز يديرها المحرك تلقائيًا.'
         : report.adapter_configured ? 'اتصال المحفظة مُعدّ، لكن قراءة الحساب لم تكتمل. لا توجد أرصدة أو أرباح حالية مؤكدة في هذا التقرير.' : 'اتصال تنفيذ المحفظة غير مكتمل. راجع إعداد المحفظة وأسباب المنع؛ لا توجد أرصدة حالية مؤكدة هنا.'}</p>
-      {report.account_connected && <section className={styles.panel}>
+      <section className={styles.panel}>
         <div className={styles.panelHeading}><h2>التكاليف وجاهزية المخاطر</h2><span className={`${styles.state} ${styles.paused}`}>{report.execution_ready ? 'جاهز وفق البيانات الحالية' : 'الدخول معلّق لحين اكتمال البيانات'}</span></div>
         <p className={styles.sectionNote}>قيمة الحساب: {report.accounting.equity_eur === null ? 'غير مكتملة' : `${report.accounting.equity_eur} EUR`} · تقييمات محفوظة: {report.accounting.observations} · آخر جمع: {report.accounting.checked_at ? new Date(report.accounting.checked_at * 1000).toISOString() : 'لم يكتمل بعد'}</p>
         <p className={styles.sectionNote}>يتطلب الدخول توثيق رسوم التنفيذ والغاز وفرق السعر والانزلاق وسيولة الخروج. يبقى الدخول متوقفًا عند نقص الدليل أو تجاوز التكلفة الإجمالية {percent(report.policy.maximum_cost)}.</p>
@@ -109,14 +109,16 @@ export function ExecutionWorkspace() {
           trade_history_incomplete: 'هناك نتائج أوامر تحتاج تأكيد المصدر.',
           closed_trade_costs_missing: 'رسوم صفقة مغلقة غير مؤكدة بعد.',
           execution_capabilities_missing: 'جزء من اتصال التنفيذ غير متاح.',
+          account_connection_missing: 'لم يكتمل اتصال حساب المحفظة بمحرك الاستراتيجية.',
+          account_read_unavailable: 'تعذرت قراءة حساب المحفظة؛ أعد الفحص بعد استعادة الاتصال.',
           wallet_market_mapping_missing: 'لم تكتمل مطابقة أصول الشبكة بسوق الاستراتيجية وعملة التقييم.',
           wallet_market_data_missing: 'بيانات السوق والشموع المكتملة غير متاحة من مصدر المحفظة.',
-          wallet_execution_not_configured: 'لم يكتمل إعداد تنفيذ استراتيجية المحفظة.',
+          wallet_execution_not_configured: 'لم يكتمل اتصال تنفيذ استراتيجية المحفظة. يلزم التحقق من الشبكة والأصول وأوامر الحد والإلغاء وتقييم اليورو ورسوم الغاز؛ ربط الحساب للقراءة وحده لا يكفي.',
           wallet_accounting_evidence_missing: 'لم تكتمل أدلة تقييم المحفظة والتحويلات ورسوم الشبكة.',
           wallet_delegation_missing: 'تفويض التداول المقيد غير متاح أو غير متحقق.',
         } as Record<string, string>)[reason] ?? 'تعذر تأكيد أحد بيانات المصدر. أعد الفحص؛ يبقى الدخول متوقفًا حتى اكتمال التسوية.'}</li>)}</ul>}
         {!report.entries_requested && report.execution_ready && <p className={styles.sectionNote}>الفحص لا يفعّل التداول. زر «تفعيل الشراء والبيع الآلي» يشغّل أوامر الحساب وإدارة الحماية داخل مرصاد وفق القواعد المعروضة.</p>}
-      </section>}
+      </section>
       <section className={styles.panel}>
         <div className={styles.panelHeading}><h2>الحماية داخل مرصاد</h2><span className={`${styles.state} ${styles.paused}`}>{!report.protection.heartbeat_fresh ? 'المراقبة غير مؤكدة أو متأخرة'
           : report.protection.heartbeat?.status === 'blocked' ? 'تحتاج متابعة' : report.protection.heartbeat?.managedPositions ? 'تجري مراقبة المراكز' : 'المراقبة تعمل · لا مراكز مدارة'}</span></div>

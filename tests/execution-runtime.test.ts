@@ -4,6 +4,7 @@ import { SqlJournal, initialState } from '../src/lib/execution/v1/journal';
 import { configuredSymbols } from '../src/lib/execution/v1/host';
 import { installWalletExecutionSource } from '../src/lib/wallet/execution-connection';
 import { testWalletSource } from './execution-fixtures';
+import { setSetting } from '../src/lib/services';
 import { CONFIG, type Intent, type SourceOrder } from '../src/lib/execution/v1/model';
 import { cycle } from '../src/lib/execution/v1/runner';
 import { cancelDeadline, type CancellationPort } from '../src/lib/execution/v1/deadline';
@@ -48,14 +49,76 @@ describe('durable SQL ownership and orchestration', () => {
     expect(port.prepareExit).not.toHaveBeenCalled(); expect(port.submit).not.toHaveBeenCalled();
     expect(port.armCancellation).not.toHaveBeenCalled();
   });
-  it('uses only approved wallet market mappings and has no default token substitution', async () => {
+  it('uses the saved partial wallet watchlist only when its market mapping is approved', async () => {
     expect(await configuredSymbols(NOW)).toEqual([]);
     const source = { ...testWalletSource(), client: { getBalances: async () => [], getOrders: async () => [] },
       instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [] };
     installWalletExecutionSource(source);
-    expect(await configuredSymbols(NOW)).toEqual(['AAA-EUR', 'ETH-EUR', 'SOL-EUR']);
+    await setSetting('wallet:strategy:watchlist', ['SOL-EUR', 'AAA-EUR']);
+    expect(await configuredSymbols(NOW)).toEqual(['SOL-EUR', 'AAA-EUR']);
     source.binding.markets = [];
     expect(await configuredSymbols(NOW)).toEqual([]);
+  });
+  it('does not replace a missing or explicitly empty wallet watchlist with approved markets or legacy selections', async () => {
+    installWalletExecutionSource({ ...testWalletSource(), client: { getBalances: async () => [], getOrders: async () => [] },
+      instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [] });
+    await setSetting('watchlist', ['ETH-EUR']);
+    expect(await configuredSymbols(NOW)).toEqual([]);
+    await setSetting('wallet:strategy:watchlist', []);
+    expect(await configuredSymbols(NOW)).toEqual([]);
+  });
+  it('deduplicates the saved selection and rejects unapproved or malformed markets without substituting any', async () => {
+    installWalletExecutionSource({ ...testWalletSource(), client: { getBalances: async () => [], getOrders: async () => [] },
+      instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [] });
+    await setSetting('wallet:strategy:watchlist', ['SOL-EUR', 'DOGE-EUR', 'SOL-EUR', 'ETH-EUR', null, 7, 'eth-eur']);
+    expect(await configuredSymbols(NOW)).toEqual(['SOL-EUR', 'ETH-EUR']);
+    await setSetting('wallet:strategy:watchlist', { symbols: ['AAA-EUR'] });
+    expect(await configuredSymbols(NOW)).toEqual([]);
+  });
+  it('intersects the config restriction with the saved selection without adding configured or unapproved markets', async () => {
+    installWalletExecutionSource({ ...testWalletSource(), client: { getBalances: async () => [], getOrders: async () => [] },
+      instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [] });
+    const symbols = CONFIG.symbols as string[], original = [...symbols];
+    try {
+      symbols.splice(0, symbols.length, 'AAA-EUR', 'ETH-EUR', 'DOGE-EUR');
+      await setSetting('wallet:strategy:watchlist', ['SOL-EUR', 'DOGE-EUR', 'ETH-EUR']);
+      expect(await configuredSymbols(NOW)).toEqual(['ETH-EUR']);
+      await setSetting('wallet:strategy:watchlist', []);
+      expect(await configuredSymbols(NOW)).toEqual([]);
+      await query('DELETE FROM app_settings WHERE key=$1', ['wallet:strategy:watchlist']);
+      expect(await configuredSymbols(NOW)).toEqual([]);
+    } finally { symbols.splice(0, symbols.length, ...original); }
+  });
+  it('does not enter a queued signal after the saved watchlist is cleared', async () => {
+    installWalletExecutionSource({ ...testWalletSource(), client: { getBalances: async () => [], getOrders: async () => [] },
+      instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [] });
+    await setSetting('wallet:strategy:watchlist', []);
+    const j = new SqlJournal(); await seed(j);
+    const { port } = makePort();
+    const result = await cycle(port, j, await configuredSymbols(NOW), () => NOW);
+    expect(result.blocks).toContainEqual({ reason: 'configured_symbols_missing' });
+    expect(port.submit).not.toHaveBeenCalled(); expect(port.armCancellation).not.toHaveBeenCalled();
+  });
+  it.each(['stop', 'reverse_cross'] as const)('continues managed protection and %s exits after the saved watchlist is cleared', async reason => {
+    installWalletExecutionSource({ ...testWalletSource(), client: { getBalances: async () => [], getOrders: async () => [] },
+      instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [] });
+    await setSetting('wallet:strategy:watchlist', []);
+    const j = new SqlJournal(); await seed(j, ['BBB-EUR']);
+    const lease = (await j.acquire(CONFIG.accountId))!;
+    const state = await j.state(lease);
+    if (reason === 'reverse_cross') state.pendingSignals.push(signal('AAA-EUR', 'sell'));
+    await j.save(lease, state);
+    await j.saveProtection(lease, { entryKey: 'a'.repeat(64), entryOrderId: 'tracked-entry', symbol: 'AAA-EUR',
+      quantity: '1', averageFillPrice: '100', stop: '98', originalStop: '98', target: '104', entryFilled: '1',
+      exitedQuantity: '0', sourceAt: NOW, updatedAt: NOW, status: 'watching', trigger: null, lastError: null });
+    await j.release(lease);
+    const { port, a } = makePort(); a.positions = [position()];
+    vi.mocked(port.quotes).mockImplementation(async symbols => symbols.map(s => ({ ...quote(s), bid: reason === 'stop' ? '97' : '99.99' })));
+    const result = await cycle(port, j, await configuredSymbols(NOW), () => NOW);
+    expect(result.intent).toMatchObject({ symbol: 'AAA-EUR', side: 'sell', reason, quantity: '1' });
+    expect(port.candles).toHaveBeenCalledWith('AAA-EUR', NOW);
+    expect(port.ensureProtection).toHaveBeenCalledWith(expect.objectContaining({ symbol: 'AAA-EUR' }), expect.any(Object));
+    expect(port.submit).toHaveBeenCalledOnce(); expect(port.armCancellation).not.toHaveBeenCalled();
   });
   it('grants one concurrent lock and fences stale owners without releasing another owner', async () => {
     const j = new SqlJournal(); const locks = await Promise.all([j.acquire(CONFIG.accountId), j.acquire(CONFIG.accountId)]); const one = locks.find(Boolean)!;
