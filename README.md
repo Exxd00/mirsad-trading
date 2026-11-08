@@ -32,7 +32,7 @@ Use the existing database and secrets. Production requires durable Postgres via 
 
 ## Administrative password recovery
 
-`INITIAL_PASSWORD_HASH` seeds a missing owner only; changing it never replaces an existing password. An authorized production recovery can run `pnpm exec tsx scripts/reset-owner-password.ts` as an explicit, one-off server build step. It is separate from normal authentication, application startup and the normal build command.
+`INITIAL_PASSWORD_HASH` seeds a missing owner only; changing it never replaces an existing password. An authorized production recovery can run `pnpm exec tsx scripts/reset-owner-password.mts` as an explicit, one-off server build step. It is separate from normal authentication, application startup and the normal build command.
 
 Supply `MIRSAD_OWNER_RESET_HASH` as a Secret containing the existing scrypt format, a unique UUID in `MIRSAD_OWNER_RESET_ID`, and the independently verified public reporting-key SHA256 in `MIRSAD_OWNER_RESET_EXPECTED_PUBLIC_KEY_SHA256`. The script requires the production environment, the application origin and an existing Postgres owner. It verifies database identity before updating the owner, revoking sessions and recording an audit event in one transaction. Never put a password or its hash in a command argument or source file.
 

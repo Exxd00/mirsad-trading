@@ -24,7 +24,7 @@ describe('explicit owner reset build command', () => {
   it('uses the existing TLS pool configuration and logs completion only after COMMIT', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => { mocks.events.push('log'); });
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    await import('../scripts/reset-owner-password');
+    await import('../scripts/reset-owner-password.mjs');
     expect(mocks.poolCreated).toHaveBeenCalledWith({ ssl: { rejectUnauthorized: true } });
     expect(mocks.events).toEqual(['pool', 'BEGIN', 'reset', 'COMMIT', 'log']);
     expect(JSON.parse(String(log.mock.calls[0][0]))).toEqual({ type: 'owner_password_reset', ...status });
@@ -39,7 +39,7 @@ describe('explicit owner reset build command', () => {
     else mocks.query.mockImplementation(async (sql: string) => {
       mocks.events.push(sql); if (sql === 'COMMIT') throw new Error(secret); return { rows: [], rowCount: 0 };
     });
-    await import('../scripts/reset-owner-password');
+    await import('../scripts/reset-owner-password.mjs');
     expect(mocks.events).toContain('ROLLBACK'); expect(log).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith(JSON.stringify({ type: 'owner_password_reset', status: 'failed' }));
     expect(JSON.stringify(error.mock.calls)).not.toContain(secret); expect(process.exitCode).toBe(1);
@@ -48,7 +48,7 @@ describe('explicit owner reset build command', () => {
   it('rejects invalid scope before creating any connection and does not invoke database bootstrap', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     mocks.configuration.mockImplementation(() => { throw new Error('isolated-configuration-secret'); });
-    await import('../scripts/reset-owner-password');
+    await import('../scripts/reset-owner-password.mjs');
     expect(mocks.poolCreated).not.toHaveBeenCalled(); expect(mocks.query).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith(JSON.stringify({ type: 'owner_password_reset', status: 'failed' }));
     expect(JSON.stringify(error.mock.calls)).not.toContain('isolated-configuration-secret');
