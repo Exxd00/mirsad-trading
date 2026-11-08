@@ -3,8 +3,8 @@ import { createHash, randomBytes } from "node:crypto";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/services", () => ({
-  audit: vi.fn(), connectRevolut: vi.fn(), createTradingPort: vi.fn(), dashboard: vi.fn(),
-  instruments: vi.fn(), market: vi.fn(), setSetting: vi.fn(), settings: vi.fn(), toggleLive: vi.fn(),
+  audit: vi.fn(), dashboard: vi.fn(),
+  instruments: vi.fn(), market: vi.fn(), setSetting: vi.fn(), settings: vi.fn(),
 }));
 import { changePassword, clearSessionCookie, getSession, hashPassword, issueLoginCsrf, login, logout, refreshSessionCookie, requireMutation, requireSession, sessionCookie, sessionCookieName, verifyLoginCsrf, verifyOrigin, verifyPassword } from "../src/lib/auth";
 import { closeDatabase, ensureSchema, query } from "../src/lib/db";
@@ -265,8 +265,16 @@ describe("HTTP authentication boundary", () => {
       const response = await apiPost(request, { params: Promise.resolve({ path: path.split("/") }) });
       expect(response.status).toBe(401);
     }
-    expect(guardedServices.createTradingPort).not.toHaveBeenCalled();
-    expect(guardedServices.connectRevolut).not.toHaveBeenCalled();
-    expect(guardedServices.toggleLive).not.toHaveBeenCalled();
+    expect(guardedServices.setSetting).not.toHaveBeenCalled();
+  });
+  it("returns 404 for removed credential and manual-order routes even with a valid owner session", async () => {
+    const session = await login(TEST_PASSWORD, loginRequest());
+    for (const path of ['settings/credentials', 'settings/live', 'orders/preview', 'orders/confirm', 'orders/reconcile']) {
+      const request = new Request(`http://localhost:3000/api/${path}`, { method: 'POST', headers: {
+        origin: 'http://localhost:3000', cookie: `${sessionCookieName()}=${session.sessionToken}`,
+        'x-csrf-token': session.csrfToken, 'content-type': 'application/json',
+      }, body: JSON.stringify({ enabled: true }) });
+      expect((await apiPost(request, { params: Promise.resolve({ path: path.split('/') }) })).status).toBe(404);
+    }
   });
 });

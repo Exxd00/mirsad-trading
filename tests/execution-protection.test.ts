@@ -1,10 +1,11 @@
+import { testWalletSource, testWalletIdentity, testWalletCosts } from './execution-fixtures';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, query } from '../src/lib/db';
-import { BrokerUnknownOutcomeError, type RevolutBalance, type RevolutMarket, type RevolutOrder, type RevolutSubmitOrder } from '../src/lib/brokers/revolut';
+import { SourceUnknownOutcomeError, type SourceBalance, type SourceMarket, type ReportedOrder, type SourceSubmitOrder } from '../src/lib/execution/v1/source-model';
 import { SqlJournal, initialState } from '../src/lib/execution/v1/journal';
 import { CONFIG, D, terminal, type SellIntent } from '../src/lib/execution/v1/model';
-import { ConnectedRevolutVenue } from '../src/lib/execution/v1/revolut-venue';
+import { ConnectedWalletVenue } from '../src/lib/execution/v1/wallet-venue';
 import { protectionCycle } from '../src/lib/execution/v1/managed-protection';
 import { planBuy, planExit } from '../src/lib/execution/v1/planner';
 import { evaluateRisk } from '../src/lib/execution/v1/risk';
@@ -20,9 +21,9 @@ beforeEach(async () => {
 });
 afterEach(async () => { await closeDatabase(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-async function setup(options: { armed?: boolean; fill?: string; entryStatus?: RevolutOrder['status']; bid?: string } = {}) {
+async function setup(options: { armed?: boolean; fill?: string; entryStatus?: ReportedOrder['status']; bid?: string } = {}) {
   const journal = new SqlJournal(), lease = (await journal.acquire(CONFIG.accountId))!;
-  const state = initialState(); state.executionArmed = options.armed ?? true;
+  const state = initialState(); state.executionArmed = options.armed ?? true; state.walletIdentity = testWalletIdentity();
   // Source fixtures are isolated in an in-memory test DB. No account API or
   // financial mutation is ever contacted by these tests.
   await journal.save(lease, state);
@@ -30,24 +31,24 @@ async function setup(options: { armed?: boolean; fill?: string; entryStatus?: Re
   const buy = { ...planBuy(a, signal(), instrument(), quote(), evaluateRisk(state.risk, [], a.equityHistory, true, NOW), NOW).intent!, quantity: '1' };
   await journal.begin(lease, buy, NOW);
   const record = (await journal.decision(lease, buy.key))!;
-  const entry: RevolutOrder = { id: randomUUID(), clientOrderId: record.sourceIdentity!.clientOrderId, accountId: 'revolut-x',
+  const entry: ReportedOrder = { id: randomUUID(), clientOrderId: record.sourceIdentity!.clientOrderId, accountId: 'metamask-strategy-v1',
     symbol: buy.symbol, side: 'buy', type: 'limit', quantity: '1', filledQuantity: options.fill ?? '1',
     status: options.entryStatus ?? 'filled', price: buy.limitPrice, averageFillPrice: '100',
     createdAt: new Date((NOW - 100) * 1000).toISOString(), updatedAt: new Date(NOW * 1000).toISOString() };
-  const orders = new Map<string, RevolutOrder>([[entry.id, entry]]);
+  const orders = new Map<string, ReportedOrder>([[entry.id, entry]]);
   const market = { bid: options.bid ?? '99', sourceAt: NOW, extraBalance: '0', reserved: '0' };
   const client = {
     getOrders: vi.fn(async () => structuredClone([...orders.values()])),
     getActiveOrders: vi.fn(async () => structuredClone([...orders.values()].filter(o => !['filled', 'cancelled', 'rejected'].includes(o.status)))),
     getOrder: vi.fn(async (id: string) => { const o = orders.get(id); if (!o) throw new Error('source_not_found'); return structuredClone(o); }),
-    getBalances: vi.fn(async (): Promise<RevolutBalance[]> => {
+    getBalances: vi.fn(async (): Promise<SourceBalance[]> => {
       const sold = [...orders.values()].filter(o => o.side === 'sell' && o.type === 'market').reduce((sum, o) => sum.add(o.filledQuantity), new D(0));
       const total = new D(entry.filledQuantity).sub(sold).add(market.extraBalance);
-      return [{ accountId: 'revolut-x', currency: 'EUR', total: '100', available: '100', reserved: '0', observedAt: new Date(NOW * 1000).toISOString() },
-        { accountId: 'revolut-x', currency: 'AAA', total: total.toFixed(), available: total.sub(market.reserved).toFixed(), reserved: market.reserved, observedAt: new Date(NOW * 1000).toISOString() }];
+      return [{ accountId: 'metamask-strategy-v1', currency: 'EUR', total: '100', available: '100', reserved: '0', observedAt: new Date(NOW * 1000).toISOString() },
+        { accountId: 'metamask-strategy-v1', currency: 'AAA', total: total.toFixed(), available: total.sub(market.reserved).toFixed(), reserved: market.reserved, observedAt: new Date(NOW * 1000).toISOString() }];
     }),
-    submitOrder: vi.fn(async (input: RevolutSubmitOrder): Promise<RevolutOrder> => {
-      const o: RevolutOrder = { ...entry, id: randomUUID(), clientOrderId: input.clientOrderId, side: input.side,
+    submitOrder: vi.fn(async (input: SourceSubmitOrder): Promise<ReportedOrder> => {
+      const o: ReportedOrder = { ...entry, id: randomUUID(), clientOrderId: input.clientOrderId, side: input.side,
         type: input.type, quantity: input.quantity, filledQuantity: input.quantity, status: 'filled', averageFillPrice: market.bid };
       orders.set(o.id, o); return structuredClone(o);
     }),
@@ -56,24 +57,24 @@ async function setup(options: { armed?: boolean; fill?: string; entryStatus?: Re
       return { order: structuredClone(o), cancellationAcknowledged: true, settled: true };
     }),
   };
-  const source = { client, journal, instruments: async () => [{ symbol: 'AAA-EUR', base: 'AAA', quote: 'EUR', baseStep: '0.001', quoteStep: '0.01',
+  const source = { ...testWalletSource(), client, journal, instruments: async () => [{ symbol: 'AAA-EUR', base: 'AAA', quote: 'EUR', baseStep: '0.001', quoteStep: '0.01',
     minOrderSize: '0.001', maxOrderSize: '1000', minOrderSizeQuote: '1', status: 'active' as const, region: 'EEA' as const, observedAt: new Date(NOW * 1000).toISOString() }],
-    candles: vi.fn(async () => []), market: vi.fn(async (): Promise<RevolutMarket> => ({ symbol: 'AAA-EUR', region: 'EEA', source: 'Revolut X',
+    candles: vi.fn(async () => []), market: vi.fn(async (): Promise<SourceMarket> => ({ symbol: 'AAA-EUR', region: 'EEA', source: 'Wallet',
       bid: market.bid, ask: new D(market.bid).add('0.01').toFixed(), last: market.bid, mid: market.bid, low24h: market.bid, high24h: market.bid,
       change24h: '0', volume24h: '0', quoteVolume24h: '0', interval: 15, sourceTimestamp: market.sourceAt * 1000,
       candleSourceTimestamp: market.sourceAt * 1000, observedAt: new Date(NOW * 1000).toISOString(), candles: [] })) };
-  const venue = new ConnectedRevolutVenue(source, () => NOW);
+  const venue = new ConnectedWalletVenue({ ...source, ...testWalletSource() }, () => NOW);
   await venue.lookup(buy.key, lease); await journal.release(lease);
   return { journal, venue, source, client, entry, buy, orders, market };
 }
 
 describe('server-managed protection from actual source fills', () => {
-  it('blocks a legacy strategy/arm/buy after switching to the wallet while an existing managed partial still exits once', async () => {
+  it('blocks an unconfigured host while an explicitly bound existing wallet partial remains protected', async () => {
     const s = await setup({ bid: '97', fill: '0.4', entryStatus: 'partially_filled' });
     vi.stubEnv('MIRSAD_ORDER_CONNECTION', 'metamask');
-    await expect(runHost()).resolves.toMatchObject({ status: 'blocked', reason: 'wallet_execution_not_configured' });
+    await expect(runHost()).resolves.toMatchObject({ status: 'blocked', reason: 'wallet_execution_transport_missing' });
     await expect(entrySwitch(true)).resolves.toMatchObject({ status: 'blocked', entriesEnabled: false });
-    await expect(s.venue.submit(s.buy)).rejects.toMatchObject({ code: 'wallet_execution_not_configured' });
+    await expect(s.venue.submit(s.buy)).rejects.toThrow('execution_not_armed');
     expect(s.client.submitOrder).not.toHaveBeenCalled();
     await protectionCycle(s.venue, s.journal, () => NOW);
     expect(s.client.cancelOrder).toHaveBeenCalledExactlyOnceWith(s.entry.id);
@@ -94,7 +95,7 @@ describe('server-managed protection from actual source fills', () => {
     expect(s.client.submitOrder).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ side: 'sell', type: 'market', quantity: '1' }));
     const decisions = await s.journal.accountDecisions(CONFIG.accountId);
     expect(decisions.find(d => d.intent.side === 'sell')?.intent).toMatchObject({ reason, reduceOnly: true });
-    await protectionCycle(new ConnectedRevolutVenue(s.source, () => NOW), new SqlJournal(), () => NOW);
+    await protectionCycle(new ConnectedWalletVenue({ ...s.source, ...testWalletSource() }, () => NOW), new SqlJournal(), () => NOW);
     expect(s.client.submitOrder).toHaveBeenCalledTimes(1);
     expect((await s.journal.protections(CONFIG.accountId))[0]).toMatchObject({ status: 'closed', quantity: '0' });
   });
@@ -111,7 +112,7 @@ describe('server-managed protection from actual source fills', () => {
     expect(await protectionCycle(s.venue, s.journal, () => NOW)).toMatchObject({ status: 'blocked' });
     expect(s.client.submitOrder).not.toHaveBeenCalled();
     s.market.bid = '101';
-    await protectionCycle(new ConnectedRevolutVenue(s.source, () => NOW), new SqlJournal(), () => NOW);
+    await protectionCycle(new ConnectedWalletVenue({ ...s.source, ...testWalletSource() }, () => NOW), new SqlJournal(), () => NOW);
     expect(s.client.cancelOrder).toHaveBeenCalledTimes(1); expect(s.client.submitOrder).not.toHaveBeenCalled();
     s.entry.status = 'cancelled';
     await protectionCycle(s.venue, s.journal, () => NOW);
@@ -119,10 +120,10 @@ describe('server-managed protection from actual source fills', () => {
     expect((await s.journal.protections(CONFIG.accountId))[0].trigger?.reason).toBe('stop');
   });
   it('never repeats an uncertain sell and reconciles a late source acknowledgment', async () => {
-    const s = await setup({ bid: '97' }); let late: RevolutOrder | undefined;
+    const s = await setup({ bid: '97' }); let late: ReportedOrder | undefined;
     s.client.submitOrder.mockImplementationOnce(async input => {
       late = { ...s.entry, id: randomUUID(), clientOrderId: input.clientOrderId, side: 'sell', type: 'market', quantity: input.quantity, filledQuantity: input.quantity, status: 'filled' };
-      throw new BrokerUnknownOutcomeError(input.clientOrderId, late.id, true);
+      throw new SourceUnknownOutcomeError(input.clientOrderId, late.id, true);
     });
     expect(await protectionCycle(s.venue, s.journal, () => NOW)).toMatchObject({ status: 'blocked' });
     const sell = (await s.journal.accountDecisions(CONFIG.accountId)).find(d => d.intent.side === 'sell')!;
@@ -130,14 +131,14 @@ describe('server-managed protection from actual source fills', () => {
     await protectionCycle(s.venue, new SqlJournal(), () => NOW);
     expect(s.client.submitOrder).toHaveBeenCalledTimes(1);
     s.orders.set(late!.id, late!);
-    await protectionCycle(new ConnectedRevolutVenue(s.source, () => NOW), new SqlJournal(), () => NOW);
+    await protectionCycle(new ConnectedWalletVenue({ ...s.source, ...testWalletSource() }, () => NOW), new SqlJournal(), () => NOW);
     expect(s.client.submitOrder).toHaveBeenCalledTimes(1);
     expect((await s.journal.protections(CONFIG.accountId))[0].status).toBe('closed');
   });
   it('does not sell a remainder until the first exit is confirmed terminal', async () => {
     const s = await setup({ bid: '97' });
     s.client.submitOrder.mockImplementationOnce(async input => {
-      const o: RevolutOrder = { ...s.entry, id: randomUUID(), clientOrderId: input.clientOrderId, side: 'sell', type: 'market', quantity: input.quantity, filledQuantity: '0.4', status: 'partially_filled' };
+      const o: ReportedOrder = { ...s.entry, id: randomUUID(), clientOrderId: input.clientOrderId, side: 'sell', type: 'market', quantity: input.quantity, filledQuantity: '0.4', status: 'partially_filled' };
       s.orders.set(o.id, o); return structuredClone(o);
     });
     await protectionCycle(s.venue, s.journal, () => NOW);
@@ -151,7 +152,7 @@ describe('server-managed protection from actual source fills', () => {
   });
   it('preserves manual holdings, reservations and native protection orders', async () => {
     const s = await setup({ bid: '97' }); s.market.extraBalance = '2'; s.market.reserved = '2';
-    const manual: RevolutOrder = { ...s.entry, id: randomUUID(), clientOrderId: randomUUID(), side: 'sell', type: 'tpsl', quantity: '2', filledQuantity: '0', status: 'new' };
+    const manual: ReportedOrder = { ...s.entry, id: randomUUID(), clientOrderId: randomUUID(), side: 'sell', type: 'tpsl', quantity: '2', filledQuantity: '0', status: 'new' };
     s.orders.set(manual.id, manual);
     const snapshot = await s.venue.account();
     expect(snapshot.positions).toEqual(expect.arrayContaining([expect.objectContaining({ managed: false, quantity: '2' }), expect.objectContaining({ managed: true, quantity: '1' })]));

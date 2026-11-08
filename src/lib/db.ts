@@ -1,6 +1,7 @@
 import { Pool, type PoolConfig } from "pg";
 import { PGlite } from "@electric-sql/pglite";
 import { supabaseCa } from "./supabase-ca";
+import { guardedLegacyRetirement, type GuardedRetirementResult } from "./legacy-retirement-migration";
 
 export interface QueryResult<T> { rows: T[]; rowCount: number }
 export interface SqlExecutor {
@@ -123,7 +124,7 @@ async function createDatabase(): Promise<Database> {
     };
   }
   try {
-    await db.transaction(async (tx) => {
+    const retirement = await db.transaction(async (tx): Promise<GuardedRetirementResult> => {
       // Serialize schema bootstrap between independent Vercel cold starts.
       if (db.kind === "postgres") await tx.query("SELECT pg_advisory_xact_lock(837294651)");
       for (const sql of schema) await tx.query(sql);
@@ -138,7 +139,13 @@ async function createDatabase(): Promise<Database> {
           END LOOP; END $block$`);
       }
       await tx.query("REVOKE ALL ON SEQUENCE public.audit_events_id_seq FROM PUBLIC");
+      return guardedLegacyRetirement(tx);
     });
+    // Emit completion evidence only after a successful COMMIT. Never print the
+    // identity key/hash, credential envelope, database URL or raw exceptions.
+    if (retirement.status === "completed") {
+      console.info(JSON.stringify({ type: "legacy_connection_retirement", status: "completed", ...retirement.result }));
+    }
     return db;
   } catch (error) { await db.close(); throw error; }
 }

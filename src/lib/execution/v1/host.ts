@@ -1,102 +1,72 @@
+import { executionReason } from './errors';
 import 'server-only';
-import { randomUUID } from 'node:crypto';
-import { getPublicInstruments } from '../../brokers/revolut';
-import { credentials, configuredWatchlist, instruments, sourceMarket, sourceExecutionCandles } from '../../services';
-import { CONFIG, VERSION } from './model';
+import { CONFIG } from './model';
 import { SqlJournal } from './journal';
-import { processCandles } from './strategy';
-import { loadCandles } from './feed';
 import { cycle, executionCapabilitiesReady } from './runner';
-import { cancelDeadline, type CancellationPort } from './deadline';
+import { cancelDeadline } from './deadline';
 import { dailyReport } from './reporting';
-import { ConnectedRevolutVenue } from './revolut-venue';
+import { ConnectedWalletVenue } from './wallet-venue';
 import { protectionCycle } from './managed-protection';
 import { scheduleProtectionWatch } from './scheduler';
-import { evaluateRisk } from './risk';
-import { legacyOrderBlock } from '../../order-connection';
+import { accountEntryBlockers } from './readiness';
+import { walletBindingIdentity, walletBindingIssue, walletExecutionSource } from '../../wallet/execution-connection';
+import { walletOrderBlock } from '../../order-connection';
 export const journal = new SqlJournal();
-/** Owner-selected connection: the account already connected on the main page.
- * Credentials stay on the existing host; the scheduler receives no broker keys. */
-export async function connectedVenue(): Promise<CancellationPort | null> {
-  const connection = await credentials();
-  return connection ? new ConnectedRevolutVenue({ client: connection.client, journal, instruments, market: sourceMarket, candles: sourceExecutionCandles }) : null;
+export async function connectedVenue(): Promise<ConnectedWalletVenue | null> {
+  const source = walletExecutionSource();
+  return source ? new ConnectedWalletVenue({ ...source, journal }) : null;
 }
-export async function configuredSymbols() {
-  const selected = CONFIG.symbols.length ? CONFIG.symbols : await configuredWatchlist();
-  return Array.isArray(selected) ? [...new Set(selected.filter((s): s is string => typeof s === 'string' && /^[A-Z0-9]{2,16}-EUR$/.test(s)))] : [];
+export async function configuredSymbols(now = Math.floor(Date.now() / 1000)) {
+  const source = walletExecutionSource();
+  if (!source || walletBindingIssue(source.binding, now)) return [];
+  const approved = source.binding!.markets.map(m => m.symbol);
+  const selected = CONFIG.symbols.length ? CONFIG.symbols : approved;
+  return [...new Set(selected.filter((s): s is string => typeof s === 'string' && approved.includes(s)))];
 }
+const unavailable = () => ({ status: 'blocked', reason: 'wallet_execution_transport_missing',
+  blocks: [{ reason: 'wallet_market_mapping_missing' }, { reason: 'wallet_limit_cancellation_unsupported' },
+    { reason: 'wallet_gas_inclusive_eur_costs_missing' }] });
 export async function runHost() {
-  const block = legacyOrderBlock();
+  const block = walletOrderBlock();
   if (block) return { status: 'blocked', reason: block };
-  const port = await connectedVenue(), symbols = await configuredSymbols();
-  if (port) return cycle(port, journal, symbols);
-  // Complete the market-analysis path while clearly retaining the missing order
-  // API as a blocker. This writes audit/indicator data only, never account balances.
-  const lease = await journal.acquire(CONFIG.accountId);
-  if (!lease) return { status: 'busy' };
-  const at = Math.floor(Date.now() / 1000), id = randomUUID();
-  try {
-    const state = await journal.state(lease), blocks: { symbol?: string; reason: string }[] = [{ reason: 'order_api_not_connected' }];
-    let generated = 0;
-    if (!symbols.length) blocks.push({ reason: 'configured_symbols_missing' });
-    else {
-      const available = await getPublicInstruments();
-      const started = Date.now();
-      const cursor = (state.scanCursor ?? 0) % symbols.length;
-      for (let i = 0; i < symbols.length; i++) {
-        const index = (cursor + i) % symbols.length, symbol = symbols[index];
-        if (Date.now() - started > 20000) { blocks.push({ symbol, reason: 'scan_time_budget_next_cycle' }); break; }
-        state.scanCursor = (index + 1) % symbols.length;
-        if (!available.some(i => i.symbol === symbol && i.status === 'active')) { blocks.push({ symbol, reason: 'instrument_unavailable' }); continue; }
-        await journal.renew(lease);
-        try {
-          const now = Math.floor(Date.now() / 1000);
-          const candles = await loadCandles(symbol, now, state.indicators[symbol]?.lastCloseTime ?? null);
-          const parsed = processCandles(symbol, candles, state.indicators[symbol] ?? null, now);
-          state.indicators[symbol] = parsed.state;
-          // Diagnostic signals are recorded, not queued for delayed execution when
-          // a future connection is established. Only fresh crosses may enter later.
-          for (const signal of parsed.signals) { await journal.event(lease, { type: 'signal', signal, sourceAt: signal.at, readAt: now, executable: false, blocker: 'order_api_not_connected' }); generated++; }
-        } catch (e) { blocks.push({ symbol, reason: e instanceof Error ? e.message : 'market_unavailable' }); }
-        await new Promise(resolve => setTimeout(resolve, 1050));
-      }
-    }
-    await journal.save(lease, state);
-    const result = { id, at, version: VERSION, status: 'blocked', reason: 'order_api_not_connected', signalsRecorded: generated, blocks };
-    await journal.event(lease, { type: 'cycle', ...result }); return result;
-  } catch (e) {
-    const result = { id, at, status: 'blocked', reason: e instanceof Error ? e.message : 'source_unavailable' };
-    await journal.event(lease, { type: 'cycle', ...result }); return result;
-  } finally { await journal.release(lease); }
+  const port = await connectedVenue();
+  return port ? cycle(port, journal, await configuredSymbols()) : unavailable();
 }
 export async function handleDeadline(key: string) {
+  const block = walletOrderBlock();
+  if (block) return { status: 'blocked', reason: block, retryAt: Math.floor(Date.now() / 1000) + CONFIG.protectionPollSeconds };
   const port = await connectedVenue();
-  if (!port) return { status: 'blocked', reason: 'order_api_not_connected' };
-  return cancelDeadline(port, journal, key, Math.floor(Date.now() / 1000));
+  return port ? cancelDeadline(port, journal, key, Math.floor(Date.now() / 1000)) : unavailable();
 }
 export async function entrySwitch(enabled: boolean) {
+  const block = enabled ? walletOrderBlock() : null;
+  if (block) return { status: 'blocked', reason: block, entriesEnabled: false, orderApiConnected: false };
+  const port = await connectedVenue();
   if (enabled) {
-    const block = legacyOrderBlock();
-    if (block) return { status: 'blocked', reason: block, entriesEnabled: false, orderApiConnected: false };
-    const port = await connectedVenue();
-    if (!port || !executionCapabilitiesReady(await port.capabilities())) {
-      return { status: 'blocked', reason: 'execution_capabilities_missing', entriesEnabled: false, orderApiConnected: false };
-    }
-    await port.refreshAccounting?.();
-    const live = await port.account();
+    if (!port || !executionCapabilitiesReady(await port.capabilities())) return { status: 'blocked',
+      reason: port ? 'execution_capabilities_missing' : 'wallet_execution_transport_missing', entriesEnabled: false, orderApiConnected: false };
     const check = await journal.acquire(CONFIG.accountId);
     if (!check) return { status: 'busy' };
+    try { await port.bindWallet(check); }
+    catch (error) { return { status: 'blocked', reason: executionReason(error, 'wallet_grant_unverified'), entriesEnabled: false, orderApiConnected: false }; }
+    finally { await journal.release(check); }
+    try { await port.refreshAccounting(); }
+    catch (error) { return { status: 'blocked', reason: executionReason(error, 'wallet_account_unavailable'), entriesEnabled: false, orderApiConnected: false }; }
+    const riskLease = await journal.acquire(CONFIG.accountId);
+    if (!riskLease) return { status: 'busy' };
     try {
-      const state = await journal.state(check);
-      const risk = evaluateRisk(state.risk, live.trades, live.equityHistory, live.tradeHistoryComplete, Math.floor(Date.now() / 1000));
-      if (live.dataBlockers?.length || risk.entryBlocked) return { status: 'blocked', reason: live.dataBlockers?.[0] ?? risk.entryBlocked,
-        entriesEnabled: false, orderApiConnected: true };
-    } finally { await journal.release(check); }
+      const live = await port.account(), state = await journal.state(riskLease);
+      const blockers = accountEntryBlockers(live, state.risk, Math.floor(Date.now() / 1000));
+      if (blockers.length) return { status: 'blocked', reason: blockers[0], entriesEnabled: false, orderApiConnected: true };
+    } catch (error) {
+      return { status: 'blocked', reason: executionReason(error, 'wallet_account_unavailable'), entriesEnabled: false, orderApiConnected: false };
+    } finally { await journal.release(riskLease); }
     await scheduleProtectionWatch();
   }
   const lease = await journal.acquire(CONFIG.accountId);
   if (!lease) return { status: 'busy' };
-  try { const state = await journal.state(lease); state.entriesEnabled = enabled;
+  try {
+    const state = await journal.state(lease); state.entriesEnabled = enabled;
     if (enabled) state.executionArmed = true;
     await journal.save(lease, state);
     await journal.event(lease, { type: 'entries_setting', enabled, at: Math.floor(Date.now() / 1000) });
@@ -104,13 +74,33 @@ export async function entrySwitch(enabled: boolean) {
   } finally { await journal.release(lease); }
 }
 export async function refreshReadiness() {
+  const block = walletOrderBlock();
+  if (block) return { status: 'blocked', reason: block, ready: false };
   const port = await connectedVenue();
-  if (port) await port.refreshAccounting?.();
-  return { status: port ? 'checked' : 'blocked' };
+  if (!port) return { ...unavailable(), ready: false };
+  try {
+    await port.refreshAccounting();
+    const capabilitiesReady = executionCapabilitiesReady(await port.capabilities());
+    const snapshot = await port.account();
+    const lease = await journal.acquire(CONFIG.accountId);
+    if (!lease) return { status: 'busy', ready: false };
+    try {
+      const state = await journal.state(lease);
+      const blockers = accountEntryBlockers(snapshot, state.risk, Math.floor(Date.now() / 1000));
+      const binding = walletExecutionSource()?.binding;
+      if (state.walletIdentity && binding && state.walletIdentity !== walletBindingIdentity(binding)) blockers.push('wallet_account_changed');
+      if (!capabilitiesReady) blockers.push('execution_capabilities_missing');
+      return { status: 'checked', ready: blockers.length === 0, capabilitiesReady, blockers };
+    } finally { await journal.release(lease); }
+  } catch (error) {
+    return { status: 'blocked', ready: false, reason: executionReason(error, 'wallet_account_unavailable') };
+  }
 }
 export async function runProtection() {
+  const block = walletOrderBlock();
+  if (block) return { status: 'blocked', reason: block, retryAt: Math.floor(Date.now() / 1000) + CONFIG.protectionPollSeconds };
   const port = await connectedVenue();
-  return port ? protectionCycle(port, journal) : { status: 'blocked', reason: 'account_connection_missing', retryAt: Math.floor(Date.now() / 1000) + CONFIG.protectionPollSeconds };
+  return port ? protectionCycle(port, journal) : { ...unavailable(), retryAt: Math.floor(Date.now() / 1000) + CONFIG.protectionPollSeconds };
 }
 export async function runTick() {
   const execution = await runHost();

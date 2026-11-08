@@ -1,4 +1,5 @@
-import type { RevolutBalance } from '../../brokers/revolut';
+import { executionReason } from './errors';
+import type { SourceBalance } from './source-model';
 import { CONFIG, D, decimal, fresh, positive, terminal, type Instrument, type Position, type SourceOrder } from './model';
 import type { DecisionRecord, Journal, ManagedProtection, ProtectionHeartbeat } from './journal';
 import { protectionForFill } from './protection';
@@ -6,12 +7,12 @@ import { planExit } from './planner';
 import type { VenuePort } from './runner';
 
 export const protectionPositionId = (entryKey: string) => `mirsad:${entryKey}`;
-const reasonFor = (error: unknown) => error instanceof Error && /^[a-z][a-z0-9_]{0,100}$/.test(error.message) ? error.message : 'protection_check_failed';
+const reasonFor = (error: unknown) => executionReason(error, 'protection_check_failed');
 
 /** A projection of confirmed source orders, not a balance ledger. Existing
  * manual holdings and decisions without an explicit Mirsad protection policy
  * cannot become managed positions. No missing order is replaced by a cache. */
-export function managedPositions(balances: RevolutBalance[], orders: SourceOrder[], decisions: DecisionRecord[], saved: ManagedProtection[]): Position[] {
+export function managedPositions(balances: SourceBalance[], orders: SourceOrder[], decisions: DecisionRecord[], saved: ManagedProtection[]): Position[] {
   const result: Position[] = [];
   for (const entry of decisions.filter(d => d.intent.side === 'buy' && d.protectionMode === 'mirsad')) {
     const source = orders.find(o => o.clientKey === entry.key && o.managed);

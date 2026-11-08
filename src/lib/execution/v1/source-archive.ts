@@ -1,9 +1,10 @@
-import { BrokerApiError, type RevolutXClient } from '../../brokers/revolut';
+import { executionReason, sourceErrorCode } from './errors';
+import { SourceApiError, type SourceClient } from './source-model';
 import type { Journal, Lease, SourceArchiveState } from './journal';
 
 /** One source page per existing monitoring cycle. This stores source records,
  * not balances or reconstructed equity; pagination is not a valuation proof. */
-export async function syncSourceArchive(client: Pick<RevolutXClient, 'getTransactionsPage'>,
+export async function syncSourceArchive(client: Pick<SourceClient, 'getTransactionsPage'>,
   journal: Journal, lease: Lease, nowMs: number) {
   const old = await journal.sourceArchive(lease);
   const first = Math.max(0, nowMs - 86_400_000);
@@ -42,8 +43,8 @@ export async function syncSourceArchive(client: Pick<RevolutXClient, 'getTransac
   } catch (error) {
     // Keep the last committed page and cursor intact after any failed read.
     const failed = checkpoint;
-    failed.lastError = error instanceof BrokerApiError ? error.code
-      : error instanceof Error && error.message.startsWith('source_archive_') ? error.message : 'source_transactions_unavailable';
+    failed.lastError = error instanceof SourceApiError ? sourceErrorCode(error.code)
+      : executionReason(error, 'source_transactions_unavailable');
     await journal.saveSourceArchive(lease, failed, []);
     return { status: 'unavailable' as const, reason: failed.lastError };
   }

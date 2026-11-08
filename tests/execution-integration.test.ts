@@ -1,3 +1,4 @@
+import { testWalletSource, testWalletIdentity, testWalletCosts } from './execution-fixtures';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthError } from '../src/lib/auth';
 import { GET, POST } from '../src/app/api/execution/[...action]/route';
@@ -6,7 +7,7 @@ import { executionReport } from '../src/lib/execution/service';
 import { EDUCATION_STORAGE_KEY, readEducationAccount } from '../src/lib/execution/education-account';
 import retiredWorker from '../automation/retired-scheduler.mjs';
 import type { CancellationPort } from '../src/lib/execution/v1/deadline';
-import { ConnectedRevolutVenue } from '../src/lib/execution/v1/revolut-venue';
+import { ConnectedWalletVenue } from '../src/lib/execution/v1/wallet-venue';
 import { account as fixtureAccount } from './execution-fixtures';
 const auth = vi.hoisted(() => ({ requireSession: vi.fn(), requireMutation: vi.fn(), refreshSessionCookie: vi.fn() }));
 const db = vi.hoisted(() => ({ query: vi.fn() }));
@@ -94,12 +95,12 @@ describe('scoped native account integration and authenticated endpoints', () => 
     expect(account).toEqual(original);
   });
   it('reports the selected existing account without equating connectivity with execution readiness', async () => {
-    const balances = [{ accountId: 'revolut-x' as const, currency: 'EUR', total: '23.45', available: '20.12', reserved: '3.33', observedAt: new Date().toISOString() }];
-    host.connectedVenue.mockResolvedValue(new ConnectedRevolutVenue({
+    const balances = [{ accountId: 'metamask-strategy-v1' as const, currency: 'EUR', total: '23.45', available: '20.12', reserved: '3.33', observedAt: new Date().toISOString() }];
+    host.connectedVenue.mockResolvedValue(new ConnectedWalletVenue({ ...testWalletSource(),
       client: { getBalances: async () => balances, getOrders: async () => [] },
       instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [],
     }));
-    expect(await executionReport()).toMatchObject({ account_id: 'revolut-x', account_connected: true,
+    expect(await executionReport()).toMatchObject({ account_id: 'metamask-strategy-v1', account_connected: true,
       adapter_configured: true, execution_ready: false, enabled: false, available_eur: '20.12',
       reason: 'execution_data_incomplete', status: 'monitoring', protection: { mode: 'mirsad', armed: false } });
     expect(db.query.mock.calls.every(([sql]) => sql.startsWith('SELECT'))).toBe(true);
@@ -117,7 +118,7 @@ describe('scoped native account integration and authenticated endpoints', () => 
     db.query.mockImplementation(async (_sql, params) => ({ rows: params?.[0]?.endsWith(':state')
       ? [{ value: { entriesEnabled: true, executionArmed: true, lastSuccessfulReport: savedReport } }]
       : params?.[0]?.endsWith(':protection_heartbeat') ? [{ value: heartbeat }] : [], rowCount: 1 }));
-    host.connectedVenue.mockResolvedValue(new ConnectedRevolutVenue({
+    host.connectedVenue.mockResolvedValue(new ConnectedWalletVenue({ ...testWalletSource(),
       client: { getBalances: async () => { throw new Error('source_balance_mismatch'); }, getOrders: async () => [] },
       instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [],
     }));
@@ -143,10 +144,10 @@ describe('scoped native account integration and authenticated endpoints', () => 
     expect(recovered.report_status).toBe('current');
   });
   it('keeps the execution failure visible when diagnostic order details recover the report', async () => {
-    const venue = new ConnectedRevolutVenue({ client: { getBalances: async () => [], getOrders: async () => [] },
+    const venue = new ConnectedWalletVenue({ ...testWalletSource(), client: { getBalances: async () => [], getOrders: async () => [] },
       instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [] });
     vi.spyOn(venue, 'account').mockRejectedValueOnce(new Error('managed_exit_fill_mismatch'))
-      .mockResolvedValueOnce({ ...fixtureAccount(), id: 'revolut-x' });
+      .mockResolvedValueOnce({ ...fixtureAccount(), id: 'metamask-strategy-v1' });
     host.connectedVenue.mockResolvedValue(venue);
     const report = await executionReport();
     expect(report).toMatchObject({ account_connected: true, account_read_method: 'source_order_details_for_reporting',
@@ -157,8 +158,8 @@ describe('scoped native account integration and authenticated endpoints', () => 
     expect(host.runHost).not.toHaveBeenCalled(); expect(host.entrySwitch).not.toHaveBeenCalled();
   });
   it('exposes incomplete performance coverage for documentation without labelling it zero profit', async () => {
-    host.connectedVenue.mockResolvedValue(new ConnectedRevolutVenue({
-      client: { getBalances: async () => [{ accountId: 'revolut-x', currency: 'EUR', total: '10', available: '10', reserved: '0', observedAt: new Date().toISOString() }], getOrders: async () => [] },
+    host.connectedVenue.mockResolvedValue(new ConnectedWalletVenue({ ...testWalletSource(),
+      client: { getBalances: async () => [{ accountId: 'metamask-strategy-v1', currency: 'EUR', total: '10', available: '10', reserved: '0', observedAt: new Date().toISOString() }], getOrders: async () => [] },
       instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [],
     }));
     const report = await executionReport();
@@ -168,7 +169,7 @@ describe('scoped native account integration and authenticated endpoints', () => 
         berlinToday: { coverageComplete: false, realizedNetPnlEur: null } } });
   });
   it('runs current fill verification even when the engine account is readable and retains both sets of blockers', async () => {
-    const venue = new ConnectedRevolutVenue({ client: { getBalances: async () => [], getOrders: async () => [] },
+    const venue = new ConnectedWalletVenue({ ...testWalletSource(), client: { getBalances: async () => [], getOrders: async () => [] },
       instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [] });
     vi.spyOn(venue, 'account').mockResolvedValue({ ...fixtureAccount(), dataBlockers: ['accounting_evidence_stale'] });
     const audit = vi.spyOn(venue, 'reportAccount').mockResolvedValue({ ...fixtureAccount(), tradeHistoryComplete: false,

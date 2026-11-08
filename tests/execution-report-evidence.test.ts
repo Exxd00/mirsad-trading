@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { RevolutFill, RevolutOrder } from '../src/lib/brokers/revolut';
+import type { ReportedFill, ReportedOrder } from '../src/lib/execution/v1/source-model';
 import { reconcileReportFills } from '../src/lib/execution/v1/report-evidence';
 const now = 1790725261;
-const order: RevolutOrder = { id: 'order', clientOrderId: 'client', accountId: 'revolut-x', symbol: 'ETH-EUR',
+const order: ReportedOrder = { id: 'order', clientOrderId: 'client', accountId: 'metamask-strategy-v1', symbol: 'ETH-EUR',
   side: 'buy', type: 'limit', quantity: '0.00073403', filledQuantity: '0.00073403', status: 'filled',
   averageFillPrice: '2370.48', fee: '0.00000067', feeCurrency: 'ETH',
   createdAt: '2026-09-28T12:45:23Z', updatedAt: '2026-09-28T12:45:23Z' };
-const fill: RevolutFill = { id: 'fill', orderId: 'order', accountId: 'revolut-x', symbol: 'ETH-EUR', side: 'buy',
+const fill: ReportedFill = { id: 'fill', orderId: 'order', accountId: 'metamask-strategy-v1', symbol: 'ETH-EUR', side: 'buy',
   quantity: '0.00073403', price: '2357.43', baseCurrency: 'ETH', quoteCurrency: 'EUR',
   createdAt: '2026-09-28T12:45:23Z', maker: false };
 describe('current source evidence for reports', () => {

@@ -1,3 +1,4 @@
+import { executionReason } from './errors';
 import { createHash } from 'node:crypto';
 import { CONFIG, D, decimal, positive, fresh, terminal, type Account, type BuyIntent, type Instrument,
   type Quote, type RiskResult, type Signal, type SellIntent } from './model';
@@ -54,7 +55,7 @@ export function planBuy(account: Account, signal: Signal, instrument: Instrument
   let depthImpact = new D(0);
   if (costs.depthRequired) {
     try { depthImpact = exitNotional.sub(exitDepthValue(quote, quantity.toFixed())); }
-    catch (error) { return blocked(error instanceof Error ? error.message : 'order_book_missing'); }
+    catch (error) { return blocked(executionReason(error, 'order_book_missing')); }
   }
   // Fees + one quoted spread + incremental slippage, each counted exactly once.
   const roundTrip = entryFee.add(exitNotional.mul(costs.sellFeeRate)).add(costs.sellFixedEur)

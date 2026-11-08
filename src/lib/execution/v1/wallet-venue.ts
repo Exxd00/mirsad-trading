@@ -1,8 +1,10 @@
+import { executionReason } from './errors';
 import 'server-only';
 import { isDeepStrictEqual } from 'node:util';
-import { requireRevolutOrders } from '../../order-connection';
-import type { RevolutXClient, RevolutInstrument, RevolutMarket, RevolutOrder } from '../../brokers/revolut';
-import { BrokerUnknownOutcomeError } from '../../brokers/revolut';
+import { walletBindingIdentity, walletBindingIssue, type WalletExecutionBinding } from '../../wallet/execution-connection';
+import { walletOrderBlock } from '../../order-connection';
+import type { SourceClient, SourceInstrument, SourceMarket, ReportedOrder } from './source-model';
+import { SourceUnknownOutcomeError } from './source-model';
 import { CONFIG, D, decimal, fresh, positive, terminal, type Account, type Candle, type Instrument, type Intent, type Position, type Quote, type SellIntent, type SourceOrder } from './model';
 import type { CancellationPort } from './deadline';
 import { scheduleCancellation, scheduleProtectionWatch } from './scheduler';
@@ -11,17 +13,20 @@ import { syncSourceArchive } from './source-archive';
 import { managedPositions, protectionPositionId, protectionRecord } from './managed-protection';
 import { planBuy } from './planner';
 import { evaluateRisk } from './risk';
-import { FEE_SCHEDULE, revolutCosts } from './costs';
 import { sameAmounts, sourceAmounts, sourceTradeResults } from './accounting';
 import { refreshSourceAccounting } from './account-evidence';
 import { reconcileReportFills } from './report-evidence';
 
-type Source = {
-  client: Pick<RevolutXClient, 'getBalances' | 'getOrders'> & Partial<Pick<RevolutXClient,
+export type WalletVenueSource = {
+  client: Pick<SourceClient, 'getBalances' | 'getOrders'> & Partial<Pick<SourceClient,
     'getOrder' | 'getTransactionsPage' | 'getTransaction' | 'getOrderBook' | 'getValuationCandles' | 'getFillsForOrders' | 'getActiveOrders' | 'submitOrder' | 'cancelOrder'>>;
   journal?: Journal;
-  instruments(): Promise<RevolutInstrument[]>;
-  market(symbol: string): Promise<RevolutMarket>;
+  binding?: WalletExecutionBinding;
+  /** Recheck the actual on-chain grant, revocation and token/chain identity. */
+  verifyGrant?(binding: WalletExecutionBinding): Promise<boolean>;
+  gasCostsIncluded?: boolean;
+  instruments(): Promise<SourceInstrument[]>;
+  market(symbol: string): Promise<SourceMarket>;
   candles(symbol: string, after: number | null): Promise<Candle[]>;
 };
 const seconds = (value: string) => {
@@ -29,7 +34,7 @@ const seconds = (value: string) => {
   if (!Number.isFinite(at)) throw new Error('source_timestamp_invalid');
   return Math.floor(at);
 };
-export function sourceOrder(order: RevolutOrder): SourceOrder {
+export function sourceOrder(order: ReportedOrder): SourceOrder {
   const baseFee = order.feeCurrency === order.symbol.split('-')[0] ? order.fee : undefined;
   const status: SourceOrder['status'] = ({ pending_new: 'open', new: 'open', partially_filled: 'partial',
     filled: 'filled', cancelled: 'cancelled', rejected: 'rejected', replaced: 'unknown' } as const)[order.status];
@@ -44,9 +49,9 @@ export function sourceOrder(order: RevolutOrder): SourceOrder {
       ? decimal(baseFee).mul(order.averageFillPrice).toFixed() : null,
     ...(baseFee !== undefined ? { baseFeeQuantity: baseFee } : {}) };
 }
-function ownedOrder(order: RevolutOrder, decision: DecisionRecord): SourceOrder {
+function ownedOrder(order: ReportedOrder, decision: DecisionRecord): SourceOrder {
   const intent = decision.intent;
-  if (order.accountId !== 'revolut-x' || order.clientOrderId !== decision.sourceIdentity?.clientOrderId
+  if (order.accountId !== 'metamask-strategy-v1' || order.clientOrderId !== decision.sourceIdentity?.clientOrderId
     || decision.key !== intent.key || order.symbol !== intent.symbol || order.side !== intent.side
     || order.type !== (intent.side === 'buy' ? 'limit' : 'market') || order.quantity === null
     || !decimal(order.quantity).eq(intent.quantity) || decimal(order.filledQuantity).lt(0) || decimal(order.filledQuantity).gt(intent.quantity)
@@ -61,17 +66,22 @@ function ownedOrder(order: RevolutOrder, decision: DecisionRecord): SourceOrder 
   return mapped;
 }
 
-/** The same credential-backed account used by the main dashboard. No local
- * wallet, seeded balance, stored-account fallback, or ownership adoption. */
-export class ConnectedRevolutVenue implements CancellationPort {
-  readonly accountId = 'revolut-x';
-  constructor(private readonly source: Source, private readonly clock = () => Math.floor(Date.now() / 1000)) {}
+/** Wallet evidence and writes for the unchanged EMA strategy. No seeded
+ * balances, stored-account fallback, or adoption of existing owner holdings. */
+export class ConnectedWalletVenue implements CancellationPort {
+  readonly accountId = CONFIG.accountId;
+  constructor(private readonly source: WalletVenueSource, private readonly clock = () => Math.floor(Date.now() / 1000)) {}
   async capabilities() {
-    const writes = Boolean(this.source.journal && this.source.client.getOrder && this.source.client.submitOrder && this.source.client.cancelOrder);
+    let bound = !walletBindingIssue(this.source.binding, this.clock()) && Boolean(this.source.verifyGrant);
+    if (bound) {
+      try { bound = await this.source.verifyGrant!(this.source.binding!); }
+      catch { bound = false; }
+    }
+    const writes = Boolean(bound && this.source.journal && this.source.client.getOrder && this.source.client.submitOrder && this.source.client.cancelOrder);
     const timer = Boolean(process.env.EXECUTION_DEADLINE_URL && process.env.EXECUTION_SCHEDULER_TOKEN);
     return { idempotentOrders: writes, fencedWrites: writes, attachedProtection: false,
       managedProtection: writes && timer, coordinatedExits: writes, cancelRemainder: writes,
-      cancellationTimer: timer, entryRiskData: Boolean(this.source.journal && this.source.client.getOrderBook
+      cancellationTimer: timer, entryRiskData: Boolean(bound && this.source.gasCostsIncluded && this.source.journal && this.source.client.getOrderBook
         && this.source.client.getValuationCandles && this.source.client.getTransaction && this.source.client.getTransactionsPage) };
   }
   async refreshAccounting() {
@@ -82,6 +92,24 @@ export class ConnectedRevolutVenue implements CancellationPort {
   }
   private validateLease(lease: Lease) {
     if (lease.key !== `execution:v1:${this.accountId}:lock`) throw new Error('source_lease_account_mismatch');
+  }
+  async bindWallet(lease: Lease) {
+    if (!this.source.journal) throw new Error('wallet_journal_missing');
+    this.validateLease(lease);
+    const issue = walletBindingIssue(this.source.binding, this.clock());
+    if (issue) throw new Error(issue);
+    const binding = this.source.binding!;
+    if (!this.source.verifyGrant || !await this.source.verifyGrant(binding)) throw new Error('wallet_grant_unverified');
+    const state = await this.source.journal!.state(lease), identity = walletBindingIdentity(binding);
+    if (state.walletIdentity && state.walletIdentity !== identity) throw new Error('wallet_account_changed');
+    if (!state.walletIdentity) {
+      // A different account's archived decisions may never be adopted on first bind.
+      if ((await this.source.journal!.accountDecisions(this.accountId)).length
+        || (await this.source.journal!.protections(this.accountId)).length
+        || await this.source.journal!.accounting(this.accountId)) throw new Error('wallet_unbound_ledger_not_empty');
+      state.walletIdentity = identity;
+      await this.source.journal!.save(lease, state);
+    }
   }
   async reconcile(lease?: Lease, options: { transactions?: boolean } = {}) {
     if (lease && this.source.journal) {
@@ -129,7 +157,7 @@ export class ConnectedRevolutVenue implements CancellationPort {
     try {
       if (filled.length > 12 || (filled.length && (!this.source.client.getOrder || !this.source.client.getFillsForOrders))) throw new Error('report_fills_unavailable');
       const decisions = await this.source.journal?.accountDecisions(this.accountId) ?? [];
-      const details: RevolutOrder[] = [];
+      const details: ReportedOrder[] = [];
       for (const order of filled) {
         const raw = await this.source.client.getOrder!(order.id);
         const decision = decisions.find(d => d.key === order.clientKey);
@@ -160,6 +188,7 @@ export class ConnectedRevolutVenue implements CancellationPort {
   }
   async account(options: { protectionOnly?: boolean; preSubmitKey?: string } = {}): Promise<Account> {
     const balances = await this.source.client.getBalances();
+    if (balances.some(b => b.accountId !== this.accountId)) throw new Error('wallet_account_mismatch');
     const observedAt = balances.length ? Math.min(...balances.map(b => seconds(b.observedAt))) : this.clock();
     const eur = balances.find(b => b.currency === 'EUR');
     if (!eur || new Set(balances.map(b => b.currency)).size !== balances.length) throw new Error('source_balance_missing');
@@ -174,7 +203,7 @@ export class ConnectedRevolutVenue implements CancellationPort {
       identities.set(id, decision);
     }
     const saved = await this.source.journal?.protections(this.accountId) ?? [];
-    let rawOrders: RevolutOrder[];
+    let rawOrders: ReportedOrder[];
     if (options.protectionOnly && this.source.client.getActiveOrders && this.source.client.getOrder) {
       rawOrders = await this.source.client.getActiveOrders();
       const liveEntries = decisions.filter(d => d.intent.side === 'buy' && d.protectionMode === 'mirsad'
@@ -194,7 +223,7 @@ export class ConnectedRevolutVenue implements CancellationPort {
         && !rawOrders.some(o => o.id === d.source!.id));
       if (!this.source.client.getOrder && targets.length + outsideList.length) throw new Error('source_order_details_unavailable');
       if (targets.length + outsideList.length > 12) throw new Error('source_order_details_limit');
-      const details = new Map<string, RevolutOrder>();
+      const details = new Map<string, ReportedOrder>();
       for (const order of targets) {
         const detail = await this.source.client.getOrder!(order.id);
         if (detail.accountId !== this.accountId || detail.id !== order.id || detail.clientOrderId !== order.clientOrderId
@@ -212,6 +241,7 @@ export class ConnectedRevolutVenue implements CancellationPort {
         rawOrders.push(detail);
       }
     }
+    if (rawOrders.some(order => order.accountId !== this.accountId)) throw new Error('wallet_order_account_mismatch');
     const orders = rawOrders.map(order => {
       const decision = identities.get(order.clientOrderId);
       return decision ? ownedOrder(order, decision) : sourceOrder(order);
@@ -278,7 +308,7 @@ export class ConnectedRevolutVenue implements CancellationPort {
             evidence: { kind: 'source_snapshot', markAt: account.valuationAt, transactionIds: [] } }];
         account.archiveStart = evidence.observations[0]?.at ?? null;
       }
-    } catch (error) { blockers.push(error instanceof Error && error.message.startsWith('accounting_') ? error.message : 'accounting_source_valuation_unavailable'); }
+    } catch (error) { blockers.push(executionReason(error, 'accounting_source_valuation_unavailable')); }
     const results = sourceTradeResults(decisions.filter(d => d.key !== options.preSubmitKey), orders, saved);
     account.trades = results.trades; account.tradeHistoryComplete = results.complete;
     const filled = orders.filter(o => o.managed && decimal(o.filledQuantity).gt(0));
@@ -286,8 +316,8 @@ export class ConnectedRevolutVenue implements CancellationPort {
       account.fills = evidence.fills.map(f => ({ id: f.id, orderId: f.orderId, symbol: f.symbol, side: f.side!, at: seconds(f.createdAt),
         quantity: f.quantity, price: f.price, feeEur: f.feeCurrency === 'EUR' ? f.fee ?? null : null, slippageEur: null }));
     }
-    if (filled.some(o => o.averageFillPrice && o.feeEur !== null
-      && decimal(o.feeEur).gt(decimal(o.filledQuantity).mul(o.averageFillPrice).mul(FEE_SCHEDULE.taker)))) blockers.push('source_fee_schedule_changed');
+    // Actual fees remain authoritative. A historical fixed venue rate is never
+    // reused as a wallet cost estimate; planning requires current gas-inclusive costs.
     if (!results.complete) blockers.push('trade_history_incomplete');
     if (results.trades.some(t => t.feesEur === null || t.netPnlEur === null)) blockers.push('closed_trade_costs_missing');
     account.dataBlockers = [...new Set(blockers)];
@@ -296,22 +326,28 @@ export class ConnectedRevolutVenue implements CancellationPort {
     return this.verifySourceFills(account);
   }
   async instruments(): Promise<Instrument[]> {
-    return (await this.source.instruments()).map(i => ({ symbol: i.symbol, active: i.status === 'active',
+    const instruments = await this.source.instruments();
+    if (new Set(instruments.map(i => i.symbol)).size !== instruments.length) throw new Error('wallet_market_identity_conflict');
+    return instruments.map(i => ({ symbol: i.symbol, active: i.status === 'active'
+      && Boolean(this.source.binding?.markets.some(m => m.symbol === i.symbol)) && i.quote === 'EUR',
       quoteCurrency: i.quote, quantityStep: i.baseStep, priceStep: i.quoteStep,
       minimumQuantity: i.minOrderSize, minimumNotional: i.minOrderSizeQuote,
-      maximumQuantity: i.maxOrderSize, costs: this.source.client.getOrderBook ? revolutCosts(seconds(i.observedAt)) : null }));
+      maximumQuantity: i.maxOrderSize, costs: this.source.gasCostsIncluded && i.costs
+        && fresh(i.costs.observedAt, this.clock(), CONFIG.quoteMaxAgeSeconds) ? i.costs : null }));
   }
   async quotes(symbols: string[]): Promise<Quote[]> {
     const result: Quote[] = [];
     for (const symbol of [...new Set(symbols)]) {
       if (this.source.client.getOrderBook) {
         const book = await this.source.client.getOrderBook(symbol), readAt = this.clock(), sourceAt = Math.floor(book.sourceAt / 1000);
+        if (book.symbol !== symbol || !book.bids.length || !book.asks.length) throw new Error('wallet_order_book_identity_mismatch');
         if (!fresh(sourceAt, readAt, CONFIG.quoteMaxAgeSeconds)) throw new Error('quote_stale');
-        result.push({ symbol, bid: book.bids[0].price, ask: book.asks[0].price, sourceAt, readAt, source: 'Revolut X authenticated order book',
+        result.push({ symbol, bid: book.bids[0].price, ask: book.asks[0].price, sourceAt, readAt, source: 'Wallet authenticated order book',
           depth: { bids: book.bids, asks: book.asks } });
         continue;
       }
       const m = await this.source.market(symbol), readAt = this.clock(), sourceAt = Math.floor(m.sourceTimestamp / 1000);
+      if (m.symbol !== symbol) throw new Error('wallet_quote_identity_mismatch');
       if (!fresh(sourceAt, readAt, 15)) throw new Error('quote_stale');
       result.push({ symbol, bid: m.bid, ask: m.ask, sourceAt, readAt, source: m.source });
     }
@@ -328,7 +364,7 @@ export class ConnectedRevolutVenue implements CancellationPort {
     // source UUID is created only by the same atomic insertion as the intent.
     if (!decision) return { order: null, authoritative: true };
     if (!decision.sourceIdentity) return { order: null, authoritative: false };
-    let found: RevolutOrder | undefined;
+    let found: ReportedOrder | undefined;
     const sourceId = decision.source?.id ?? decision.sourceIdentity.venueOrderId;
     if (sourceId && this.source.client.getOrder) found = await this.source.client.getOrder(sourceId);
     else {
@@ -350,9 +386,12 @@ export class ConnectedRevolutVenue implements CancellationPort {
     return { order, authoritative: true };
   }
   private async authority(lease?: Lease) {
+    const block = walletOrderBlock();
+    if (block) throw new Error(block);
     if (!lease || !this.source.journal) throw new Error('execution_not_armed');
     this.validateLease(lease);
     if (!(await this.source.journal.state(lease)).executionArmed) throw new Error('execution_not_armed');
+    await this.bindWallet(lease);
     return this.source.journal;
   }
   async ensureProtection(position: Position, lease: Lease) {
@@ -409,9 +448,6 @@ export class ConnectedRevolutVenue implements CancellationPort {
     return { ready: true, quantity: quantity.toFixed() };
   }
   async submit(intent?: Intent, lease?: Lease): Promise<SourceOrder> {
-    // The legacy independent watcher may still protect a pre-cutover position.
-    // All discretionary/strategy orders stay at the selected connection.
-    if (!intent || intent.side === 'buy' || !intent.reduceOnly || (intent.reason !== 'stop' && intent.reason !== 'target')) requireRevolutOrders();
     const journal = await this.authority(lease);
     if (!intent || !lease || !this.source.client.submitOrder) throw new Error('source_write_unavailable');
     const decision = await journal.decision(lease, intent.key);
@@ -442,12 +478,12 @@ export class ConnectedRevolutVenue implements CancellationPort {
     if (!await journal.claimSourceWrite(lease, { id, decisionKey: intent.key, symbol: intent.symbol, kind: 'submit', sourceOrderId: null, startedAt: this.clock(), settledAt: null })) throw new Error('source_write_pending');
     // Exactly one POST. A lost lease, transport timeout, or failed source read
     // leaves the durable claim in place. No replacement identity is generated.
-    let raw: RevolutOrder;
+    let raw: ReportedOrder;
     try { raw = await this.source.client.submitOrder({ clientOrderId: decision.sourceIdentity.clientOrderId,
       symbol: intent.symbol, side: intent.side, type: intent.side === 'buy' ? 'limit' : 'market', quantity: intent.quantity,
       ...(intent.side === 'buy' ? { limitPrice: intent.limitPrice } : {}) }); }
     catch (error) {
-      if (error instanceof BrokerUnknownOutcomeError && error.venueOrderId && error.clientOrderId === decision.sourceIdentity.clientOrderId)
+      if (error instanceof SourceUnknownOutcomeError && error.venueOrderId && error.clientOrderId === decision.sourceIdentity.clientOrderId)
         await journal.noteSourceOrderId(lease, intent.key, error.clientOrderId, error.venueOrderId);
       throw error;
     }

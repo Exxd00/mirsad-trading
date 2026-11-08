@@ -1,18 +1,19 @@
+import { testWalletSource, testWalletIdentity, testWalletCosts } from './execution-fixtures';
 import { describe, expect, it, vi } from 'vitest';
-import { ConnectedRevolutVenue, sourceOrder } from '../src/lib/execution/v1/revolut-venue';
-import type { RevolutBalance, RevolutOrder } from '../src/lib/brokers/revolut';
+import { ConnectedWalletVenue, sourceOrder } from '../src/lib/execution/v1/wallet-venue';
+import type { SourceBalance, ReportedOrder } from '../src/lib/execution/v1/source-model';
 
 const at = '2026-09-27T00:00:00.000Z', now = Date.parse(at) / 1000;
-const balances: RevolutBalance[] = [
-  { accountId: 'revolut-x', currency: 'EUR', total: '97.43', available: '87.43', reserved: '10', observedAt: at },
-  { accountId: 'revolut-x', currency: 'SOL', total: '0.164551', available: '0.000001', reserved: '0.16455', observedAt: at },
+const balances: SourceBalance[] = [
+  { accountId: 'metamask-strategy-v1', currency: 'EUR', total: '97.43', available: '87.43', reserved: '10', observedAt: at },
+  { accountId: 'metamask-strategy-v1', currency: 'SOL', total: '0.164551', available: '0.000001', reserved: '0.16455', observedAt: at },
 ];
-const protectedOrder: RevolutOrder = { id: 'existing-protection', clientOrderId: 'owner-key', accountId: 'revolut-x',
+const protectedOrder: ReportedOrder = { id: 'existing-protection', clientOrderId: 'owner-key', accountId: 'metamask-strategy-v1',
   symbol: 'SOL-EUR', side: 'sell', type: 'tpsl', quantity: '0.16455', filledQuantity: '0', status: 'new', createdAt: at, updatedAt: at };
 function setup() {
   const client = { getBalances: vi.fn(async () => structuredClone(balances)),
     getOrders: vi.fn(async () => [structuredClone(protectedOrder)]), submitOrder: vi.fn() };
-  const venue = new ConnectedRevolutVenue({ client, instruments: async () => [],
+  const venue = new ConnectedWalletVenue({ ...testWalletSource(), client, instruments: async () => [],
     market: async () => { throw new Error('not requested'); }, candles: async () => [] }, () => now);
   return { client, venue };
 }
@@ -24,7 +25,7 @@ describe('the dashboard account connection', () => {
     expect(snapshot.positions[0]).toMatchObject({ managed: false, openedAt: null, stop: null, target: null,
       quantity: '0.164551', available: '0.000001', protectionState: 'unknown', protectionIds: ['existing-protection'] });
     expect(snapshot.orders[0]).toMatchObject({ id: 'existing-protection', purpose: 'protection', managed: false, status: 'open' });
-    expect(snapshot).toMatchObject({ id: 'revolut-x', equityEur: null, valuationComplete: false,
+    expect(snapshot).toMatchObject({ id: 'metamask-strategy-v1', equityEur: null, valuationComplete: false,
       trades: [], fills: null, archiveStart: null, tradeHistoryComplete: false });
   });
   it('refreshes from the existing source and propagates failures instead of using a saved wallet', async () => {

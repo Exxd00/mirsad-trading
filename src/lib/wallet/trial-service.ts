@@ -8,12 +8,13 @@ import { AppError } from '../errors';
 import { draftTermsSchema, termsSchema, verifyGrants, type Plan, type Signatures } from './mandate';
 import { offlineTick, type Trial } from './offline-engine';
 import { trialTransport } from './base-transport';
+import { walletOrderBlock } from '../order-connection';
 
 const stateKey = 'wallet:offline-trial:84532:v1:' + (process.env.VERCEL_ENV || 'local'), signerKey = stateKey + ':gas-signer';
 // The existing scheduler calls production. On a Vercel preview, never accept a
 // spending grant that the production scheduler cannot consume. A local host can
 // explicitly opt in for a separate, isolated test.
-export const trialEnabled = () => process.env.MIRSAD_WALLET_TESTNET_ENABLED !== 'false' &&
+export const trialEnabled = () => !walletOrderBlock() && process.env.MIRSAD_WALLET_TESTNET_ENABLED === 'true' &&
   (process.env.VERCEL_ENV === 'production' || (!process.env.VERCEL_ENV && process.env.MIRSAD_WALLET_TESTNET_ENABLED === 'true'));
 const demand = (condition: unknown, code: string, message: string): void => {
   if (!condition) throw new AppError(code, 409, message);

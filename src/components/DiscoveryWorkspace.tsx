@@ -95,6 +95,9 @@ const reasonLabels: Record<string, string> = {
   public_request_timeout: 'انتهت مهلة استجابة المصدر',
   public_request_failed: 'تعذر جلب البيانات العامة',
   discovery_source_unavailable: 'المصدر غير متاح في هذه القراءة',
+  public_wallet_market_source_missing: 'مصدر سوق المحفظة غير مهيأ',
+  public_wallet_market_source_timeout: 'انتهت مهلة قراءة مصدر سوق المحفظة',
+  public_wallet_market_evidence_incomplete: 'أدلة السوق غير مكتملة',
 };
 const reason = (value: string) => {
   if (reasonLabels[value]) return reasonLabels[value];
@@ -110,7 +113,7 @@ function validReport(value: unknown): value is Report {
     && typeof candidate.csrfToken === 'string' && candidate.csrfToken.length > 0
     && Array.isArray(candidate.pairs) && Array.isArray(candidate.recentEvents)
     && Array.isArray(candidate.limitations) && !!candidate.scheduler && !!candidate.sync
-    && !!candidate.universe && !!candidate.config;
+    && !!candidate.universe && !!candidate.config && (candidate.source === 'unconfigured' || candidate.source === 'wallet-provider');
 }
 
 function Reasons({ values, fallback = 'بانتظار قراءة صالحة' }: { values: string[]; fallback?: string }) {
@@ -207,11 +210,11 @@ export function DiscoveryWorkspace() {
 
   return <main className={styles.page} dir="rtl">
     <nav className={styles.nav} aria-label="التنقل الرئيسي"><Link href="/" className={styles.brand}>مرصاد</Link>
-      <div className={styles.navLinks}><Link href="/">الحسابات</Link><Link href="/automation">الأتمتة</Link><Link href="/discovery" aria-current="page">رصد العملات</Link></div>
+      <div className={styles.navLinks}><Link href="/wallet">محفظة MetaMask</Link><Link href="/automation">الأتمتة</Link><Link href="/discovery" aria-current="page">رصد العملات</Link></div>
     </nav>
     <header className={styles.hero}>
       <div><p className={styles.kicker}>اكتشاف الأزواج · مقارنة قبل تخصيص رأس المال</p><h1>رصد العملات الجديدة</h1>
-        <p className={styles.description}>نراقب ظهور أزواج لم نرصدها سابقًا في Revolut X، ونقارن دخولًا ورقيًا عند الظهور بدخول بعد استقرار القراءات. الظهور الأول لدينا لا يثبت تاريخ إطلاق العملة أو إدراجها.</p>
+        <p className={styles.description}>رصد ورقي لأزواج سوق المحفظة بعد تهيئة مصدر بياناته والتحقق منه. يعرض هذا التقرير سجل المحفظة المستقل؛ أرشيف المصدر السابق لا يُدمج فيه. الظهور الأول لدينا لا يثبت تاريخ إطلاق العملة أو إدراجها.</p>
         <div className={styles.badges}><span className={styles.badge}>محاكاة ورقية فقط</span><span className={`${styles.badge} ${styles.mutedBadge}`}><bdi>EUR · USD</bdi></span>
           {report && <span className={`${styles.badge} ${styles.warningBadge}`}>رسوم مفترضة {number(report.config.feeRate * 10_000)} نقطة أساس لكل جانب</span>}</div>
       </div>
@@ -219,7 +222,7 @@ export function DiscoveryWorkspace() {
     </header>
 
     <div className={styles.controls}><button type="button" className={styles.button} disabled={loading || scanning} onClick={() => void refresh()}>{loading ? 'جارٍ تحديث التقرير…' : 'تحديث التقرير'}</button>
-      <button type="button" className={`${styles.button} ${styles.primary}`} disabled={!report || loading || scanning || unauthorized} onClick={() => void scan()}>{scanning ? 'جارٍ الفحص الورقي…' : 'فحص ورقي الآن'}</button>
+      <button type="button" className={`${styles.button} ${styles.primary}`} disabled={!report || report.source === 'unconfigured' || loading || scanning || unauthorized} onClick={() => void scan()}>{scanning ? 'جارٍ الفحص الورقي…' : 'فحص ورقي الآن'}</button>
       <span className={styles.small}>يقرأ السوق ويحفظ بيانات التجربة الورقية.</span>
     </div>
     {error && <p className={`${styles.message} ${styles.error}`} role="alert">{error}{unauthorized && <> <Link href="/login">تسجيل الدخول</Link></>}</p>}
@@ -227,6 +230,7 @@ export function DiscoveryWorkspace() {
     {!report && <p className={styles.loading} role="status">{loading ? 'جارٍ قراءة حالة المراقب…' : 'التقرير غير متاح. أعد التحديث بعد التحقق من الاتصال.'}</p>}
 
     {report && <>
+      {report.source === 'unconfigured' && <p className={`${styles.message} ${styles.warning}`} role="status">مصدر سوق المحفظة غير مهيأ. الفحص الجديد متوقف؛ يعرض هذا التقرير سجل المحفظة وحده.</p>}
       <div className={styles.statusLine}><span>آخر محاولة جمع: <strong>{time(report.lastRunAt)}</strong></span><span>آخر جمع ناجح: <strong>{time(report.lastSuccessAt)}</strong></span><span>جميع الأوقات: <strong>Europe/Berlin</strong></span></div>
       <p className={`${styles.message} ${styles.warning}`}>{report.baselineAt
         ? <>القراءة التأسيسية محفوظة منذ {time(report.baselineAt)}. الأزواج الموجودة حينها لا تُحتسب عملات جديدة؛ تبدأ المقارنة عند ظهور زوج إضافي لاحقًا.</>

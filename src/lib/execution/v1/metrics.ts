@@ -1,3 +1,4 @@
+import { executionReason } from './errors';
 import { D, decimal, VERSION, type Account, type ClosedTrade, type EquityObservation, type SourceOrder, type SourceFill } from './model';
 import { berlinBounds, neutralSeries, uniqueTrades } from './risk';
 const sum = (xs: string[]) => xs.reduce((s, v) => s.add(v), new D(0));
@@ -62,7 +63,7 @@ export function confirmedOrderCounts(orders: SourceOrder[], fills: SourceFill[] 
 }
 export function drawdownMetric(observations: EquityObservation[], until: number) {
   try { return { value: neutralSeries(observations, until).maximumDrawdown, reason: null }; }
-  catch (e) { return { value: null, reason: e instanceof Error ? e.message : 'valuation_missing' }; }
+  catch (e) { return { value: null, reason: executionReason(e, 'valuation_missing') }; }
 }
 /** A read-only report; snapshots remain distinct from dated closed-trade results. */
 export function accountMetrics(account: Account, from: number, until: number) {

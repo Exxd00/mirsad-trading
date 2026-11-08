@@ -1,18 +1,6 @@
-import { D, positive, type Costs, type Quote } from './model';
+import { D, positive, type Quote } from './model';
 
-// Reviewed against the owner's Revolut X fee display and Revolut's published
-// rate card on 2026-09-27. A marketable limit can be a taker: budget BOTH legs at
-// the higher published rate. Realized P&L always uses actual source fees.
-export const FEE_SCHEDULE = Object.freeze({ maker: '0', taker: '0.0009', fixedEur: '0',
-  verifiedOn: '2026-09-27', source: 'https://www.revolut.com/en-DE/legal/crypto-exchange-fees/' });
-export function revolutCosts(observedAt: number): Costs {
-  return { buyFeeRate: FEE_SCHEDULE.taker, sellFeeRate: FEE_SCHEDULE.taker,
-    buyFixedEur: FEE_SCHEDULE.fixedEur, sellFixedEur: FEE_SCHEDULE.fixedEur,
-    // Buy execution is capped by its limit. Sell impact is measured below at
-    // the actual proposed size; missing depth never becomes zero slippage.
-    buySlippageRate: '0', sellSlippageRate: '0', depthRequired: true,
-    source: FEE_SCHEDULE.source, observedAt };
-}
+// Fees and gas are supplied by the approved wallet source, never a fixed rate.
 export function exitDepthValue(quote: Quote, quantity: string) {
   const depth = quote.depth;
   if (!depth?.bids.length || !depth.asks.length) throw new Error('order_book_missing');

@@ -1,48 +1,139 @@
-import type { BookLevel, DiscoveryEvent, KnownPair, MarketPair, MarketSnapshot, MarketTicker, PublicTrade, UniverseState } from './model';
+import { PAPER_CONFIG, type BookLevel, type DiscoveryEvent, type KnownPair, type MarketPair, type MarketSnapshot, type MarketTicker, type PublicTrade, type UniverseState } from './model';
 
-const ORIGIN = 'https://revx.revolut.com';
-const MAX_BYTES = 2 * 1024 * 1024;
 const MAX_PAIRS = 10_000;
-type ObjectValue = Record<string, unknown>;
-export type PublicMarketOptions = { fetcher?: typeof fetch; now?: () => number; timeoutMs?: number };
+const MAX_LEVELS = 192;
+const MAX_TRADES = 100;
 
+/** The adapter supplies market evidence only. It has no order or wallet-signing capability. */
+export type WalletDiscoverySource = {
+  universe(): Promise<MarketPair[]>;
+  market(pair: MarketPair): Promise<MarketSnapshot>;
+};
+export type PublicMarketOptions = { source?: WalletDiscoverySource; now?: () => number; timeoutMs?: number };
+type ObjectValue = Record<string, unknown>;
+class SourceReadError extends Error {}
+const invalid = (code: string): never => { throw new Error(code); };
 function object(value: unknown): ObjectValue {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('public_schema_invalid');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return invalid('public_wallet_market_schema_invalid');
   return value as ObjectValue;
 }
 function positive(value: unknown): number {
-  const parsed = typeof value === 'string' && /^(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(value) ? Number(value) : value;
-  if (typeof parsed !== 'number' || !Number.isFinite(parsed) || parsed <= 0) throw new Error('public_number_invalid');
-  return parsed;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return invalid('public_wallet_market_number_invalid');
+  return value;
 }
-function nonnegative(value: unknown): number {
-  if (value === '0' || value === 0) return 0;
-  return positive(value);
-}
+function nonnegative(value: unknown): number { return value === 0 ? 0 : positive(value); }
 function timestamp(value: unknown): number {
-  const parsed = positive(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 1_000_000_000_000) throw new Error('public_timestamp_invalid');
-  return parsed;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1_000_000_000_000) return invalid('public_wallet_market_timestamp_invalid');
+  return value;
 }
+function currentTime(options: PublicMarketOptions): number { return timestamp((options.now ?? Date.now)()); }
 export function normalizeSymbol(value: unknown): string {
-  if (typeof value !== 'string' || !/^[A-Z0-9]{1,32}[-/][A-Z0-9]{1,16}$/.test(value)) throw new Error('public_symbol_invalid');
+  if (typeof value !== 'string' || !/^[A-Z0-9]{1,32}[-/][A-Z0-9]{1,16}$/.test(value)) return invalid('public_symbol_invalid');
   return value.replace('/', '-');
 }
-
-export function parsePublicPairs(raw: unknown): MarketPair[] {
-  const entries = Object.entries(object(raw));
-  if (!entries.length || entries.length > MAX_PAIRS) throw new Error('public_universe_incomplete');
-  const found = new Set<string>();
-  return entries.map(([key, rawPair]) => {
-    const p = object(rawPair), symbol = normalizeSymbol(key);
-    if (symbol !== `${p.base}-${p.quote}` || found.has(symbol) || typeof p.status !== 'string' || !p.status.length || p.status.length > 32) {
-      throw new Error('public_pair_identity_invalid');
+function validatePair(raw: unknown): MarketPair {
+  const pair = object(raw), symbol = normalizeSymbol(pair.symbol);
+  if (symbol !== `${pair.base}-${pair.quote}` || typeof pair.status !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(pair.status)) {
+    return invalid('public_wallet_market_pair_invalid');
+  }
+  const result: MarketPair = { symbol, base: String(pair.base), quote: String(pair.quote), status: pair.status,
+    baseStep: positive(pair.baseStep), minOrderSize: positive(pair.minOrderSize), minOrderSizeQuote: nonnegative(pair.minOrderSizeQuote),
+    maxOrderSize: pair.maxOrderSize === null ? null : positive(pair.maxOrderSize) };
+  if (result.maxOrderSize !== null && result.maxOrderSize < result.minOrderSize) return invalid('public_wallet_market_pair_invalid');
+  return result;
+}
+function validatePairs(raw: unknown): MarketPair[] {
+  if (!Array.isArray(raw) || !raw.length || raw.length > MAX_PAIRS) return invalid('public_universe_incomplete');
+  const pairs = raw.map(validatePair), symbols = new Set(pairs.map(pair => pair.symbol));
+  if (symbols.size !== pairs.length) return invalid('public_wallet_market_pair_invalid');
+  return pairs.sort((a, b) => a.symbol.localeCompare(b.symbol));
+}
+function source(options: PublicMarketOptions): WalletDiscoverySource {
+  if (!options.source) throw new SourceReadError('public_wallet_market_source_missing');
+  if (typeof options.source.universe !== 'function' || typeof options.source.market !== 'function') {
+    throw new SourceReadError('public_wallet_market_source_invalid');
+  }
+  return options.source;
+}
+async function bounded<T>(read: () => Promise<T>, options: PublicMarketOptions): Promise<T> {
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(100, Math.min(options.timeoutMs!, 5000)) : 3000;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new SourceReadError('public_wallet_market_source_timeout')), timeoutMs); });
+  try { return await Promise.race([Promise.resolve().then(read), deadline]); }
+  catch (error) {
+    // Provider URLs, response bodies and credentials must never enter reports or the journal.
+    throw error instanceof SourceReadError ? error : new SourceReadError('public_wallet_market_source_unavailable');
+  } finally { if (timer) clearTimeout(timer); }
+}
+export async function readPublicUniverse(options: PublicMarketOptions = {}): Promise<MarketPair[]> {
+  const provider = source(options);
+  currentTime(options);
+  return validatePairs(await bounded(() => provider.universe(), options));
+}
+function levels(raw: unknown, descending: boolean): BookLevel[] {
+  if (!Array.isArray(raw) || raw.length > MAX_LEVELS) return invalid('public_wallet_market_book_invalid');
+  const prices = new Set<number>();
+  return raw.map(value => {
+    const level = object(value), price = positive(level.price), quantity = positive(level.quantity);
+    if (prices.has(price)) return invalid('public_wallet_market_book_duplicate_level');
+    prices.add(price);
+    return { price, quantity };
+  }).sort((a, b) => descending ? b.price - a.price : a.price - b.price);
+}
+function evidenceTime(raw: unknown, observedAt: number, maximumAge: number): number {
+  const at = timestamp(raw);
+  if (at > observedAt || observedAt - at > maximumAge) return invalid('public_wallet_market_timestamp_invalid');
+  return at;
+}
+function trades(raw: unknown, observedAt: number): PublicTrade[] {
+  if (!Array.isArray(raw) || raw.length > MAX_TRADES) return invalid('public_wallet_market_trades_invalid');
+  const byId = new Map<string, PublicTrade>();
+  for (const value of raw) {
+    const trade = object(value);
+    if (typeof trade.id !== 'string' || !/^[a-zA-Z0-9:_-]{1,128}$/.test(trade.id) || (trade.side !== 'buy' && trade.side !== 'sell')) {
+      return invalid('public_wallet_market_trade_identity_invalid');
     }
-    found.add(symbol);
-    return { symbol, base: String(p.base), quote: String(p.quote), status: p.status,
-      baseStep: positive(p.base_step), minOrderSize: positive(p.min_order_size), minOrderSizeQuote: nonnegative(p.min_order_size_quote),
-      maxOrderSize: p.max_order_size == null ? null : positive(p.max_order_size) };
-  }).sort((a, b) => a.symbol.localeCompare(b.symbol));
+    const result: PublicTrade = { id: trade.id, price: positive(trade.price), quantity: positive(trade.quantity), side: trade.side,
+      timestamp: evidenceTime(trade.timestamp, observedAt, PAPER_CONFIG.recentTradeWindowMs) };
+    const previous = byId.get(result.id);
+    if (previous && JSON.stringify(previous) !== JSON.stringify(result)) return invalid('public_wallet_market_trade_conflict');
+    byId.set(result.id, result);
+  }
+  return [...byId.values()].sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
+}
+function ticker(raw: unknown, observedAt: number): MarketTicker | null {
+  if (raw === null) return null;
+  const value = object(raw), bid = positive(value.bid), ask = positive(value.ask);
+  if (bid > ask) return invalid('public_wallet_market_ticker_invalid');
+  return { bid, ask, last: value.last === null ? null : positive(value.last),
+    quoteVolume24h: value.quoteVolume24h === null ? null : nonnegative(value.quoteVolume24h),
+    timestamp: evidenceTime(value.timestamp, observedAt, PAPER_CONFIG.maxSnapshotAgeMs) };
+}
+const SAFE_ISSUES = new Set(['public_wallet_market_evidence_incomplete', ...(['book', 'trades', 'ticker'] as const).flatMap(stage =>
+  ['public_request_timeout', 'public_rate_limited', 'public_source_unavailable', 'public_request_failed'].map(code => `${stage}:${code}`))]);
+function snapshot(raw: unknown, pair: MarketPair, now: number): MarketSnapshot {
+  const value = object(raw);
+  if (normalizeSymbol(value.symbol) !== pair.symbol || value.base !== pair.base || value.quote !== pair.quote) {
+    return invalid('public_wallet_market_identity_mismatch');
+  }
+  const observedAt = evidenceTime(value.observedAt, now, PAPER_CONFIG.maxSnapshotAgeMs);
+  const bids = levels(value.bids, true), asks = levels(value.asks, false);
+  const bookAt = value.bookAt === null ? null : evidenceTime(value.bookAt, observedAt, PAPER_CONFIG.maxSnapshotAgeMs);
+  if ((bookAt === null && (bids.length || asks.length)) || (bids.length && asks.length && bids[0].price > asks[0].price)) {
+    return invalid('public_wallet_market_book_invalid');
+  }
+  if (!Array.isArray(value.issues) || value.issues.length > 32 || value.issues.some(issue => typeof issue !== 'string') || typeof value.tradesComplete !== 'boolean') {
+    return invalid('public_wallet_market_schema_invalid');
+  }
+  const issues = [...new Set(value.issues.map(issue => typeof issue === 'string' && SAFE_ISSUES.has(issue) ? issue : 'public_wallet_market_evidence_incomplete'))];
+  const publicTrades = trades(value.trades, observedAt), marketTicker = ticker(value.ticker, observedAt);
+  if ((bookAt === null || !bids.length || !asks.length || !marketTicker || !publicTrades.length) && !issues.length) issues.push('public_wallet_market_evidence_incomplete');
+  return { symbol: pair.symbol, base: pair.base, quote: pair.quote, observedAt, bookAt, bids, asks, trades: publicTrades,
+    ticker: marketTicker, tradesComplete: value.tradesComplete, issues };
+}
+export async function readPublicMarket(pair: MarketPair, options: PublicMarketOptions = {}): Promise<MarketSnapshot> {
+  const provider = source(options), expected = validatePair(pair);
+  return snapshot(await bounded(() => provider.market({ ...expected }), options), expected, currentTime(options));
 }
 
 export function createUniverseState(): UniverseState { return { baselineAt: null, lastObservedAt: null, pairs: {} }; }
@@ -54,7 +145,7 @@ export function observeUniverse(state: UniverseState, pairs: MarketPair[], obser
   if (!Number.isSafeInteger(observedAt) || observedAt <= 0) return failure('observation_time_invalid');
   if (state.lastObservedAt !== null && observedAt <= state.lastObservedAt) return { state, newPairs: [], events: [] };
   const unique = new Set(pairs.map(p => p.symbol));
-  if (!pairs.length || unique.size !== pairs.length || pairs.some(p => p.symbol !== `${p.base}-${p.quote}`)) return failure('universe_incomplete');
+  if (!pairs.length || pairs.length > MAX_PAIRS || unique.size !== pairs.length || pairs.some(p => p.symbol !== `${p.base}-${p.quote}`)) return failure('universe_incomplete');
   // Do not turn a conspicuously partial response into a new baseline. Review large removals separately.
   const previousCount = Object.values(state.pairs).filter(p => p.lastSeenAt === state.lastObservedAt).length;
   if (previousCount >= 10 && pairs.length < previousCount * 0.8) return failure('universe_unexpected_shrink');
@@ -69,12 +160,11 @@ export function observeUniverse(state: UniverseState, pairs: MarketPair[], obser
     if (!previous && !baseline) {
       newPairs.push(known);
       events.push({ id: `first-seen:${pair.symbol}:${observedAt}`, kind: 'newly_observed', symbol: pair.symbol, observedAt, reasons: [],
-        evidence: { firstSeenAt: observedAt, launchAt: null, region: 'EEA', status: pair.status, base: pair.base, quote: pair.quote,
+        evidence: { firstSeenAt: observedAt, launchAt: null, status: pair.status, base: pair.base, quote: pair.quote,
           meaning: 'first_seen_by_this_monitor_not_token_launch_or_listing_time' } });
     }
   }
-  // A valid complete universe no longer advertising a pair cannot authorize another paper entry.
-  // Keep identity and first-seen history so a reappearance is not selected as a fresh discovery.
+  // Keep identity and first-seen history; reappearance cannot become a fresh discovery.
   for (const previous of Object.values(state.pairs)) {
     if (!unique.has(previous.symbol) && previous.status !== 'not_observed') {
       next.pairs[previous.symbol] = { ...previous, status: 'not_observed' };
@@ -86,113 +176,4 @@ export function observeUniverse(state: UniverseState, pairs: MarketPair[], obser
   if (baseline) events.push({ id: `baseline:${observedAt}`, kind: 'baseline_created', symbol: null, observedAt, reasons: [],
     evidence: { pairs: pairs.length, simulatedEntries: 0, launchAt: null } });
   return { state: next, newPairs, events };
-}
-
-type RequestQueue = { tail: Promise<unknown>; nextAt: number };
-const queues = new WeakMap<typeof fetch, RequestQueue>();
-async function readPublic(path: string, options: PublicMarketOptions): Promise<unknown> {
-  const fetcher = options.fetcher ?? fetch;
-  let queue = queues.get(fetcher);
-  if (!queue) { queue = { tail: Promise.resolve(), nextAt: 0 }; queues.set(fetcher, queue); }
-  const ownQueue = queue;
-  const run = ownQueue.tail.catch(() => undefined).then(async () => {
-    const wait = Math.max(0, ownQueue.nextAt - Date.now());
-    if (wait) await new Promise(resolve => setTimeout(resolve, wait));
-    ownQueue.nextAt = Date.now() + 1050;
-    const timeoutMs = Math.max(100, Math.min(options.timeoutMs ?? 3000, 5000));
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('public_request_timeout')); }, timeoutMs); });
-    const request = (async () => {
-      const response = await fetcher(`${ORIGIN}/api/${path}`, { method: 'GET', credentials: 'omit', redirect: 'error', cache: 'no-store',
-        headers: { Accept: 'application/json' }, signal: controller.signal });
-      if (!response.ok) throw new Error(response.status === 429 ? 'public_rate_limited' : 'public_request_failed');
-      const contentLength = Number(response.headers.get('content-length') ?? 0);
-      if (contentLength > MAX_BYTES) throw new Error('public_body_too_large');
-      if (!response.body) throw new Error('public_body_missing');
-      const reader = response.body.getReader(), chunks: Uint8Array[] = [];
-      let bytes = 0;
-      try {
-        while (true) {
-          const item = await reader.read();
-          if (item.done) break;
-          bytes += item.value.byteLength;
-          if (bytes > MAX_BYTES) { await reader.cancel(); throw new Error('public_body_too_large'); }
-          chunks.push(item.value);
-        }
-      } finally { reader.releaseLock(); }
-      const combined = new Uint8Array(bytes);
-      let offset = 0;
-      for (const chunk of chunks) { combined.set(chunk, offset); offset += chunk.length; }
-      try { return JSON.parse(new TextDecoder().decode(combined)) as unknown; }
-      catch { throw new Error('public_json_invalid'); }
-    })();
-    try { return await Promise.race([request, timeout]); }
-    finally { if (timer) clearTimeout(timer); }
-  });
-  ownQueue.tail = run;
-  return run;
-}
-
-export async function readPublicUniverse(options: PublicMarketOptions = {}): Promise<MarketPair[]> {
-  return parsePublicPairs(await readPublic('1.0/public/configuration/pairs?region=EEA', options));
-}
-function levels(value: unknown, descending: boolean): BookLevel[] {
-  if (!Array.isArray(value) || value.length > 192) throw new Error('public_book_invalid');
-  const prices = new Set<number>();
-  return value.map(raw => {
-    const level = object(raw), price = positive(level.price), quantity = positive(level.quantity);
-    if (prices.has(price)) throw new Error('public_book_duplicate_level');
-    prices.add(price);
-    return { price, quantity };
-  }).sort((a, b) => descending ? b.price - a.price : a.price - b.price);
-}
-export function parsePublicBook(raw: unknown): { bids: BookLevel[]; asks: BookLevel[]; bookAt: number } {
-  const root = object(raw), data = object(root.data), meta = object(root.metadata);
-  if (meta.region !== 'EEA') throw new Error('public_region_mismatch');
-  return { bids: levels(data.bids, true), asks: levels(data.asks, false), bookAt: timestamp(meta.timestamp) };
-}
-export function parsePublicTrades(raw: unknown, symbol: string): { trades: PublicTrade[]; complete: boolean } {
-  const root = object(raw), meta = object(root.metadata);
-  if (!Array.isArray(root.data) || root.data.length > 100) throw new Error('public_trades_invalid');
-  timestamp(meta.timestamp);
-  const byId = new Map<string, PublicTrade>();
-  for (const item of root.data) {
-    const trade = object(item);
-    if (trade.region !== 'EEA' || normalizeSymbol(trade.symbol) !== symbol || typeof trade.id !== 'string' || !trade.id.length || trade.id.length > 128
-      || (trade.side !== 'buy' && trade.side !== 'sell')) throw new Error('public_trade_identity_invalid');
-    const parsed: PublicTrade = { id: trade.id, price: positive(trade.price), quantity: positive(trade.quantity), timestamp: timestamp(trade.timestamp), side: trade.side };
-    if (byId.has(parsed.id) && JSON.stringify(byId.get(parsed.id)) !== JSON.stringify(parsed)) throw new Error('public_trade_conflict');
-    byId.set(parsed.id, parsed);
-  }
-  return { trades: [...byId.values()].sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id)), complete: !meta.next_cursor };
-}
-export function parsePublicTicker(raw: unknown, symbol: string): MarketTicker {
-  const root = object(raw), meta = object(root.metadata);
-  if (!Array.isArray(root.data) || root.data.length !== 1) throw new Error('public_ticker_invalid');
-  const ticker = object(root.data[0]);
-  if (normalizeSymbol(ticker.symbol) !== symbol || ticker.region !== 'EEA') throw new Error('public_ticker_identity_invalid');
-  return { bid: positive(ticker.bid), ask: positive(ticker.ask), last: ticker.last_price == null ? null : positive(ticker.last_price),
-    quoteVolume24h: ticker.quote_volume_24h == null ? null : nonnegative(ticker.quote_volume_24h), timestamp: timestamp(meta.timestamp) };
-}
-function safeIssue(error: unknown): string {
-  return error instanceof Error && /^public_[a-z_]+$/.test(error.message) ? error.message : 'public_source_unavailable';
-}
-export async function readPublicMarket(pair: MarketPair, options: PublicMarketOptions = {}): Promise<MarketSnapshot> {
-  const symbol = normalizeSymbol(pair.symbol);
-  if (symbol !== `${pair.base}-${pair.quote}`) throw new Error('public_pair_identity_invalid');
-  const now = options.now ?? Date.now, startedAt = now();
-  const snapshot: MarketSnapshot = { symbol, base: pair.base, quote: pair.quote, observedAt: startedAt,
-    bookAt: null, bids: [], asks: [], trades: [], ticker: null, tradesComplete: false, issues: [] };
-  // Serial public GETs only. No credentials, private endpoints, trading imports, pagination, or retries.
-  try { Object.assign(snapshot, parsePublicBook(await readPublic(`2.0/public/order-book/${symbol}?limit=50&region=EEA`, options))); }
-  catch (error) { snapshot.issues.push(`book:${safeIssue(error)}`); }
-  try {
-    const result = parsePublicTrades(await readPublic(`1.0/public/trades/all?symbol=${symbol}&start_date=${startedAt - 300_000}&end_date=${startedAt}&limit=100&region=EEA`, options), symbol);
-    snapshot.trades = result.trades; snapshot.tradesComplete = result.complete;
-  } catch (error) { snapshot.issues.push(`trades:${safeIssue(error)}`); }
-  try { snapshot.ticker = parsePublicTicker(await readPublic(`1.0/public/tickers?symbols=${symbol}&region=EEA`, options), symbol); }
-  catch (error) { snapshot.issues.push(`ticker:${safeIssue(error)}`); }
-  snapshot.observedAt = now();
-  return snapshot;
 }
