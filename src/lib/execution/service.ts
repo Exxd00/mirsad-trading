@@ -10,6 +10,7 @@ import { evaluateRisk } from './v1/risk';
 import { buildReport } from './v1/reporting';
 import type { AccountingEvidence } from './v1/accounting';
 import { accountEntryBlockers } from './v1/readiness';
+import { strategyEntrySelection } from '../wallet/selection-service';
 
 type Venue = NonNullable<Awaited<ReturnType<typeof connectedVenue>>>;
 const reportErrorCodes = new Set(['account_mismatch', 'source_balance_missing', 'source_balance_mismatch',
@@ -71,7 +72,8 @@ export async function executionReport() {
     try { performance = buildReport(live, now); } catch (error) { failed('performance', error); }
   }
   const orderBlock = walletOrderBlock();
-  const blockers = [...new Set([...(orderBlock ? [orderBlock] : []), ...readErrors.map(error => error.code),
+  const selection = await strategyEntrySelection();
+  const blockers = [...new Set([...(orderBlock ? [orderBlock] : []), ...(selection.reason ? [selection.reason] : []), ...readErrors.map(error => error.code),
     ...(!venue && !readErrors.some(error => error.stage === 'connection') ? ['wallet_execution_not_configured'] : []),
     ...(live ? [...accountEntryBlockers(live, state?.risk ?? { reduced: false, dailyHaltDate: null }, now),
     ...(!capabilities || !executionCapabilitiesReady(capabilities) ? ['execution_capabilities_missing'] : []),
@@ -87,6 +89,7 @@ export async function executionReport() {
     account_read_method: accountReadMethod,
     adapter_configured: venue !== null, account_source_configured: venue !== null, account_connected: connected,
     execution_ready: ready, order_api_connected: ready, signal_configured: true, capabilities,
+    market_selection: { mode: selection.mode, revision: selection.revision, symbols: selection.symbols },
     reason: connected ? ready ? 'configured' : 'execution_data_incomplete' : readErrors[0]?.code ?? 'account_connection_missing',
     protection: { mode: CONFIG.protectionMode, interval_seconds: CONFIG.protectionPollSeconds,
       armed: state?.executionArmed === true, heartbeat, heartbeat_fresh: heartbeatFresh,

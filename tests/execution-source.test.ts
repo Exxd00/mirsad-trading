@@ -6,6 +6,10 @@ import { SqlJournal, initialState } from '../src/lib/execution/v1/journal';
 import { CONFIG, decimal, type BuyIntent } from '../src/lib/execution/v1/model';
 import { ConnectedWalletVenue } from '../src/lib/execution/v1/wallet-venue';
 import { syncSourceArchive } from '../src/lib/execution/v1/source-archive';
+import { refreshSourceAccounting } from '../src/lib/execution/v1/account-evidence';
+import { installWalletExecutionSource } from '../src/lib/wallet/execution-connection';
+import { saveOwnerManualWatchlist, saveOwnerStrategySelection, strategyEntrySelection } from '../src/lib/wallet/selection-service';
+import { STRATEGY_SELECTION_KEY } from '../src/lib/wallet/strategy-selection';
 import type { ReportedFill } from '../src/lib/execution/v1/source-model';
 import { planBuy } from '../src/lib/execution/v1/planner';
 import { evaluateRisk } from '../src/lib/execution/v1/risk';
@@ -30,8 +34,9 @@ function setup(journal: SqlJournal) {
   getTransactionsPage: vi.fn(async () => ({ transactions: [] as SourceTransaction[], nextCursor: null as string | null, sourceAt: new Date(atMs).toISOString() })),
   getFillsForOrders: vi.fn(async () => ({ fills: [] as ReportedFill[], truncated: false })),
   submitOrder: vi.fn(), cancelOrder: vi.fn() };
-  return { client, venue: new ConnectedWalletVenue({ ...testWalletSource(), client, journal, instruments: async () => [], candles: async () => [],
-    market: async () => { throw new Error('unused'); } }, () => NOW) };
+  const source = { ...testWalletSource(), client, journal, instruments: async () => [], candles: async () => [],
+    market: async () => { throw new Error('unused'); } };
+  return { client, source, venue: new ConnectedWalletVenue(source, () => NOW) };
 }
 const transaction = (): SourceTransaction => ({ id: sourceId, accountId: 'metamask-strategy-v1', type: 'receive', status: 'pending',
   createdAt: new Date(atMs - 1000).toISOString(), processedAt: null, orderId: null,
@@ -41,7 +46,93 @@ const transaction = (): SourceTransaction => ({ id: sourceId, accountId: 'metama
 beforeEach(async () => {
   await closeDatabase(); vi.stubEnv('DATABASE_URL', ''); vi.stubEnv('VERCEL', ''); vi.stubEnv('NODE_ENV', 'test'); vi.stubEnv('LOCAL_DATABASE_PATH', 'memory://');
 });
-afterEach(async () => { await closeDatabase(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+afterEach(async () => { installWalletExecutionSource(null); await closeDatabase(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+async function authorizedBuy(journal: SqlJournal) {
+  vi.stubEnv('MIRSAD_ORDER_CONNECTION', 'metamask');
+  vi.stubEnv('EXECUTION_DEADLINE_URL', 'https://isolated-timer.invalid/schedule');
+  vi.stubEnv('EXECUTION_SCHEDULER_TOKEN', 'isolated-scheduler-only');
+  const timer = vi.fn(async (input: string | URL | Request) => {
+    if (String(input) !== 'https://isolated-timer.invalid/watch-protection') throw new Error('Unexpected isolated scheduler route');
+    return Response.json({ scheduled: true, mode: 'mirsad', intervalSeconds: 10 });
+  });
+  vi.stubGlobal('fetch', timer);
+  const base = setup(journal), client = { ...base.client,
+    getBalances: vi.fn(async () => [{ accountId: CONFIG.accountId as 'metamask-strategy-v1', currency: 'EUR',
+      total: '1000', available: '1000', reserved: '0', observedAt: new Date(atMs).toISOString() }]),
+    getTransaction: vi.fn(async () => { throw new Error('No source transactions exist in the isolated fixture'); }),
+    getValuationCandles: vi.fn(async () => []),
+    getOrderBook: vi.fn(async (symbol: string) => ({ symbol, sourceAt: atMs, readAt: atMs,
+      bids: [{ price: '99.99', quantity: '10' }], asks: [{ price: '100', quantity: '10' }] })),
+    submitOrder: vi.fn(async (input: { clientOrderId: string; symbol: string; quantity: string; limitPrice?: string }): Promise<ReportedOrder> => ({
+      id: sourceId, accountId: 'metamask-strategy-v1', clientOrderId: input.clientOrderId, symbol: input.symbol,
+      side: 'buy', type: 'limit', quantity: input.quantity, filledQuantity: '0', price: input.limitPrice, status: 'new',
+      createdAt: new Date(atMs).toISOString(), updatedAt: new Date(atMs).toISOString() })),
+  };
+  const source = { ...base.source, client, instruments: async () => [{ symbol: 'AAA-EUR', base: 'AAA', quote: 'EUR',
+    baseStep: '0.001', quoteStep: '0.01', minOrderSize: '0.001', minOrderSizeQuote: '1', maxOrderSize: '100',
+    status: 'active' as const, region: 'EEA', observedAt: new Date(atMs).toISOString(), costs: testWalletCosts() }] };
+  installWalletExecutionSource(source);
+  await saveOwnerStrategySelection('opportunities', null);
+  const prefetched = await strategyEntrySelection(() => NOW);
+  expect(prefetched).toMatchObject({ mode: 'opportunities', symbols: ['AAA-EUR', 'ETH-EUR', 'SOL-EUR'], reason: null });
+  await refreshSourceAccounting(client, journal, () => NOW);
+  const venue = new ConnectedWalletVenue(source, () => NOW), snapshot = await venue.account();
+  expect(snapshot.dataBlockers).toEqual([]); expect(snapshot.tradeHistoryComplete).toBe(true);
+  const i = (await venue.instruments())[0], q = (await venue.quotes(['AAA-EUR']))[0];
+  const planned = planBuy(snapshot, signal(), i, q, evaluateRisk(initialState().risk, [], snapshot.equityHistory, true, NOW), NOW).intent;
+  if (!planned) throw new Error('Expected a fully eligible isolated buy');
+  const lease = (await journal.acquire(CONFIG.accountId))!;
+  await journal.save(lease, { ...initialState(), entriesEnabled: true, executionArmed: true, walletIdentity: testWalletIdentity() });
+  await journal.saveProtectionHeartbeat(lease, { at: NOW, status: 'idle', managedPositions: 0, checkedPositions: 0, errors: [] });
+  await journal.begin(lease, planned, NOW);
+  return { client, source, venue, lease, planned, prefetched, timer };
+}
+
+describe('current owner opportunity selection immediately before the financial write', () => {
+  it('allows one explicitly authorized opportunity buy through real accounting, risk, heartbeat and lease guards', async () => {
+    const j = new SqlJournal(), current = await authorizedBuy(j);
+    expect(current.planned).toMatchObject({ allocation: '0.10', budgetEur: '100', expiresAt: NOW + 60 });
+    expect(await current.venue.submit(current.planned, current.lease)).toMatchObject({ status: 'open', id: sourceId, clientKey: current.planned.key });
+    await expect(current.venue.submit(current.planned, current.lease)).rejects.toThrow('source_write_already_attempted');
+    expect(current.client.submitOrder).toHaveBeenCalledOnce(); expect(current.timer).toHaveBeenCalledOnce();
+    expect(await j.sourceWrites(current.lease)).toEqual([expect.objectContaining({ kind: 'submit', settledAt: NOW })]);
+    await j.release(current.lease);
+  });
+  it('rejects a prefetched opportunity after the owner narrows selection before the new account lease', async () => {
+    const j = new SqlJournal(), current = await authorizedBuy(j);
+    expect(current.prefetched.symbols).toContain(current.planned.symbol); await j.release(current.lease);
+    await saveOwnerManualWatchlist(['ETH-EUR']); await saveOwnerStrategySelection('manual', 1);
+    const lease = (await j.acquire(CONFIG.accountId))!;
+    await expect(current.venue.submit(current.planned, lease)).rejects.toThrow('wallet_strategy_selection_changed');
+    expect(current.client.submitOrder).not.toHaveBeenCalled(); expect(current.timer).not.toHaveBeenCalled();
+    expect(await j.sourceWrites(lease)).toEqual([]); expect(await j.decision(lease, current.planned.key)).toMatchObject({ status: 'absent' });
+    // The runner's conservative catch must retain this proven pre-send absence.
+    await j.result(lease, current.planned.key, 'unknown', null);
+    expect(await j.decision(lease, current.planned.key)).toMatchObject({ status: 'absent' });
+    expect(await current.venue.lookup(current.planned.key, lease)).toEqual({ order: null, authoritative: true });
+    await j.release(lease);
+  });
+  it('rejects corrupt selection mode before creating a provider write claim', async () => {
+    const j = new SqlJournal(), current = await authorizedBuy(j); await j.release(current.lease);
+    await query("UPDATE app_settings SET value=jsonb_set(value,'{policy,mode}',to_jsonb('untrusted-mode'::text)) WHERE key=$1", [STRATEGY_SELECTION_KEY]);
+    const lease = (await j.acquire(CONFIG.accountId))!;
+    await expect(current.venue.submit(current.planned, lease)).rejects.toThrow('wallet_strategy_selection_invalid');
+    expect(current.client.submitOrder).not.toHaveBeenCalled(); expect(await j.sourceWrites(lease)).toEqual([]); await j.release(lease);
+  });
+  it('does not substitute the venue snapshot for a currently installed and verified opportunity source', async () => {
+    const j = new SqlJournal(), current = await authorizedBuy(j); installWalletExecutionSource(null);
+    await expect(current.venue.submit(current.planned, current.lease)).rejects.toThrow('wallet_opportunity_universe_unavailable');
+    expect(current.client.submitOrder).not.toHaveBeenCalled(); expect(await j.sourceWrites(current.lease)).toEqual([]); await j.release(current.lease);
+  });
+  it('preserves the actual stale-protection error once the opportunity selection is genuinely authorized', async () => {
+    const j = new SqlJournal(), current = await authorizedBuy(j);
+    await j.saveProtectionHeartbeat(current.lease, { at: NOW - CONFIG.protectionHeartbeatMaxAgeSeconds - 1,
+      status: 'idle', managedPositions: 0, checkedPositions: 0, errors: [] });
+    await expect(current.venue.submit(current.planned, current.lease)).rejects.toThrow('protection_monitor_stale');
+    expect(current.client.submitOrder).not.toHaveBeenCalled(); expect(await j.sourceWrites(current.lease)).toEqual([]); await j.release(current.lease);
+  });
+});
 
 describe('source identity attached to the durable execution intent', () => {
   it('allocates a UUID once and retains it across duplicate begins, unknown results, and journal restarts', async () => {

@@ -87,7 +87,10 @@ describe('scoped native account integration and authenticated endpoints', () => 
   it('preserves exact stored balances, old levels and source timestamps without adopting holdings', async () => {
     const account = { ...storedAccount(), updatedAt: '2020-01-01T00:00:00Z', positions: [{ id: 'old', symbol: 'BTC-EUR', quantity: '0.02', entryPrice: '50000', stopPrice: '49000', targetPrice: '52000' }] };
     const original = structuredClone(account);
-    db.query.mockImplementation(async (_sql, params) => ({ rows: params?.[0] === EDUCATION_STORAGE_KEY ? [{ value: account }] : [], rowCount: 1 }));
+    db.query.mockImplementation(async (_sql, params) => {
+      const rows = params?.[0] === EDUCATION_STORAGE_KEY ? [{ value: account }] : [];
+      return { rows, rowCount: rows.length };
+    });
     expect(await readEducationAccount()).toMatchObject(account);
     // The owner selected the connected dashboard account. The legacy saved
     // record is preserved but must not masquerade as that connection.
@@ -115,9 +118,12 @@ describe('scoped native account integration and authenticated endpoints', () => 
   it('keeps stored monitoring visible when source validation fails, without changing execution or inventing balances', async () => {
     const heartbeat = { at: Math.floor(Date.now() / 1000), status: 'blocked', managedPositions: 1, errors: ['source_unavailable'] };
     const savedReport = { readAt: 100, sourceAt: 99, status: 'source_read' };
-    db.query.mockImplementation(async (_sql, params) => ({ rows: params?.[0]?.endsWith(':state')
-      ? [{ value: { entriesEnabled: true, executionArmed: true, lastSuccessfulReport: savedReport } }]
-      : params?.[0]?.endsWith(':protection_heartbeat') ? [{ value: heartbeat }] : [], rowCount: 1 }));
+    db.query.mockImplementation(async (_sql, params) => {
+      const rows = params?.[0]?.endsWith(':state')
+        ? [{ value: { entriesEnabled: true, executionArmed: true, lastSuccessfulReport: savedReport } }]
+        : params?.[0]?.endsWith(':protection_heartbeat') ? [{ value: heartbeat }] : [];
+      return { rows, rowCount: rows.length };
+    });
     host.connectedVenue.mockResolvedValue(new ConnectedWalletVenue({ ...testWalletSource(),
       client: { getBalances: async () => { throw new Error('source_balance_mismatch'); }, getOrders: async () => [] },
       instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [],

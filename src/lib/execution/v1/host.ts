@@ -9,25 +9,17 @@ import { ConnectedWalletVenue } from './wallet-venue';
 import { protectionCycle } from './managed-protection';
 import { scheduleProtectionWatch } from './scheduler';
 import { accountEntryBlockers } from './readiness';
-import { walletBindingIdentity, walletBindingIssue, walletExecutionSource } from '../../wallet/execution-connection';
+import { walletBindingIdentity, walletExecutionSource } from '../../wallet/execution-connection';
 import { walletOrderBlock } from '../../order-connection';
-import { configuredWatchlist } from '../../services';
+import { strategyEntrySelection } from '../../wallet/selection-service';
 export const journal = new SqlJournal();
 export async function connectedVenue(): Promise<ConnectedWalletVenue | null> {
   const source = walletExecutionSource();
   return source ? new ConnectedWalletVenue({ ...source, journal }) : null;
 }
-export async function configuredSymbols(now = Math.floor(Date.now() / 1000)) {
-  const source = walletExecutionSource();
-  if (!source || walletBindingIssue(source.binding, now)) return [];
-  const approved = source.binding!.markets.map(m => m.symbol);
-  const restricted: readonly string[] = CONFIG.symbols;
-  const selected = await configuredWatchlist();
-  if (!Array.isArray(selected)) return [];
-  // Approval and config can restrict the owner's selection, never expand it.
-  // A missing or explicitly empty watchlist authorizes no new entries.
-  return [...new Set(selected.filter((s): s is string => typeof s === 'string' && approved.includes(s)
-    && (!restricted.length || restricted.includes(s))))];
+export async function configuredSymbols(now?: number) {
+  if (!walletExecutionSource()) return [];
+  return (await strategyEntrySelection(now === undefined ? undefined : () => now)).symbols;
 }
 const unavailable = () => ({ status: 'blocked', reason: 'wallet_execution_transport_missing',
   blocks: [{ reason: 'wallet_market_mapping_missing' }, { reason: 'wallet_limit_cancellation_unsupported' },
@@ -61,6 +53,8 @@ export async function entrySwitch(enabled: boolean) {
     const riskLease = await journal.acquire(CONFIG.accountId);
     if (!riskLease) return { status: 'busy' };
     try {
+      const selection = await strategyEntrySelection();
+      if (selection.reason) return { status: 'blocked', reason: selection.reason, entriesEnabled: false, orderApiConnected: true };
       const live = await port.account(), state = await journal.state(riskLease);
       const blockers = accountEntryBlockers(live, state.risk, Math.floor(Date.now() / 1000));
       if (blockers.length) return { status: 'blocked', reason: blockers[0], entriesEnabled: false, orderApiConnected: true };
@@ -72,6 +66,10 @@ export async function entrySwitch(enabled: boolean) {
   const lease = await journal.acquire(CONFIG.accountId);
   if (!lease) return { status: 'busy' };
   try {
+    if (enabled) {
+      const selection = await strategyEntrySelection();
+      if (selection.reason) return { status: 'blocked', reason: selection.reason, entriesEnabled: false, orderApiConnected: true };
+    }
     const state = await journal.state(lease); state.entriesEnabled = enabled;
     if (enabled) state.executionArmed = true;
     await journal.save(lease, state);
@@ -93,6 +91,8 @@ export async function refreshReadiness() {
     try {
       const state = await journal.state(lease);
       const blockers = accountEntryBlockers(snapshot, state.risk, Math.floor(Date.now() / 1000));
+      const selection = await strategyEntrySelection();
+      if (selection.reason) blockers.push(selection.reason);
       const binding = walletExecutionSource()?.binding;
       if (state.walletIdentity && binding && state.walletIdentity !== walletBindingIdentity(binding)) blockers.push('wallet_account_changed');
       if (!capabilitiesReady) blockers.push('execution_capabilities_missing');

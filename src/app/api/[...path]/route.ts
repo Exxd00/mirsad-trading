@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { AuthError, changePassword, clearLoginCsrfCookie, clearSessionCookie, issueLoginCsrf, login, logout, refreshSessionCookie, requireMutation, requireSession, sessionCookie } from '@/lib/auth';
 import { json, failure, body } from '@/lib/http';
 import { AppError } from '@/lib/errors';
-import { dashboard, instruments, market, setSetting, settings } from '@/lib/services';
+import { dashboard, instruments, market, settings } from '@/lib/services';
+import { saveOwnerManualWatchlist } from '@/lib/wallet/selection-service';
 import { monitorPublicKey } from '@/lib/automation-report';
 
 export const dynamic='force-dynamic';
@@ -45,7 +46,7 @@ export async function POST(request:Request,ctx:Context){
   switch(path){
    case 'auth/logout':{await logout(request);const response=json({ok:true});response.headers.append('Set-Cookie',clearSessionCookie());return response;}
    case 'auth/password':{const p=z.object({currentPassword:z.string().max(1024),newPassword:z.string().min(12).max(1024)}).safeParse(data);if(!p.success)throw new AppError('INVALID_PASSWORD',400,'كلمة المرور الجديدة يجب أن تكون 12 حرفاً على الأقل.');await changePassword(request,p.data.currentPassword,p.data.newPassword);const response=json({ok:true});response.headers.append('Set-Cookie',clearSessionCookie());return response;}
-   case 'watchlist':{const p=z.object({symbols:z.array(z.string()).max(30)}).safeParse(data);if(!p.success)throw new AppError('INVALID_WATCHLIST',400,'قائمة متابعة غير صالحة.');const available=await instruments();if(p.data.symbols.some(s=>!available.some(i=>i.symbol===s)))throw new AppError('INVALID_INSTRUMENT',400,'إحدى الأدوات غير مدعومة.');await setSetting('wallet:strategy:watchlist',[...new Set(p.data.symbols)]);return json({ok:true});}
+   case 'watchlist':{const p=z.object({symbols:z.array(z.string()).max(30)}).safeParse(data);if(!p.success)throw new AppError('INVALID_WATCHLIST',400,'قائمة متابعة غير صالحة.');const available=await instruments();if(p.data.symbols.some(s=>!available.some(i=>i.symbol===s)))throw new AppError('INVALID_INSTRUMENT',400,'إحدى الأدوات غير مدعومة.');return json(await saveOwnerManualWatchlist(p.data.symbols));}
    default:return json({error:'المسار غير موجود.'},404);
   }
  }catch(error){return failure(error);}

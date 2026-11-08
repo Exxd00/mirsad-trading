@@ -3,12 +3,14 @@ import { redirect } from 'next/navigation';
 import { pageSession } from '@/lib/page-session';
 import { orderConnection } from '@/lib/order-connection';
 import { WalletConnection } from '@/components/WalletConnection';
+import { StrategySelectionControl } from '@/components/StrategySelectionControl';
 import { walletStrategySetup } from '@/lib/wallet/strategy-setup';
 import styles from '../automation/page.module.css';
 
 export const dynamic = 'force-dynamic';
 export default async function WalletPage() {
-  if (!await pageSession()) redirect('/login');
+  const session = await pageSession();
+  if (!session) redirect('/login');
   const mode = orderConnection();
   let setup: Awaited<ReturnType<typeof walletStrategySetup>> | null = null;
   try { setup = await walletStrategySetup(); } catch { /* Unknown configuration must not look ready. */ }
@@ -24,12 +26,16 @@ export default async function WalletPage() {
       {setup ? <div className={styles.reportDetails}>
         <p>قواعد الاستراتيجية محفوظة: حجم الدخول {Number(setup.sizing.allocation) * 100}% من المتاح، والمخفض {Number(setup.sizing.reducedAllocation) * 100}% وفق الشروط.</p>
         <dl className={styles.details}>
-          <dt>أسواق المحفظة المختارة</dt><dd>{setup.selectedMarkets.status === 'invalid' ? 'القائمة المحفوظة تحتاج مراجعة'
+          <dt>اختيار الأسواق</dt><dd>{setup.marketSelection.mode === 'opportunities' ? 'تلقائي حسب الفرص ضمن الأسواق المتحقق منها'
+            : setup.marketSelection.mode === 'invalid' ? 'طريقة الاختيار المحفوظة تحتاج مراجعة' : 'القائمة اليدوية'}</dd>
+          {setup.marketSelection.mode !== 'opportunities' && <><dt>أسواق القائمة اليدوية</dt><dd>{setup.selectedMarkets.status === 'invalid' ? 'القائمة المحفوظة تحتاج مراجعة'
             : setup.selectedMarkets.symbols.length ? setup.selectedMarkets.symbols.join('، ') : 'لا توجد أسواق مختارة؛ الدخول الجديد متوقف'}</dd>
+          </>}
           <dt>إعداد تنفيذ المحفظة</dt><dd>{setup.profile.status === 'configuration-only' ? 'إعداد محفوظ؛ التفويض والتنفيذ يحتاجان التحقق'
             : setup.profile.status === 'invalid' ? 'الإعداد المحفوظ يحتاج تصحيحًا' : 'لم يُحفظ إعداد التنفيذ بعد'}</dd>
           <dt>وصلة التنفيذ الخادمية</dt><dd>{setup.sourceInstallation === 'absent' ? 'غير موصولة بمحرك الاستراتيجية' : 'مركبة؛ الجاهزية تُراجع في صفحة المحرك'}</dd>
         </dl>
+        <StrategySelectionControl mode={setup.marketSelection.mode} revision={setup.marketSelection.revision} csrfToken={session.csrfToken} />
         {setup.previousMarkets.symbols.length > 0 && <p className={styles.sectionNote}>قائمة الحساب السابق للمراجعة: <bdi>{setup.previousMarkets.symbols.join('، ')}</bdi>. لا تُعتمد تلقائيًا قبل مطابقة أصول المحفظة.</p>}
         <p className={styles.sectionNote}>وقت قراءة الإعداد: <bdi>{new Date(setup.readAt * 1000).toISOString()}</bdi>. هذه قراءة للإعداد المحفوظ؛ راجع <Link href="/automation">حالة المحرك والحماية</Link> للتحقق من جاهزية التنفيذ.</p>
       </div> : <p role="alert" className={styles.message}>تعذرت قراءة إعداد المحرك. حالة التنفيذ غير مؤكدة؛ أعد تحديث الصفحة.</p>}

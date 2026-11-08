@@ -5,6 +5,8 @@ import { configuredSymbols } from '../src/lib/execution/v1/host';
 import { installWalletExecutionSource } from '../src/lib/wallet/execution-connection';
 import { testWalletSource } from './execution-fixtures';
 import { setSetting } from '../src/lib/services';
+import { saveOwnerStrategySelection, strategyEntrySelection } from '../src/lib/wallet/selection-service';
+import { STRATEGY_SELECTION_KEY } from '../src/lib/wallet/strategy-selection';
 import { CONFIG, type Intent, type SourceOrder } from '../src/lib/execution/v1/model';
 import { cycle } from '../src/lib/execution/v1/runner';
 import { cancelDeadline, type CancellationPort } from '../src/lib/execution/v1/deadline';
@@ -35,6 +37,18 @@ async function seed(j: SqlJournal, symbols = ['AAA-EUR'], entriesEnabled = true)
   for (const symbol of ['AAA-EUR', 'BBB-EUR', 'CCC-EUR']) state.indicators[symbol] = { ...emptyIndicators(), count: 1000, lastCloseTime: NOW, ema20: '100', ema50: '99', ema200: '90' };
   state.pendingSignals = symbols.map(s => signal(s)); await j.save(lease, state); await j.release(lease);
 }
+function installOpportunityUniverse() {
+  const base = testWalletSource();
+  base.binding.markets = ['AAA-EUR', 'BBB-EUR', 'CCC-EUR'].map((symbol, i) => ({ ...base.binding.markets[i], symbol }));
+  const source = { ...base, verifyGrant: vi.fn(async () => true), client: { getBalances: async () => [], getOrders: async () => [] },
+    instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [] };
+  installWalletExecutionSource(source); return source;
+}
+async function corruptSelectionMode() {
+  await query('INSERT INTO app_settings(key,value) VALUES($1,$2::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value',
+    [STRATEGY_SELECTION_KEY, JSON.stringify({ storageVersion: 1, revision: 1, updatedAt: new Date(NOW * 1000).toISOString(),
+      policy: { schemaVersion: 1, accountId: CONFIG.accountId, strategyVersion: CONFIG.strategyVersion, mode: 'untrusted-mode' } })]);
+}
 beforeEach(async () => {
   await closeDatabase(); vi.stubEnv('DATABASE_URL', ''); vi.stubEnv('VERCEL', ''); vi.stubEnv('NODE_ENV', 'test'); vi.stubEnv('LOCAL_DATABASE_PATH', 'memory://');
 });
@@ -64,8 +78,60 @@ describe('durable SQL ownership and orchestration', () => {
       instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [] });
     await setSetting('watchlist', ['ETH-EUR']);
     expect(await configuredSymbols(NOW)).toEqual([]);
+    await saveOwnerStrategySelection('manual', null);
+    expect(await configuredSymbols(NOW)).toEqual([]);
     await setSetting('wallet:strategy:watchlist', []);
     expect(await configuredSymbols(NOW)).toEqual([]);
+  });
+  it('expands only an explicit opportunities policy to the verified mapped universe, bounded by CONFIG restrictions', async () => {
+    const source = installOpportunityUniverse();
+    await setSetting('wallet:strategy:watchlist', []); await setSetting('watchlist', ['OLD-EUR']);
+    await setSetting('discovery:wallet:v1:cohort', ['PAPER-EUR']);
+    expect(await configuredSymbols(NOW)).toEqual([]);
+    await saveOwnerStrategySelection('opportunities', null);
+    expect(await configuredSymbols(NOW)).toEqual(['AAA-EUR', 'BBB-EUR', 'CCC-EUR']);
+    const symbols = CONFIG.symbols as string[], original = [...symbols];
+    try {
+      symbols.splice(0, symbols.length, 'BBB-EUR', 'PAPER-EUR');
+      expect(await configuredSymbols(NOW)).toEqual(['BBB-EUR']);
+      source.verifyGrant.mockResolvedValue(false);
+      expect(await configuredSymbols(NOW)).toEqual([]);
+    } finally { symbols.splice(0, symbols.length, ...original); }
+    expect((await query('SELECT value FROM app_settings WHERE key=$1', ['wallet:strategy:watchlist'])).rows).toEqual([{ value: [] }]);
+  });
+  it('keeps existing signal eligibility, cost ranking, sizing and one-entry cancellation ordering in opportunities mode', async () => {
+    installOpportunityUniverse(); await saveOwnerStrategySelection('opportunities', null);
+    await setSetting('wallet:strategy:watchlist', []);
+    const j = new SqlJournal(); await seed(j, ['AAA-EUR', 'BBB-EUR', 'CCC-EUR', 'PAPER-EUR']);
+    const { port } = makePort();
+    vi.mocked(port.instruments).mockImplementation(async () => ['AAA-EUR', 'BBB-EUR', 'CCC-EUR', 'PAPER-EUR'].map(symbol => {
+      const item = instrument(symbol);
+      return { ...item, costs: { ...item.costs!,
+        buyFeeRate: symbol === 'BBB-EUR' ? '0.0005' : symbol === 'CCC-EUR' ? '0.003' : '0.001',
+        sellFeeRate: symbol === 'BBB-EUR' ? '0.0005' : symbol === 'CCC-EUR' ? '0.003' : '0.001' } };
+    }));
+    const result = await cycle(port, j, await configuredSymbols(NOW), () => NOW);
+    expect(result).toMatchObject({ status: 'submitted', intent: { side: 'buy', symbol: 'BBB-EUR', type: 'limit',
+      allocation: '0.10', budgetEur: '100', expiresAt: NOW + 60, stopFraction: '0.02', targetFraction: '0.04' } });
+    expect(result.blocks).toContainEqual({ symbol: 'CCC-EUR', reason: 'round_trip_cost_limit' });
+    expect(vi.mocked(port.candles).mock.calls.map(([symbol]) => symbol)).toEqual(['AAA-EUR', 'BBB-EUR', 'CCC-EUR']);
+    expect(port.submit).toHaveBeenCalledOnce(); expect(port.armCancellation).toHaveBeenCalledOnce();
+    expect(vi.mocked(port.armCancellation).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(port.submit).mock.invocationCallOrder[0]);
+    expect((await query('SELECT value FROM app_settings WHERE key=$1', ['wallet:strategy:watchlist'])).rows).toEqual([{ value: [] }]);
+  });
+  it('does not invent an entry opportunity without an existing eligible EMA signal', async () => {
+    installOpportunityUniverse(); await saveOwnerStrategySelection('opportunities', null);
+    const j = new SqlJournal(); await seed(j, []); const { port } = makePort();
+    expect(await cycle(port, j, await configuredSymbols(NOW), () => NOW)).toMatchObject({ status: 'waiting' });
+    expect(port.candles).toHaveBeenCalledTimes(3); expect(port.submit).not.toHaveBeenCalled(); expect(port.armCancellation).not.toHaveBeenCalled();
+  });
+  it('blocks new entries for an invalid stored mode without falling back to mapped markets or the saved manual list', async () => {
+    installOpportunityUniverse(); await setSetting('wallet:strategy:watchlist', ['AAA-EUR']); await corruptSelectionMode();
+    expect(await strategyEntrySelection(() => NOW)).toMatchObject({ mode: 'invalid', symbols: [], reason: 'wallet_strategy_selection_invalid' });
+    const j = new SqlJournal(); await seed(j); const { port } = makePort();
+    const result = await cycle(port, j, await configuredSymbols(NOW), () => NOW);
+    expect(result.blocks).toContainEqual({ reason: 'configured_symbols_missing' });
+    expect(port.submit).not.toHaveBeenCalled(); expect(port.armCancellation).not.toHaveBeenCalled();
   });
   it('deduplicates the saved selection and rejects unapproved or malformed markets without substituting any', async () => {
     installWalletExecutionSource({ ...testWalletSource(), client: { getBalances: async () => [], getOrders: async () => [] },
@@ -99,10 +165,12 @@ describe('durable SQL ownership and orchestration', () => {
     expect(result.blocks).toContainEqual({ reason: 'configured_symbols_missing' });
     expect(port.submit).not.toHaveBeenCalled(); expect(port.armCancellation).not.toHaveBeenCalled();
   });
-  it.each(['stop', 'reverse_cross'] as const)('continues managed protection and %s exits after the saved watchlist is cleared', async reason => {
+  it.each([['empty-manual', 'stop'], ['empty-manual', 'reverse_cross'], ['invalid-policy', 'stop'], ['invalid-policy', 'reverse_cross']] as const)(
+    'continues managed protection and exits with %s selection and %s trigger', async (selection, reason) => {
     installWalletExecutionSource({ ...testWalletSource(), client: { getBalances: async () => [], getOrders: async () => [] },
       instruments: async () => [], market: async () => { throw new Error('unused'); }, candles: async () => [] });
     await setSetting('wallet:strategy:watchlist', []);
+    if (selection === 'invalid-policy') await corruptSelectionMode();
     const j = new SqlJournal(); await seed(j, ['BBB-EUR']);
     const lease = (await j.acquire(CONFIG.accountId))!;
     const state = await j.state(lease);
