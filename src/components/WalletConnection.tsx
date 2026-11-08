@@ -8,11 +8,11 @@ import { WalletTrial } from './WalletTrial';
 const captions: Record<WalletView['status'], string> = {
   missing: 'لم يجد مرصاد إضافة MetaMask في هذا المتصفح. افتح الصفحة في بروفايل Chrome الذي تستخدم فيه الإضافة.',
   ambiguous: 'توجد إضافتان تعرّفان نفسيهما باسم MetaMask. افتح الصفحة في بروفايل يحتوي على الإضافة التي تثق بها فقط.',
-  ready: 'اختر الحساب الذي تريد عرضه من نافذة MetaMask.',
+  ready: 'الحساب غير متاح للقراءة الآن. افتح MetaMask إذا كانت مقفلة، أو اضغط «ربط MetaMask» لمشاركة الحساب.',
   pending: 'في انتظار المحفظة…',
   declined: 'لم تتم مشاركة الحساب. يمكنك إعادة المحاولة من هنا.',
   error: 'تعذرت قراءة المحفظة. تحقق من الحساب والشبكة في الإضافة ثم أعد المحاولة.',
-  connected: 'الحساب متصل بهذا المتصفح للقراءة.',
+  connected: 'الحساب متصل للقراءة. يستعيد مرصاد الاتصال تلقائيًا عند فتح الصفحة ما دامت صلاحية MetaMask متاحة.',
 };
 export function WalletConnection() {
   const [view, setView] = useState<WalletView | null>(null);
