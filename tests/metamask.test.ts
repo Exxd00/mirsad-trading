@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { displayWallet, readWallet, watchMetaMask, type WalletProvider, type WalletView } from '../src/lib/wallet/metamask';
 import type { Plan } from '../src/lib/wallet/mandate';
+import { authorityPreparation, authorityReview, hash, owner } from './fixtures/wallet-authority';
+import { createAuthorityReview } from '../src/lib/wallet/authority';
+import { getContractAddress } from 'viem';
+import { randomUUID } from 'node:crypto';
 
 const address = '0x' + 'a'.repeat(40), other = '0x' + 'b'.repeat(40);
 const clients: ReturnType<typeof watchMetaMask>[] = [];
@@ -172,5 +176,69 @@ describe('browser wallet binding', () => {
     expect(await action).toMatchObject({ message: expect.stringContaining('تغيّر الحساب أو الشبكة') });
     expect(f.request.mock.calls.filter(([q]) => q.method === 'eth_signTypedData_v4')).toHaveLength(1);
     expect(f.request.mock.calls.some(([q]) => q.method === 'eth_requestAccounts' || q.method === 'eth_sendTransaction')).toBe(false);
+  });
+});
+
+describe('explicit main strategy wallet operations', () => {
+  it('uses atomic EIP-5792 only after an owner click and never falls back to individual sends', async () => {
+    const f = fixture({ addresses: [owner.address] }); await vi.waitFor(() => expect(f.last()?.status).toBe('connected'));
+    const origin = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async req => {
+      if (req.method === 'wallet_getCapabilities') return { '0x1': { atomic: { status: 'supported' } } };
+      if (req.method === 'wallet_sendCalls') return { id: '0x1234' };
+      return origin(req);
+    });
+    expect(f.request.mock.calls.some(([q]) => q.method === 'wallet_sendCalls')).toBe(false);
+    const review = authorityReview();
+    expect(await f.client.authorityAction(review, 'bootstrap')).toEqual({ kind: 'batch', value: '0x1234' });
+    expect(f.request).toHaveBeenCalledWith({ method: 'wallet_sendCalls', params: [{ version: '2.0.0', chainId: '0x1', from: owner.address,
+      atomicRequired: true, calls: review.calls }] });
+    expect(f.request.mock.calls.some(([q]) => q.method === 'eth_sendTransaction' || q.method === 'eth_signTypedData_v4' || q.method === 'eth_requestAccounts')).toBe(false);
+    f.request.mockImplementation(async req => req.method === 'wallet_getCapabilities' ? { '0x1': { atomic: { status: 'unsupported' } } } : origin(req));
+    const sends = f.request.mock.calls.filter(([q]) => q.method === 'wallet_sendCalls').length;
+    await expect(f.client.authorityAction(review, 'bootstrap')).rejects.toThrow('المحفظة لا تؤكد دعم');
+    expect(f.request.mock.calls.filter(([q]) => q.method === 'wallet_sendCalls')).toHaveLength(sends);
+    expect(f.request.mock.calls.some(([q]) => q.method === 'eth_sendTransaction')).toBe(false);
+  });
+  it('rejects modified review, blocked enforcer and changed chain without a financial prompt', async () => {
+    const f = fixture({ addresses: [owner.address] }); await vi.waitFor(() => expect(f.last()?.status).toBe('connected'));
+    const review = authorityReview();
+    await expect(f.client.authorityAction({ ...review, calls: [] }, 'bootstrap')).rejects.toThrow('wallet_authority_invalid');
+    f.state.chain = '0xa';
+    await expect(f.client.authorityAction(review, 'sign')).rejects.toThrow('تغيّر الحساب أو الشبكة');
+    expect(f.request.mock.calls.every(([q]) => ['eth_accounts', 'eth_chainId', 'eth_getBalance'].includes(q.method))).toBe(true);
+  });
+  it('keeps one prompt in flight across view remount and discards a signature from an invalidated session', async () => {
+    const f = fixture({ addresses: [owner.address] }); await vi.waitFor(() => expect(f.last()?.status).toBe('connected'));
+    const origin = f.request.getMockImplementation()!; let finish!: (value: unknown) => void;
+    f.request.mockImplementation(req => req.method === 'eth_signTypedData_v4' ? new Promise(resolve => { finish = resolve; }) : origin(req));
+    const review = authorityReview(), attempt = f.client.authorityAction(review, 'sign').catch(e => e as Error);
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    await expect(f.client.authorityAction(review, 'sign')).rejects.toThrow('راجع اتصال محفظة');
+    f.client.close();
+    const next = watchMetaMask(f.target, () => undefined); clients.push(next);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    await expect(next.authorityAction(review, 'sign')).rejects.toThrow('راجع اتصال محفظة');
+    finish(await owner.signTypedData(review.delegation.typed));
+    expect(await attempt).toMatchObject({ message: expect.stringContaining('تغيّر الحساب أو الشبكة') });
+    expect(f.request.mock.calls.filter(([q]) => q.method === 'eth_signTypedData_v4')).toHaveLength(1);
+  });
+  it('pins the deployment sender, chain, nonce and CREATE address and rejects a stale nonce before prompting', async () => {
+    const f = fixture({ addresses: [owner.address] }); await vi.waitFor(() => expect(f.last()?.status).toBe('connected'));
+    const now = Math.floor(Date.now() / 1000), p = authorityPreparation(now);
+    p.contracts.enforcer = getContractAddress({ from: owner.address, nonce: 0n });
+    p.blockers = ['wallet_enforcer_missing'];
+    p.deploymentStep = { compilerVersion: '0.8.30', artifactHash: hash, expectedAddress: p.contracts.enforcer, sender: owner.address, chainId: 1,
+      transaction: { data: '0x6000', value: '0x0', nonce: '0x0' }, gasEstimate: '100000', blocker: null };
+    const review = createAuthorityReview({ id: randomUUID(), profileRevision: 1, preparation: p, now });
+    const origin = f.request.getMockImplementation()!; let nonce = '0x0';
+    f.request.mockImplementation(async req => req.method === 'eth_getTransactionCount' ? nonce : req.method === 'eth_sendTransaction' ? hash : origin(req));
+    expect(await f.client.authorityAction(review, 'deploy')).toEqual({ kind: 'transaction', value: hash });
+    expect(f.request).toHaveBeenCalledWith({ method: 'eth_sendTransaction', params: [{ from: owner.address, data: '0x6000', value: '0x0', nonce: '0x0' }] });
+    nonce = '0x1';
+    await expect(f.client.authorityAction(review, 'deploy')).rejects.toThrow('تغيّر ترتيب معاملات الحساب');
+    expect(f.request.mock.calls.filter(([q]) => q.method === 'eth_sendTransaction')).toHaveLength(1);
+    await expect(f.client.authorityAction(review, 'sign')).rejects.toThrow('أكمل التحقق من العقود');
+    expect(f.request.mock.calls.some(([q]) => q.method === 'eth_signTypedData_v4')).toBe(false);
   });
 });

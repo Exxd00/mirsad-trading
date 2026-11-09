@@ -4,7 +4,7 @@ import { closeDatabase, query } from '../src/lib/db';
 import { SourceApiError, type ReportedOrder, type SourceTransaction } from '../src/lib/execution/v1/source-model';
 import { SqlJournal, initialState } from '../src/lib/execution/v1/journal';
 import { CONFIG, decimal, type BuyIntent } from '../src/lib/execution/v1/model';
-import { ConnectedWalletVenue } from '../src/lib/execution/v1/wallet-venue';
+import { ConnectedWalletVenue, type WalletVenueSource } from '../src/lib/execution/v1/wallet-venue';
 import { syncSourceArchive } from '../src/lib/execution/v1/source-archive';
 import { refreshSourceAccounting } from '../src/lib/execution/v1/account-evidence';
 import { installWalletExecutionSource } from '../src/lib/wallet/execution-connection';
@@ -90,6 +90,15 @@ async function authorizedBuy(journal: SqlJournal) {
 }
 
 describe('current owner opportunity selection immediately before the financial write', () => {
+  it('blocks a newly expensive executable-size quote before making the durable financial write claim', async () => {
+    const j = new SqlJournal(), current = await authorizedBuy(j), source: WalletVenueSource = current.source;
+    source.entryPlan = vi.fn(async () => ({ intent: null, reason: 'round_trip_cost_limit' }));
+    await expect(current.venue.submit(current.planned, current.lease)).rejects.toThrow('round_trip_cost_limit');
+    expect(source.entryPlan).toHaveBeenCalledOnce(); expect(current.client.submitOrder).not.toHaveBeenCalled();
+    expect(await j.sourceWrites(current.lease)).toEqual([]);
+    expect(await j.decision(current.lease, current.planned.key)).toMatchObject({ status: 'absent' });
+    await j.release(current.lease);
+  });
   it('allows one explicitly authorized opportunity buy through real accounting, risk, heartbeat and lease guards', async () => {
     const j = new SqlJournal(), current = await authorizedBuy(j);
     expect(current.planned).toMatchObject({ allocation: '0.10', budgetEur: '100', expiresAt: NOW + 60 });

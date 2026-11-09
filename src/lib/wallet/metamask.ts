@@ -1,14 +1,19 @@
 import type { Plan, Side } from './mandate';
+import type { AuthorityCloseReview, AuthorityReview } from './authority';
 // Connection and refresh only read the wallet. The separate owner action below is
 // restricted to a locally reconstructed Base Sepolia grant or its revocation.
-type Method = 'eth_requestAccounts' | 'eth_accounts' | 'eth_chainId' | 'eth_getBalance' | 'eth_signTypedData_v4' | 'eth_sendTransaction';
+type Method = 'eth_requestAccounts' | 'eth_accounts' | 'eth_chainId' | 'eth_getBalance' | 'eth_getTransactionCount' | 'eth_signTypedData_v4' | 'eth_sendTransaction'
+  | 'wallet_getCapabilities' | 'wallet_sendCalls' | 'wallet_getCallsStatus';
 type WalletEvent = 'accountsChanged' | 'chainChanged' | 'connect' | 'disconnect';
 type Listener = (...args: unknown[]) => void;
 export interface WalletProvider {
-  request(args: { method: Method; params?: (string | { from: string; to: string; data: string; value: string })[] }): Promise<unknown>;
+  request(args: { method: Method; params?: unknown[] }): Promise<unknown>;
   on(event: WalletEvent, callback: Listener): unknown;
   removeListener(event: WalletEvent, callback: Listener): unknown;
 }
+// Survives a component remount while MetaMask still owns an unresolved prompt.
+// Releasing a view does not cancel or prove failure of a submitted transaction.
+const ownerRequests = new WeakSet<WalletProvider>();
 export interface Snapshot { address: string; chainId: string; nativeBalance: string; }
 export type WalletView =
   | { status: 'missing' | 'ambiguous' | 'ready' | 'pending' | 'declined' | 'error' }
@@ -155,9 +160,88 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
   target.addEventListener('pageshow', scheduleRefresh);
   target.dispatchEvent(new Event('eip6963:requestProvider'));
   return {
+    /** Production strategy actions are always explicit owner clicks. No call
+     * originates from passive restoration, focus, page load or provider events. */
+    async authorityAction(review: AuthorityReview, action: 'deploy' | 'bootstrap' | 'sign' | 'close', close?: AuthorityCloseReview) {
+      const provider = current, epoch = session;
+      if (!alive || !provider || !requested || asking || ownerRequests.has(provider) || review.chainId !== 1) throw new Error('راجع اتصال محفظة الاستراتيجية.');
+      ownerRequests.add(provider);
+      const assertOwner = async () => {
+        const bound = await binding(provider);
+        if (!alive || current !== provider || session !== epoch || !requested || bound.chainId !== '1'
+          || bound.address?.toLowerCase() !== review.owner.toLowerCase()) throw new Error('تغيّر الحساب أو الشبكة. أنشئ مراجعة جديدة.');
+      };
+      try {
+        const { authorityDigest, authoritySignatureValid, createAuthorityCloseReview, parseAuthorityReview } = await import('./authority');
+        parseAuthorityReview(review);
+        const now = Math.floor(Date.now() / 1000);
+        if (action !== 'close' && now >= review.reviewExpiresAt) throw new Error('انتهت صلاحية المراجعة. حدّثها قبل المتابعة.');
+        await assertOwner();
+        if (action === 'sign') {
+          if (review.blockers.length || review.deploymentStep || now < review.terms.startsAt || now >= review.terms.expiresAt) throw new Error('أكمل التحقق من العقود والموافقات أولاً.');
+          const { getTypesForEIP712Domain, serializeTypedData } = await import('viem');
+          const typed = review.delegation.typed;
+          const document = serializeTypedData({ ...typed, types: { EIP712Domain: getTypesForEIP712Domain({ domain: typed.domain }), ...typed.types } });
+          const signature = await provider.request({ method: 'eth_signTypedData_v4', params: [review.owner, document] });
+          await assertOwner();
+          if (!authoritySignatureValid(signature)) throw new Error('تعذّر التحقق من رد المحفظة.');
+          return { kind: 'signature' as const, value: signature };
+        }
+        if (action === 'deploy') {
+          const deployment = review.deploymentStep;
+          if (!deployment || deployment.blocker || !deployment.gasEstimate) throw new Error('نشر عقد الحماية محجوب حتى يتوفر تقدير الغاز والتحقق من المسودة.');
+          const nonce = quantity(await provider.request({ method: 'eth_getTransactionCount', params: [review.owner, 'pending'] }));
+          await assertOwner();
+          if (nonce !== BigInt(deployment.transaction.nonce)) throw new Error('تغيّر ترتيب معاملات الحساب. أنشئ مراجعة نشر جديدة.');
+          const hash = await provider.request({ method: 'eth_sendTransaction', params: [{ from: review.owner,
+            data: deployment.transaction.data, value: '0x0', nonce: deployment.transaction.nonce }] });
+          await assertOwner();
+          if (typeof hash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(hash)) throw new Error('تعذّر التحقق من رد المحفظة.');
+          return { kind: 'transaction' as const, value: hash };
+        }
+        let calls = review.calls;
+        if (action === 'close') {
+          if (!close || close.authorityDigest !== review.digest || close.blockers.length || now >= close.reviewExpiresAt) throw new Error('حدّث مراجعة الإغلاق أولاً.');
+          const { digest, ...base } = close;
+          if (authorityDigest(base) !== digest) throw new Error('تغيّرت مراجعة الإغلاق.');
+          const rebuilt = createAuthorityCloseReview(review, close, close.createdAt);
+          if (authorityDigest(rebuilt) !== authorityDigest(close)) throw new Error('تغيّرت عمليات الإغلاق.');
+          calls = rebuilt.calls;
+        } else if (review.blockers.length || review.deploymentStep) throw new Error('أكمل نشر عقد الحماية والتحقق منه أولاً.');
+        if (!calls.length) throw new Error('لا توجد معاملات للمراجعة؛ تحقق من حالة السلسلة.');
+        // EIP-5792 capability is mandatory; never fall back to sequential sends.
+        const result = await provider.request({ method: 'wallet_getCapabilities', params: [review.owner, ['0x1']] });
+        await assertOwner();
+        const capability = (result as Record<string, { atomic?: { status?: unknown } }> | null)?.['0x1']?.atomic?.status;
+        if (capability !== 'supported' && capability !== 'ready') throw new Error('المحفظة لا تؤكد دعم المعاملة الذرّية المطلوبة.');
+        const sent = await provider.request({ method: 'wallet_sendCalls', params: [{ version: '2.0.0', chainId: '0x1',
+          from: review.owner, atomicRequired: true, calls }] });
+        await assertOwner();
+        const id = typeof sent === 'string' ? sent : (sent as { id?: unknown } | null)?.id;
+        if (typeof id !== 'string' || !/^0x[0-9a-fA-F]{1,256}$/.test(id)) throw new Error('تعذّر التحقق من معرّف العملية.');
+        return { kind: 'batch' as const, value: id };
+      } finally { ownerRequests.delete(provider); if (queued) scheduleRefresh(); }
+    },
+    async authorityCallsStatus(id: string) {
+      const provider = current, epoch = session;
+      if (!alive || !provider || !requested || !/^0x[0-9a-fA-F]{1,256}$/.test(id)) throw new Error('راجع اتصال المحفظة.');
+      const value = await provider.request({ method: 'wallet_getCallsStatus', params: [id] });
+      if (!alive || current !== provider || session !== epoch) throw new Error('تغيّر اتصال المحفظة.');
+      const status = (value as { status?: unknown } | null)?.status;
+      if (typeof status !== 'number' || !Number.isInteger(status) || status < 100 || status > 699) throw new Error('تعذّرت قراءة حالة العملية.');
+      const receipts = (value as { receipts?: unknown } | null)?.receipts;
+      if (receipts !== undefined && (!Array.isArray(receipts) || receipts.length > 64)) throw new Error('تعذّرت قراءة إيصالات العملية.');
+      const transactionHashes = ((receipts ?? []) as { transactionHash?: unknown }[]).map(r => {
+        if (typeof r?.transactionHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(r.transactionHash)) throw new Error('تعذّرت قراءة إيصالات العملية.');
+        return r.transactionHash.toLowerCase() as `0x${string}`;
+      });
+      return { status, transactionHashes: [...new Set(transactionHashes)] };
+    },
     async trialAction(plan: Plan, side: Side, action: 'sign' | 'revoke') {
       const provider = current, epoch = session;
-      if (!alive || !provider || !requested || asking || plan.chainId !== 84532) throw new Error('راجع اتصال حساب التجربة.');
+      if (!alive || !provider || !requested || asking || ownerRequests.has(provider) || plan.chainId !== 84532) throw new Error('راجع اتصال حساب التجربة.');
+      ownerRequests.add(provider);
+      try {
       const assertOwner = async () => {
         const bound = await binding(provider);
         if (!alive || current !== provider || session !== epoch || !requested || bound.chainId !== '84532' ||
@@ -180,14 +264,15 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
       const pattern = action === 'sign' ? /^0x[0-9a-f]{130}$/i : /^0x[0-9a-f]{64}$/i;
       if (typeof value !== 'string' || !pattern.test(value)) throw new Error('تعذّر التحقق من رد المحفظة.');
       return value;
+      } finally { ownerRequests.delete(provider); if (queued) scheduleRefresh(); }
     },
     async connect() {
       const provider = current;
-      if (!alive || !provider || asking) return;
+      if (!alive || !provider || asking || ownerRequests.has(provider)) return;
       if (requested) return refresh();
       const ticket = ++session;
       revision++; queued = false; clearTimer();
-      asking = true; send({ status: 'pending' });
+      asking = true; ownerRequests.add(provider); send({ status: 'pending' });
       let readAfterPrompt = false;
       try {
         const address = firstAddress(await provider.request({ method: 'eth_requestAccounts' }));
@@ -201,7 +286,7 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
       } finally {
         // Provider/page events may invalidate the response but cannot release
         // the actual permission prompt early and allow a parallel request.
-        asking = false;
+        ownerRequests.delete(provider); asking = false;
         if (queued) scheduleRefresh();
         else if (alive && current === provider && ticket !== session) send({ status: 'ready' });
       }

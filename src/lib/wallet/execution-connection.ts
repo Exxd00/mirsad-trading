@@ -6,6 +6,8 @@ import type { WalletVenueSource } from '../execution/v1/wallet-venue';
  * market. A price-limited swap is not an independently cancellable limit order. */
 export type WalletExecutionBinding = {
   chainId: number; owner: string; quoteToken: string; quoteDecimals: number; quoteCurrency: 'EUR';
+  /** Physical funding asset; omitted only by the legacy EUR evidence fixtures. */
+  quoteUnit?: string;
   grantId: string; startsAt: number; expiresAt: number;
   markets: { symbol: string; baseToken: string; baseDecimals: number; quoteToken: string }[];
   semantics: { limitOrders: boolean; cancelRemainder: boolean;
@@ -16,7 +18,8 @@ const decimals = (value: number) => Number.isSafeInteger(value) && value >= 0 &&
 export function walletBindingIssue(binding: WalletExecutionBinding | undefined, now: number): string | null {
   if (!binding) return 'wallet_market_mapping_missing';
   if (!Number.isSafeInteger(binding.chainId) || binding.chainId <= 0 || !address(binding.owner)
-    || !address(binding.quoteToken) || !decimals(binding.quoteDecimals) || binding.quoteCurrency !== 'EUR') return 'wallet_identity_invalid';
+    || !address(binding.quoteToken) || !decimals(binding.quoteDecimals) || binding.quoteCurrency !== 'EUR'
+    || (binding.quoteUnit !== undefined && !/^[A-Z0-9]{2,16}$/.test(binding.quoteUnit))) return 'wallet_identity_invalid';
   if (!binding.grantId || !Number.isSafeInteger(binding.startsAt) || !Number.isSafeInteger(binding.expiresAt)
     || now < binding.startsAt || now >= binding.expiresAt) return 'wallet_grant_outside_validity';
   if (!Array.isArray(binding.markets) || !binding.markets.length || new Set(binding.markets.map(m => m.symbol)).size !== binding.markets.length
@@ -29,7 +32,7 @@ export function walletBindingIssue(binding: WalletExecutionBinding | undefined, 
   return null;
 }
 export const walletBindingIdentity = (binding: WalletExecutionBinding) => JSON.stringify([
-  CONFIG.accountId, binding.chainId, binding.owner.toLowerCase(), binding.quoteToken.toLowerCase(), binding.quoteDecimals,
+  CONFIG.accountId, binding.chainId, binding.owner.toLowerCase(), binding.quoteToken.toLowerCase(), binding.quoteDecimals, binding.quoteUnit ?? 'EUR',
   [...binding.markets].sort((a, b) => a.symbol.localeCompare(b.symbol))
     .map(m => [m.symbol, m.baseToken.toLowerCase(), m.baseDecimals, m.quoteToken.toLowerCase()]),
 ]);

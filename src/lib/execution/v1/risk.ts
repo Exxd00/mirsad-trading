@@ -35,26 +35,33 @@ export function neutralSeries(observations: EquityObservation[], now: number) {
   const rows = [...byId.values()].sort((a, b) => a.at - b.at);
   if (!rows.length) throw new Error('equity_history_missing');
   let index = new D(1), peak = new D(1), maximumDrawdown = new D(0), previous: InstanceType<typeof D> | null = null;
+  let capitalStarted = false;
   const series: { at: number; index: string; drawdown: string }[] = [];
   for (const row of rows) {
     if (!row.transfersComplete || row.equityEur === null || row.netFlowEur === null) throw new Error('valuation_or_transfers_missing');
     const equity = decimal(row.equityEur), flow = decimal(row.netFlowEur);
     if (equity.lt(0)) throw new Error('invalid_equity');
     if (previous !== null) {
-      if (!previous.gt(0)) throw new Error('zero_return_denominator');
       let before = equity;
       if (!flow.eq(0)) {
         if (row.beforeFlowEquityEur === null) throw new Error('pre_flow_valuation_missing');
         before = decimal(row.beforeFlowEquityEur);
         if (!before.add(flow).eq(equity) || before.lt(0)) throw new Error('flow_valuation_mismatch');
       }
-      index = index.mul(before.div(previous));
-    } else if (!flow.eq(0) || !equity.gt(0)) throw new Error('invalid_equity_baseline');
+      if (!previous.gt(0)) {
+        // Verified empty capital before the FIRST deposit has no investment
+        // return. A positive, exactly matched external flow starts index 1.
+        // A later wipeout/withdrawal cannot reset an existing loss history.
+        if (capitalStarted || !before.eq(0) || (equity.gt(0) ? !flow.gt(0) : !flow.eq(0))) throw new Error('zero_return_denominator');
+      } else index = index.mul(before.div(previous));
+    } else if (!flow.eq(0)) throw new Error('invalid_equity_baseline');
+    if (equity.gt(0)) capitalStarted = true;
     peak = D.max(peak, index);
     const drawdown = peak.sub(index).div(peak);
     maximumDrawdown = D.max(maximumDrawdown, drawdown);
     series.push({ at: row.at, index: index.toFixed(), drawdown: drawdown.toFixed() }); previous = equity;
   }
+  if (!capitalStarted) throw new Error('invalid_equity_baseline');
   return { series, maximumDrawdown: maximumDrawdown.toFixed() };
 }
 export function evaluateRisk(old: RiskState, trades: ClosedTrade[], observations: EquityObservation[], historyComplete: boolean, now: number): RiskResult {

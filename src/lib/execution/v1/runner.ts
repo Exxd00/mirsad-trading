@@ -1,10 +1,13 @@
 import { executionReason } from './errors';
 import { randomUUID } from 'node:crypto';
-import { CONFIG, VERSION, decimal, fresh, type Account, type Candle, type Instrument, type Intent, type Position, type Quote, type Signal, type SourceOrder } from './model';
+import { CONFIG, VERSION, decimal, fresh, type Account, type Candle, type Instrument, type Intent, type Position, type Quote, type RiskResult, type Signal, type SourceOrder } from './model';
 import { processCandles } from './strategy';
 import { evaluateRisk } from './risk';
 import { planBuy, planExit, rankEntries } from './planner';
+import { assertAccountFunding } from './readiness';
 import type { Journal, Lease } from './journal';
+export type EntryPlanner = (account: Account, signal: Signal, instrument: Instrument, quote: Quote, risk: RiskResult,
+  now: number, quantityCap?: string) => Promise<ReturnType<typeof planBuy>>;
 export interface VenuePort {
   readonly accountId: string;
   capabilities(): Promise<{ idempotentOrders: boolean; fencedWrites: boolean; attachedProtection: boolean;
@@ -18,6 +21,7 @@ export interface VenuePort {
   quotes(symbols: string[]): Promise<Quote[]>;
   instruments(): Promise<Instrument[]>;
   candles(symbol: string, after: number | null): Promise<Candle[]>;
+  entryPlan?: EntryPlanner;
   lookup(key: string, lease: Lease): Promise<{ order: SourceOrder | null; authoritative: boolean }>;
   ensureProtection(position: Position, lease: Lease): Promise<void>;
   prepareExit(intent: Extract<Intent, { side: 'sell' }>, lease: Lease): Promise<{ ready: boolean; quantity: string }>;
@@ -64,9 +68,7 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
     const validateAccount = (a: Account) => {
       if (a.id !== port.accountId) throw new Error('account_mismatch');
       if (!fresh(a.sourceAt, clock(), CONFIG.accountMaxAgeSeconds)) throw new Error('account_stale');
-      const eur = a.balances.find(b => b.currency === 'EUR');
-      if (!eur || !decimal(eur.available).eq(a.availableEur) || new Set(a.balances.map(b => b.currency)).size !== a.balances.length
-        || a.balances.some(b => decimal(b.available).lt(0) || decimal(b.reserved).lt(0) || !decimal(b.available).add(b.reserved).eq(b.total))) throw new Error('source_balance_mismatch');
+      assertAccountFunding(a, clock());
       // A repaired account read must not resume strategic buys or reverse-cross
       // sells against contradictory fills. The independent protection-only
       // watcher retains its existing source/quantity checks and trigger levels.
@@ -148,7 +150,9 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
           if (result.blocks.some(b => b.symbol === signal.symbol)) continue;
           const instrument = instruments.find(i => i.symbol === signal.symbol), quote = quotes.find(q => q.symbol === signal.symbol);
           if (!instrument || !quote) { result.blocks.push({ symbol: signal.symbol, reason: 'market_missing' }); continue; }
-          const candidate = planBuy(account, signal, instrument, quote, risk, clock());
+          await journal.renew(lease);
+          const candidate = port.entryPlan ? await port.entryPlan(account, signal, instrument, quote, risk, clock())
+            : planBuy(account, signal, instrument, quote, risk, clock());
           if (candidate.intent) candidates.push(candidate.intent); else result.blocks.push({ symbol: signal.symbol, reason: candidate.reason });
         }
         for (const candidate of rankEntries(candidates)) {
@@ -161,7 +165,9 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
           if (!quote || !instrument) break;
           const currentRisk = evaluateRisk(state.risk, account.trades, account.equityHistory, account.tradeHistoryComplete, clock());
           state.risk = currentRisk.state;
-          const refreshed = planBuy(account, candidate.signal, instrument, quote, currentRisk, clock());
+          await journal.renew(lease);
+          const refreshed = port.entryPlan ? await port.entryPlan(account, candidate.signal, instrument, quote, currentRisk, clock())
+            : planBuy(account, candidate.signal, instrument, quote, currentRisk, clock());
           if (refreshed.intent) intent = refreshed.intent; else result.blocks.push({ symbol: candidate.symbol, reason: refreshed.reason });
           break;
         }

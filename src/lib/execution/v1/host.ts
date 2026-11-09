@@ -12,13 +12,14 @@ import { accountEntryBlockers } from './readiness';
 import { walletBindingIdentity, walletExecutionSource } from '../../wallet/execution-connection';
 import { walletOrderBlock } from '../../order-connection';
 import { strategyEntrySelection } from '../../wallet/selection-service';
+import { ensureCowWalletSource } from '../../wallet/cow-bootstrap';
 export const journal = new SqlJournal();
 export async function connectedVenue(): Promise<ConnectedWalletVenue | null> {
-  const source = walletExecutionSource();
+  const source = await ensureCowWalletSource();
   return source ? new ConnectedWalletVenue({ ...source, journal }) : null;
 }
 export async function configuredSymbols(now?: number) {
-  if (!walletExecutionSource()) return [];
+  if (!await ensureCowWalletSource()) return [];
   return (await strategyEntrySelection(now === undefined ? undefined : () => now)).symbols;
 }
 const unavailable = () => ({ status: 'blocked', reason: 'wallet_execution_transport_missing',

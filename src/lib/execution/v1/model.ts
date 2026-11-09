@@ -15,7 +15,17 @@ export type IndicatorState = { count: number; lastCloseTime: number | null; seed
   ema20: string | null; ema50: string | null; ema200: string | null; slowHistory: string[] };
 export type Signal = { id: string; version: string; symbol: string; timeframe: 900; at: number;
   side: 'buy' | 'sell'; close: string; indicators: { ema20: string; ema50: string; ema200: string; ema200FourBack: string } };
+/** Physical quote-token units and their dated EUR valuation are distinct. */
+export type QuoteConversion = { currency: string; eurPerUnit: string; sourceAt: number; sourceId: string;
+  /** Actual oracle update time and the provider's compiled heartbeat policy.
+   * sourceAt remains the fresh observation time; it cannot hide an old round. */
+  rateAt?: number; rateMaxAgeSeconds?: number };
+export type FundingEvidence = QuoteConversion & { available: string; reserved: string; total: string };
 export type Quote = { symbol: string; bid: string; ask: string; sourceAt: number; readAt: number; source: string;
+  conversion?: QuoteConversion;
+  exactSize?: { provider: 'cow-mainnet-v1'; quantity: string; buyQuoteId: number | null; sellQuoteId: number | null;
+    buySellAmount: string; buyBuyAmount: string; buyFeeAmount: string; sellSellAmount: string; sellBuyAmount: string;
+    sellFeeAmount: string; buyExpiration: number; sellExpiration: number };
   depth?: { bids: { price: string; quantity: string }[]; asks: { price: string; quantity: string }[] } };
 export type Costs = { buyFeeRate: string; sellFeeRate: string; buyFixedEur: string; sellFixedEur: string;
   buySlippageRate: string; sellSlippageRate: string; source: string; observedAt: number; depthRequired?: boolean };
@@ -29,21 +39,25 @@ export type Position = { id: string; symbol: string; managed: boolean; openedAt:
   protectionState: 'active' | 'missing' | 'unknown'; protectionIds: string[];
   exitReason?: 'stop' | 'target' | 'reverse_cross'; exitRevision?: string };
 export type SourceOrder = { id: string; clientKey: string; symbol: string; side: 'buy' | 'sell';
+  feeRecognition?: { method: 'cow-api-total-at-finalized-last-fill-v1'; token: string; rawAmount: string;
+    recognitionAt: number; eurPerToken: string; sourceId: 'coinbase-exchange-completed-1m-eur-v1' };
+  finality?: { status: 'pending' | 'mined' | 'finalized'; unconfirmedFilledQuantity: string; transactionHashes: string[] };
   status: 'open' | 'partial' | 'filled' | 'cancelled' | 'rejected' | 'expired' | 'unknown';
   quantity: string | null; filledQuantity: string; remainingBudgetEur: string | null;
   submittedAt: number; sourceAt: number; managed: boolean; purpose: 'entry' | 'exit' | 'protection';
-  averageFillPrice: string | null; feeEur: string | null; baseFeeQuantity?: string };
+  averageFillPrice: string | null; feeEur: string | null; baseFeeQuantity?: string; feeIncludedInPriceEur?: string };
 export type ClosedTrade = { id: string; symbol: string; version: string; sourceConfirmed: boolean;
   closedAt: number; netPnlEur: string | null; feesEur: string | null; slippageEur: string | null;
   quantity: string; averageEntryPrice: string | null; originalStop: string | null; sourceOrderIds: string[] };
 export type SourceFill = { id: string; orderId: string; symbol: string; side: 'buy' | 'sell';
-  at: number; quantity: string; price: string; feeEur: string | null; slippageEur: string | null };
+  at: number; quantity: string; price: string; feeEur: string | null; slippageEur: string | null; feeIncludedInPriceEur?: string };
 export type EquityObservation = { id: string; at: number; equityEur: string | null;
   netFlowEur: string | null; beforeFlowEquityEur: string | null; transfersComplete: boolean;
   unrealizedNetPnlEur?: string | null;
   // Exact event time, with separately identified historical accounting marks.
   evidence?: { kind: 'source_snapshot' | 'source_ledger'; markAt: number; transactionIds: string[] } };
 export type Account = { id: string; sourceAt: number; readAt: number; availableEur: string;
+  funding?: FundingEvidence;
   balances: { currency: string; total: string; available: string; reserved: string }[];
   equityEur: string | null; valuationAt: number | null; valuationComplete: boolean;
   positions: Position[]; orders: SourceOrder[]; trades: ClosedTrade[]; equityHistory: EquityObservation[];

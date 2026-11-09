@@ -6,6 +6,10 @@ export interface ReportedOrder {
   status: 'pending_new' | 'new' | 'partially_filled' | 'filled' | 'cancelled' | 'rejected' | 'replaced'; price?: string; averageFillPrice?: string; filledAmount?: string;
   createdAt: string; updatedAt: string; fee?: string; feeCurrency?: string;
   previousOrderId?: string; rejectReason?: string;
+  feeIncludedInPriceEur?: string;
+  feeRecognition?: { method: 'cow-api-total-at-finalized-last-fill-v1'; token: string; rawAmount: string;
+    recognitionAt: number; eurPerToken: string; sourceId: 'coinbase-exchange-completed-1m-eur-v1' };
+  finality?: { status: 'pending' | 'mined' | 'finalized'; unconfirmedFilledQuantity: string; transactionHashes: string[] };
 }
 export interface SourceBalance {
   accountId: string; currency: string; available: string; reserved: string;
@@ -17,7 +21,12 @@ export interface ReportedFill {
   baseCurrency: string; quoteCurrency: string; createdAt: string; maker: boolean;
   // A source may omit fees. Never assign an invented zero fee.
   fee?: string; feeCurrency?: string;
+  feeIncludedInPriceEur?: string;
 }
+/** Gas outside the owner's scoped trading-token balances, proven by a
+ * canonical finalized receipt. A solver's settlement gas is not an owner cost. */
+export type ExternalExpense = { id: string; at: number; amountEur: string; transactionHash: string; source: string };
+export type ExternalExpenseEvidence = { expenses: ExternalExpense[]; sourceAt: number; coverageFrom: number; complete: boolean };
 export interface SourceSubmitOrder {
   clientOrderId: string; symbol: string; side: 'buy' | 'sell';
   type: 'market' | 'limit'; quantity: string; limitPrice?: string;
@@ -59,6 +68,7 @@ export interface SourceMarket {
 export interface SourceOrderBook {
   symbol: string; sourceAt: number; readAt: number;
   bids: { price: string; quantity: string }[]; asks: { price: string; quantity: string }[];
+  conversion?: import('./model').QuoteConversion;
 }
 export class SourceApiError extends Error {
   readonly code: string;
@@ -93,11 +103,13 @@ export class SourceCancellationUnknownOutcomeError extends SourceApiError {
  * approved chain/account/token mapping; these types contain no provider URLs or keys. */
 export interface SourceClient {
   getBalances(): Promise<SourceBalance[]>;
+  getFunding?(): Promise<import('./model').FundingEvidence>;
+  getExpenses?(): Promise<ExternalExpenseEvidence>;
   getOrders(): Promise<ReportedOrder[]>;
   getActiveOrders(): Promise<ReportedOrder[]>;
   getOrder(id: string): Promise<ReportedOrder>;
-  submitOrder(input: SourceSubmitOrder): Promise<ReportedOrder>;
-  cancelOrder(id: string): Promise<SourceCancellation>;
+  submitOrder(input: SourceSubmitOrder, context?: { lease: import('./journal').Lease; intent: import('./model').Intent }): Promise<ReportedOrder>;
+  cancelOrder(id: string, context?: { lease: import('./journal').Lease; decisionKey: string }): Promise<SourceCancellation>;
   getTransactionsPage(input: { startDate: number; endDate: number; cursor?: string; limit?: number }): Promise<{ transactions: SourceTransaction[]; nextCursor: string | null; sourceAt: string }>;
   getTransaction(id: string): Promise<SourceTransaction>;
   getOrderBook(symbol: string): Promise<SourceOrderBook>;

@@ -17,15 +17,21 @@ import { evaluateRisk } from './risk';
 import { sameAmounts, sourceAmounts, sourceTradeResults } from './accounting';
 import { refreshSourceAccounting } from './account-evidence';
 import { reconcileReportFills } from './report-evidence';
+import { assertFundingEvidence } from './readiness';
+import type { EntryPlanner } from './runner';
 
 export type WalletVenueSource = {
+  entryPlan?: EntryPlanner;
+  entryBlocker?: () => Promise<string | null>;
   client: Pick<SourceClient, 'getBalances' | 'getOrders'> & Partial<Pick<SourceClient,
-    'getOrder' | 'getTransactionsPage' | 'getTransaction' | 'getOrderBook' | 'getValuationCandles' | 'getFillsForOrders' | 'getActiveOrders' | 'submitOrder' | 'cancelOrder'>>;
+    'getOrder' | 'getFunding' | 'getExpenses' | 'getTransactionsPage' | 'getTransaction' | 'getOrderBook' | 'getValuationCandles' | 'getFillsForOrders' | 'getActiveOrders' | 'submitOrder' | 'cancelOrder'>>;
   journal?: Journal;
   binding?: WalletExecutionBinding;
   /** Recheck the actual on-chain grant, revocation and token/chain identity. */
   verifyGrant?(binding: WalletExecutionBinding): Promise<boolean>;
   gasCostsIncluded?: boolean;
+  /** Explicit write-side recovery only; owner/report GETs never invoke it. */
+  resumeExecution?(lease: Lease, options: { entriesEnabled: boolean }): Promise<void>;
   instruments(): Promise<SourceInstrument[]>;
   market(symbol: string): Promise<SourceMarket>;
   candles(symbol: string, after: number | null): Promise<Candle[]>;
@@ -37,8 +43,9 @@ const seconds = (value: string) => {
 };
 export function sourceOrder(order: ReportedOrder): SourceOrder {
   const baseFee = order.feeCurrency === order.symbol.split('-')[0] ? order.fee : undefined;
-  const status: SourceOrder['status'] = ({ pending_new: 'open', new: 'open', partially_filled: 'partial',
+  let status: SourceOrder['status'] = ({ pending_new: 'open', new: 'open', partially_filled: 'partial',
     filled: 'filled', cancelled: 'cancelled', rejected: 'rejected', replaced: 'unknown' } as const)[order.status];
+  if (order.finality && order.finality.status !== 'finalized') status = 'unknown';
   return { id: order.id, clientKey: order.clientOrderId, symbol: order.symbol, side: order.side, status,
     quantity: order.quantity, filledQuantity: order.filledQuantity,
     // Unknown fees/reservations are not reconstructed as spendable balances.
@@ -48,7 +55,9 @@ export function sourceOrder(order: ReportedOrder): SourceOrder {
     averageFillPrice: order.averageFillPrice ?? null,
     feeEur: order.feeCurrency === 'EUR' ? order.fee ?? null : baseFee !== undefined && order.averageFillPrice
       ? decimal(baseFee).mul(order.averageFillPrice).toFixed() : null,
-    ...(baseFee !== undefined ? { baseFeeQuantity: baseFee } : {}) };
+    ...(order.feeIncludedInPriceEur !== undefined ? { feeIncludedInPriceEur: order.feeIncludedInPriceEur } : {}),
+    ...(order.feeRecognition ? { feeRecognition: order.feeRecognition } : {}),
+    ...(baseFee !== undefined ? { baseFeeQuantity: baseFee } : {}), ...(order.finality ? { finality: order.finality } : {}) };
 }
 function ownedOrder(order: ReportedOrder, decision: DecisionRecord): SourceOrder {
   const intent = decision.intent;
@@ -72,18 +81,27 @@ function ownedOrder(order: ReportedOrder, decision: DecisionRecord): SourceOrder
 export class ConnectedWalletVenue implements CancellationPort {
   readonly accountId = CONFIG.accountId;
   constructor(private readonly source: WalletVenueSource, private readonly clock = () => Math.floor(Date.now() / 1000)) {}
+  entryPlan: EntryPlanner = async (account, signal, instrument, quote, risk, now, quantityCap) => {
+    if (this.source.entryPlan) return this.source.entryPlan(account, signal, instrument, quote, risk, now, quantityCap);
+    const capped = quantityCap === undefined ? instrument : { ...instrument,
+      maximumQuantity: D.min(instrument.maximumQuantity ?? quantityCap, quantityCap).toFixed() };
+    return planBuy(account, signal, capped, quote, risk, now);
+  };
   async capabilities() {
     let bound = !walletBindingIssue(this.source.binding, this.clock()) && Boolean(this.source.verifyGrant);
     if (bound) {
       try { bound = await this.source.verifyGrant!(this.source.binding!); }
       catch { bound = false; }
     }
+    let entryBlocked = false;
+    try { entryBlocked = Boolean(await this.source.entryBlocker?.()); } catch { entryBlocked = true; }
     const writes = Boolean(bound && this.source.journal && this.source.client.getOrder && this.source.client.submitOrder && this.source.client.cancelOrder);
     const timer = Boolean(process.env.EXECUTION_DEADLINE_URL && process.env.EXECUTION_SCHEDULER_TOKEN);
     return { idempotentOrders: writes, fencedWrites: writes, attachedProtection: false,
       managedProtection: writes && timer, coordinatedExits: writes, cancelRemainder: writes,
-      cancellationTimer: timer, entryRiskData: Boolean(bound && this.source.gasCostsIncluded && this.source.journal && this.source.client.getOrderBook
-        && this.source.client.getValuationCandles && this.source.client.getTransaction && this.source.client.getTransactionsPage) };
+      cancellationTimer: timer, entryRiskData: Boolean(!entryBlocked && bound && this.source.gasCostsIncluded && this.source.journal && this.source.client.getOrderBook
+        && this.source.client.getValuationCandles && this.source.client.getTransaction && this.source.client.getTransactionsPage
+        && (!this.source.binding?.quoteUnit || this.source.binding.quoteUnit === 'EUR' || this.source.entryPlan)) };
   }
   async refreshAccounting() {
     const client = this.source.client;
@@ -115,6 +133,7 @@ export class ConnectedWalletVenue implements CancellationPort {
   async reconcile(lease?: Lease, options: { transactions?: boolean } = {}) {
     if (lease && this.source.journal) {
       this.validateLease(lease);
+      if (this.source.resumeExecution) await this.source.resumeExecution(lease, { entriesEnabled: (await this.source.journal.state(lease)).entriesEnabled });
       for (const write of (await this.source.journal.sourceWrites(lease)).filter(w => w.settledAt === null)) {
         // Source proof releases a non-expiring write claim. Absence, a timeout,
         // or an open cancellation target never authorizes another mutation.
@@ -191,8 +210,10 @@ export class ConnectedWalletVenue implements CancellationPort {
     const balances = await this.source.client.getBalances();
     if (balances.some(b => b.accountId !== this.accountId)) throw new Error('wallet_account_mismatch');
     const observedAt = balances.length ? Math.min(...balances.map(b => seconds(b.observedAt))) : this.clock();
-    const eur = balances.find(b => b.currency === 'EUR');
-    if (!eur || new Set(balances.map(b => b.currency)).size !== balances.length) throw new Error('source_balance_missing');
+    const funding = this.source.client.getFunding ? await this.source.client.getFunding() : undefined;
+    if (funding) assertFundingEvidence(funding, balances, this.clock());
+    const quoteBalance = balances.find(b => b.currency === (funding?.currency ?? 'EUR'));
+    if (!quoteBalance || new Set(balances.map(b => b.currency)).size !== balances.length) throw new Error('source_balance_missing');
     if (balances.some(b => decimal(b.total).lt(0) || decimal(b.available).lt(0) || decimal(b.reserved).lt(0)
       || !decimal(b.available).add(b.reserved).eq(b.total))) throw new Error('source_balance_mismatch');
     const decisions = await this.source.journal?.accountDecisions(this.accountId) ?? [];
@@ -252,7 +273,7 @@ export class ConnectedWalletVenue implements CancellationPort {
     // orders still require fresh source reconciliation.
     for (const d of decisions) if (d.source && terminal(d.source) && !orders.some(o => o.id === d.source!.id)) orders.push(d.source);
     const managed = managedPositions(balances, orders, decisions, saved);
-    const positions: Position[] = balances.filter(b => b.currency !== 'EUR' && decimal(b.total).gt(0)).map<Position>(b => {
+    const positions: Position[] = balances.filter(b => b.currency !== quoteBalance.currency && decimal(b.total).gt(0)).map<Position>(b => {
       const own = managed.find(p => p.symbol === `${b.currency}-EUR`);
       const remaining = decimal(b.total).sub(own?.quantity ?? '0');
       const available = decimal(b.available).sub(own?.available ?? '0');
@@ -269,14 +290,17 @@ export class ConnectedWalletVenue implements CancellationPort {
     // the account response observation, never the time of a saved legacy record.
     // Transfer-neutral history is not inferred from current holdings. Managed
     // quantities above come only from this version's matching source orders.
-    const account: Account = { id: this.accountId, sourceAt: observedAt, readAt: this.clock(), availableEur: eur.available,
+    const account: Account = { id: this.accountId, sourceAt: observedAt, readAt: this.clock(), availableEur: funding ? decimal(funding.available).mul(funding.eurPerUnit).toFixed() : quoteBalance.available,
+      ...(funding ? { funding } : {}),
       balances: balances.map(({ currency, total, available, reserved }) => ({ currency, total, available, reserved })),
       positions, orders, equityEur: null, valuationAt: null, valuationComplete: false,
       trades: [], equityHistory: [], fills: null, tradeHistoryComplete: false, archiveStart: null };
+    const finalityPending = rawOrders.some(o => o.finality && o.finality.status !== 'finalized');
+    if (finalityPending) account.dataBlockers = ['wallet_order_finality_pending'];
     if (options.protectionOnly || !this.source.journal) return account;
     if (!this.source.client.getOrderBook) return this.verifySourceFills(account);
     const evidence = await this.source.journal.accounting(this.accountId);
-    const blockers: string[] = [];
+    const blockers: string[] = finalityPending ? ['wallet_order_finality_pending'] : [];
     // A balances snapshot cannot establish today's opening holdings when a
     // source trade from that period is absent from the transaction evidence.
     // Status updates can be later than fills, so uncertainty blocks entry.
@@ -286,16 +310,18 @@ export class ConnectedWalletVenue implements CancellationPort {
       blockers.push('accounting_trade_coverage_incomplete');
     }
     try {
-      const amounts = sourceAmounts(balances);
+      const amounts = sourceAmounts(balances, quoteBalance.currency);
       const quotes = await this.quotes(positions.map(p => p.symbol));
-      let equity = decimal(eur.total);
+      let equity = decimal(quoteBalance.total).mul(funding?.eurPerUnit ?? '1');
       for (const p of positions) {
         const quote = quotes.find(q => q.symbol === p.symbol);
         if (!quote) throw new Error('accounting_price_coverage_incomplete');
         p.marketValueEur = decimal(p.quantity).mul(quote.bid).toFixed();
         p.valuationAt = this.clock(); equity = equity.add(p.marketValueEur);
       }
-      account.equityEur = equity.toFixed(); account.valuationAt = this.clock(); account.valuationComplete = true;
+      const expenses = evidence?.expenses ?? [];
+      account.equityEur = equity.sub(expenses.filter(e => e.at <= this.clock()).reduce((n, e) => n.add(e.amountEur), decimal('0'))).toFixed();
+      account.valuationAt = this.clock(); account.valuationComplete = true;
       if (!evidence?.anchor) blockers.push('accounting_evidence_missing');
       else {
         if (evidence.lastError) blockers.push(evidence.lastError);
@@ -344,7 +370,7 @@ export class ConnectedWalletVenue implements CancellationPort {
         if (book.symbol !== symbol || !book.bids.length || !book.asks.length) throw new Error('wallet_order_book_identity_mismatch');
         if (!fresh(sourceAt, readAt, CONFIG.quoteMaxAgeSeconds)) throw new Error('quote_stale');
         result.push({ symbol, bid: book.bids[0].price, ask: book.asks[0].price, sourceAt, readAt, source: 'Wallet authenticated order book',
-          depth: { bids: book.bids, asks: book.asks } });
+          depth: { bids: book.bids, asks: book.asks }, ...(book.conversion ? { conversion: book.conversion } : {}) });
         continue;
       }
       const m = await this.source.market(symbol), readAt = this.clock(), sourceAt = Math.floor(m.sourceTimestamp / 1000);
@@ -459,6 +485,8 @@ export class ConnectedWalletVenue implements CancellationPort {
       if (intent.side === 'buy') {
         const state = await journal.state(lease);
         if (!state.entriesEnabled) throw new Error('entries_paused');
+        const entryBlocker = await this.source.entryBlocker?.();
+        if (entryBlocker) throw new Error(entryBlocker);
         // The candidate list was collected before candle I/O. Re-read the
         // owner's current policy under the account lease before claiming a
         // financial write; selection edits use this same lease.
@@ -472,8 +500,17 @@ export class ConnectedWalletVenue implements CancellationPort {
         const account = await this.account({ preSubmitKey: intent.key }), instrument = (await this.instruments()).find(i => i.symbol === intent.symbol);
         const quote = (await this.quotes([intent.symbol]))[0];
         if (!instrument || this.clock() >= intent.expiresAt) throw new Error('entry_expired_before_send');
-        const candidate = planBuy(account, intent.signal, instrument, quote, evaluateRisk(state.risk, account.trades, account.equityHistory, account.tradeHistoryComplete, this.clock()), this.clock());
+        const candidate = await this.entryPlan(account, intent.signal, instrument, quote,
+          evaluateRisk(state.risk, account.trades, account.equityHistory, account.tradeHistoryComplete, this.clock()), this.clock(), intent.quantity);
         if (!candidate.intent || candidate.intent.quantity !== intent.quantity || candidate.intent.limitPrice !== intent.limitPrice) throw new Error(candidate.reason);
+        if (this.source.entryPlan && (candidate.intent.quote.exactSize?.quantity !== intent.quantity || !intent.quote.exactSize
+          || candidate.intent.quote.conversion?.currency !== intent.quote.conversion?.currency
+          || candidate.intent.quote.conversion?.sourceId !== intent.quote.conversion?.sourceId
+          || candidate.intent.quote.conversion?.rateAt !== intent.quote.conversion?.rateAt
+          || candidate.intent.quote.conversion?.rateMaxAgeSeconds !== intent.quote.conversion?.rateMaxAgeSeconds
+          || candidate.intent.quote.conversion?.eurPerUnit !== intent.quote.conversion?.eurPerUnit
+          || decimal(candidate.intent.estimatedCostEur).gt(intent.estimatedCostEur)
+          || decimal(candidate.intent.expectedEntryFeeEur).gt(intent.expectedEntryFeeEur))) throw new Error('wallet_exact_quote_changed');
         await scheduleProtectionWatch();
       } else {
         const ready = await this.prepareExit(intent, lease);
@@ -487,7 +524,7 @@ export class ConnectedWalletVenue implements CancellationPort {
     let raw: ReportedOrder;
     try { raw = await this.source.client.submitOrder({ clientOrderId: decision.sourceIdentity.clientOrderId,
       symbol: intent.symbol, side: intent.side, type: intent.side === 'buy' ? 'limit' : 'market', quantity: intent.quantity,
-      ...(intent.side === 'buy' ? { limitPrice: intent.limitPrice } : {}) }); }
+      ...(intent.side === 'buy' ? { limitPrice: intent.limitPrice } : {}) }, { lease, intent }); }
     catch (error) {
       if (error instanceof SourceUnknownOutcomeError && error.venueOrderId && error.clientOrderId === decision.sourceIdentity.clientOrderId)
         await journal.noteSourceOrderId(lease, intent.key, error.clientOrderId, error.venueOrderId);
@@ -508,7 +545,7 @@ export class ConnectedWalletVenue implements CancellationPort {
     if (terminal(source)) { await journal.result(lease, decision.key, 'acknowledged', source); return; }
     const id = `cancel:${sourceOrderId}`;
     if (!await journal.claimSourceWrite(lease, { id, decisionKey: decision.key, symbol: source.symbol, kind: 'cancel', sourceOrderId, startedAt: this.clock(), settledAt: null })) throw new Error('cancellation_outcome_pending');
-    const cancelled = await this.source.client.cancelOrder(sourceOrderId), final = ownedOrder(cancelled.order, decision);
+    const cancelled = await this.source.client.cancelOrder(sourceOrderId, { lease, decisionKey: decision.key }), final = ownedOrder(cancelled.order, decision);
     await journal.result(lease, decision.key, 'acknowledged', final);
     if (!terminal(final)) throw new Error('cancellation_outcome_pending');
     await journal.settleSourceWrite(lease, id, this.clock());

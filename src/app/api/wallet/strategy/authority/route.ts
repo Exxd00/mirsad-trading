@@ -1,0 +1,88 @@
+import { z } from 'zod';
+import { requireMutation, requireSession, refreshSessionCookie } from '@/lib/auth';
+import { query } from '@/lib/db';
+import { body, failure, json } from '@/lib/http';
+import { AuthorityError } from '@/lib/wallet/authority';
+import { loadAuthority } from '@/lib/wallet/authority-store';
+import { productionAuthorityEnvironment } from '@/lib/wallet/authority-environment';
+import { acceptAuthoritySignature, prepareAuthority, prepareAuthorityClose, publicAuthority,
+  recordAuthorityOwnerActions, recheckAuthority, verifyAuthorityClose, verifyAuthorityOwnerActions } from '@/lib/wallet/authority-service';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+const digest = z.string().regex(/^0x[0-9a-f]{64}$/);
+const identity = { id: z.uuid(), digest, expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER - 1) };
+const inputSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('prepare'), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER - 1).nullable() }).strict(),
+  z.object({ action: z.literal('verify-owner-actions'), ...identity,
+    transactionHashes: z.array(z.string().regex(/^0x[0-9a-fA-F]{64}$/)).max(64).optional() }).strict(),
+  z.object({ action: z.literal('record-owner-actions'), ...identity,
+    transactionHashes: z.array(z.string().regex(/^0x[0-9a-fA-F]{64}$/)).max(64).optional(),
+    callBatchIds: z.array(z.string().regex(/^0x[0-9a-fA-F]{1,256}$/)).max(8).optional() }).strict(),
+  z.object({ action: z.literal('record-close-actions'), ...identity, closeDigest: digest,
+    transactionHashes: z.array(z.string().regex(/^0x[0-9a-fA-F]{64}$/)).max(64).optional(),
+    callBatchIds: z.array(z.string().regex(/^0x[0-9a-fA-F]{1,256}$/)).max(8).optional() }).strict(),
+  z.object({ action: z.literal('accept-signature'), ...identity, signature: z.string().regex(/^0x[0-9a-fA-F]{130}$/) }).strict(),
+  z.object({ action: z.literal('recheck') }).strict(),
+  z.object({ action: z.literal('prepare-close'), ...identity }).strict(),
+  z.object({ action: z.literal('verify-close'), ...identity, closeDigest: digest,
+    transactionHashes: z.array(z.string().regex(/^0x[0-9a-fA-F]{64}$/)).max(64).optional() }).strict(),
+]);
+function authorityFailure(error: unknown) {
+  if (error instanceof AuthorityError) {
+    const messages: Record<string, string> = {
+      wallet_authority_profile_missing_or_unsupported: 'ابدأ بتجهيز إعداد المحرك من المحفظة والأسواق، ثم أنشئ مراجعة الصلاحية.',
+      wallet_authority_runtime_missing: 'جهّز إعداد المحرك من المحفظة والأسواق قبل مراجعة الصلاحية.',
+      wallet_authority_review_expired: 'انتهت نافذة المراجعة. أنشئ مراجعة حديثة؛ تبقى مراجع العمليات السابقة محفوظة.',
+      wallet_authority_receipt_unfinalized_or_invalid: 'لم تثبت إيصالات العمليات نهائياً. انتظر تأكيد السلسلة وأعد التحقق دون إعادة الإرسال.',
+      wallet_authority_verification_unavailable: 'تعذرت قراءة التحقق الحالية. السجل محفوظ؛ أعد التحقق عند عودة القراءة.',
+      wallet_authority_source_write_pending: 'توجد عملية إرسال سابقة غير محسومة. الدخول متوقف؛ انتظر تسويتها قبل إعداد الإغلاق ولا تعِد الإرسال.',
+      wallet_authority_account_busy: 'المحرك يحسم عملية قائمة الآن. أعد التحقق بعد اكتمالها.',
+      wallet_authority_close_unverified: 'لم يثبت إبطال جميع الأوامر وتعطيل التفويض وتصفير الموافقات بعد. أعد التحقق أو جهّز دفعة إغلاق جديدة للمتبقي.',
+      wallet_authority_receipt_missing: 'مراجع العمليات محفوظة وتحتاج إيصالاتها. أعد التحقق من حالة العمليات في المحفظة.',
+      wallet_authority_owner_actions_unverified: 'لم تثبت هوية العقود والترقية والموافقات المحدودة على السلسلة. راجع المتطلبات وأعد التحقق بعد التأكيد.',
+    };
+    return json({ code: error.code, error: messages[error.code] ?? 'لم تُثبت هذه الخطوة. حدّث المراجعة وتحقق من الحساب والعقود وحالة السلسلة قبل إعادة المحاولة.' }, 409);
+  }
+  return failure(error);
+}
+export async function GET(request: Request) {
+  try {
+    const session = await requireSession(request), now = Math.floor(Date.now() / 1000);
+    const [record, env] = await Promise.all([loadAuthority({ query }), productionAuthorityEnvironment()]);
+    const response = json({ ...publicAuthority(record, now, env !== null), csrfToken: session.csrfToken });
+    response.headers.append('Set-Cookie', await refreshSessionCookie(request, session));
+    return response;
+  } catch (error) { return authorityFailure(error); }
+}
+export async function POST(request: Request) {
+  try {
+    const session = await requireMutation(request), parsed = inputSchema.safeParse(await body(request));
+    if (!parsed.success) throw new AuthorityError('wallet_authority_request_invalid');
+    const input = parsed.data, now = Math.floor(Date.now() / 1000), tx = { query };
+    // Persist unverified submission references even if RPC setup is unavailable.
+    // This metadata path cannot progress a grant or infer a fee/receipt.
+    const metadataOnly = input.action === 'record-owner-actions' || input.action === 'record-close-actions';
+    const env = metadataOnly ? null : await productionAuthorityEnvironment();
+    const reference = 'digest' in input ? { id: input.id, digest: input.digest as `0x${string}`, expectedRevision: input.expectedRevision } : null;
+    let record;
+    switch (input.action) {
+      case 'prepare': record = await prepareAuthority(tx, env, input.expectedRevision, now); break;
+      case 'verify-owner-actions': record = await verifyAuthorityOwnerActions(tx, env,
+        { ...reference!, transactionHashes: input.transactionHashes as `0x${string}`[] | undefined }, now); break;
+      case 'record-owner-actions': record = await recordAuthorityOwnerActions(tx,
+        { ...reference!, transactionHashes: input.transactionHashes as `0x${string}`[] | undefined, callBatchIds: input.callBatchIds }, now); break;
+      case 'record-close-actions': record = await recordAuthorityOwnerActions(tx,
+        { ...reference!, transactionHashes: input.transactionHashes as `0x${string}`[] | undefined, callBatchIds: input.callBatchIds, closeDigest: input.closeDigest as `0x${string}` }, now); break;
+      case 'accept-signature': record = await acceptAuthoritySignature(tx, env,
+        { ...reference!, signature: input.signature as `0x${string}` }, now); break;
+      case 'recheck': record = await recheckAuthority(tx, env, now); break;
+      case 'prepare-close': record = await prepareAuthorityClose(tx, env, reference!, now); break;
+      case 'verify-close': record = await verifyAuthorityClose(tx, env,
+        { ...reference!, closeDigest: input.closeDigest as `0x${string}`, transactionHashes: input.transactionHashes as `0x${string}`[] | undefined }, now); break;
+    }
+    const response = json({ ...publicAuthority(record, now, metadataOnly || env !== null), csrfToken: session.csrfToken });
+    response.headers.append('Set-Cookie', await refreshSessionCookie(request, session));
+    return response;
+  } catch (error) { return authorityFailure(error); }
+}

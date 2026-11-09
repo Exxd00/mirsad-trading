@@ -15,6 +15,11 @@ export function buildReport(account: Account, now: number) {
     recommendation: 'Keep v1 fixed. A proposed next version must change one variable and compare identical independent evaluation windows; never auto-apply.' } : null;
   return { id: `${VERSION}:report:${berlinDay(now)}`, version: VERSION, readAt: now, sourceAt: account.sourceAt,
     status: 'source_read', last24h, berlinToday, weekly,
+    feeValuation: account.orders.some(o => o.feeRecognition) ? {
+      method: 'cow-api-total-at-finalized-last-fill-v1',
+      note: 'CoW-reported aggregate token fees are valued at the last finalized fill using its completed one-minute EUR reference after the reviewed API attribution-coverage checks. This is order-level recognition, not per-fill payment-time EUR allocation. Net cash PnL uses each canonical token movement; embedded fees are not deducted twice.',
+      orders: account.orders.filter(o => o.feeRecognition).map(o => ({ orderId: o.id, feeEur: o.feeEur, evidence: o.feeRecognition })),
+    } : null,
     openOrders: account.orders.filter(o => !['filled', 'cancelled', 'rejected', 'expired'].includes(o.status)),
     openPositions: account.positions, nextStep: 'Review archive coverage and costs before suggesting a new version.' };
 }
