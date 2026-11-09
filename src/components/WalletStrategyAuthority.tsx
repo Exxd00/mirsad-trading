@@ -37,13 +37,28 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus }: { 
   useEffect(() => {
     alive.current = true;
     const controller = new AbortController();
-    void fetch(endpoint, { credentials: 'same-origin', cache: 'no-store', signal: controller.signal })
-      .then(async response => {
-        if (!response.ok) throw new Error();
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const retry = (attempt: number) => {
+      if (!controller.signal.aborted && alive.current) retryTimer = setTimeout(() => void read(attempt + 1), 500 * (attempt + 1));
+    };
+    const read = async (attempt = 0) => {
+      try {
+        const response = await fetch(endpoint, { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
+        if (!response.ok) {
+          if ([500, 502, 503, 504].includes(response.status) && attempt < 2) { retry(attempt); return; }
+          if (alive.current && !controller.signal.aborted) setError('تعذرت قراءة سجل الصلاحية. أعد فتح الصفحة.');
+          return;
+        }
         const value = await response.json() as Report;
-        if (alive.current) setReport(value);
-      }).catch(() => { if (alive.current && !controller.signal.aborted) setError('تعذرت قراءة سجل الصلاحية. أعد فتح الصفحة.'); });
-    return () => { alive.current = false; controller.abort(); };
+        if (alive.current && !controller.signal.aborted) setReport(value);
+      } catch {
+        if (!alive.current || controller.signal.aborted) return;
+        if (attempt < 2) retry(attempt);
+        else setError('تعذرت قراءة سجل الصلاحية. أعد فتح الصفحة.');
+      }
+    };
+    void read();
+    return () => { alive.current = false; controller.abort(); if (retryTimer) clearTimeout(retryTimer); };
   }, []);
   const review = report?.review, close = report?.close;
   const quoteAsset = review?.allowances.find(a => a.token.toLowerCase() === review.terms.quoteToken.toLowerCase());
