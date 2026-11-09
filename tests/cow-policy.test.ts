@@ -14,6 +14,7 @@ import * as bytecodes from '@metamask/delegation-abis/bytecode';
 import { hashDelegation } from '@metamask/smart-accounts-kit/utils';
 import { DelegationManager } from '@metamask/smart-accounts-kit/contracts';
 import { COW_SETTLEMENT, cowOrderUid, type CowOrder } from '../src/lib/wallet/cow-order';
+import { expectedCowEnforcerRuntime } from '../src/lib/wallet/cow-artifact';
 import { createCowPolicyDraft, cowPolicyCancel, cowPolicyOrderAppData, cowPolicyPresign, encodeCowPolicyOrder,
   encodeCowPolicyRedemption, type CowPolicyAction, type CowPolicyDraft } from '../src/lib/wallet/cow-policy';
 
@@ -56,8 +57,8 @@ beforeAll(async () => {
   };
   manager = await deploy(abis.DelegationManager, bytecodes.DelegationManager, [gas.address]);
   const implementation = await deploy(abis.EIP7702StatelessDeleGator, bytecodes.EIP7702StatelessDeleGator, [manager, gas.address]);
-  const sources = { 'CoWOrderEnforcer.sol': { content: readFileSync(join(process.cwd(), 'contracts/CoWOrderEnforcer.sol'), 'utf8') },
-    'fixture.sol': { content: readFileSync(join(process.cwd(), 'tests/fixtures/cow-policy.sol'), 'utf8') } };
+  const sources = { 'CoWOrderEnforcer.sol': { content: readFileSync(join(process.cwd(), 'contracts/CoWOrderEnforcer.sol'), 'utf8').replace(/\r\n/g, '\n') },
+    'fixture.sol': { content: readFileSync(join(process.cwd(), 'tests/fixtures/cow-policy.sol'), 'utf8').replace(/\r\n/g, '\n') } };
   const compiled = JSON.parse(require('solc').compile(JSON.stringify({ language: 'Solidity', sources,
     settings: { optimizer: { enabled: true, runs: 200 }, viaIR: true, evmVersion: 'prague', outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object', 'evm.deployedBytecode.object'] } } } })));
   const errors = compiled.errors?.filter((e: { severity: string }) => e.severity === 'error');
@@ -73,6 +74,10 @@ beforeAll(async () => {
   await reader.waitForTransactionReceipt({ hash: await ownerWallet.sendTransaction({ to: owner.address, authorizationList: [authorization] }) });
 }, 60000);
 afterAll(() => { child?.kill(); });
+
+it('authenticates the pinned generated runtime against an actual local deployment', async () => {
+  expect(await reader.getCode({ address: enforcer })).toBe(expectedCowEnforcerRuntime(manager));
+});
 
 async function draft() {
   const now = Number((await reader.getBlock()).timestamp);

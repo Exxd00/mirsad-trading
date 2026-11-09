@@ -1,6 +1,10 @@
 // Only fixed local reason codes may enter reports and durable audit records.
 // Transport exceptions may contain credentials, URLs or full response bodies.
 const localReasons = new Set([
+  "accounting_expense_invalid", "accounting_expense_revision", "accounting_late_expense", "accounting_expense_coverage_incomplete",
+  "wallet_cow_runtime_invalid", "wallet_executor_unavailable", "wallet_gas_ceiling_exceeded", "wallet_quote_size_unavailable",
+  "funding_conversion_invalid", "funding_conversion_stale", "funding_balance_mismatch", "accounting_funding_changed_during_read",
+  "wallet_order_finality_pending", "wallet_owner_cancellation_required",
   "account_mismatch", "account_stale", "account_valuation_missing", "accounting_",
   "accounting_account_mismatch", "accounting_backfill_required", "accounting_balance_changed", "accounting_balance_changed_during_read",
   "accounting_balance_invalid", "accounting_current_account_leg_missing", "accounting_cursor_repeated", "accounting_eur_missing",

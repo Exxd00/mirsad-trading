@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { displayWallet, watchMetaMask, type WalletView } from '@/lib/wallet/metamask';
 import styles from '@/app/automation/page.module.css';
 import { WalletTrial } from './WalletTrial';
+import { WalletStrategyAuthority } from './WalletStrategyAuthority';
 
 const captions: Record<WalletView['status'], string> = {
   missing: 'لم يجد مرصاد إضافة MetaMask في هذا المتصفح. افتح الصفحة في بروفايل Chrome الذي تستخدم فيه الإضافة.',
@@ -37,7 +38,15 @@ export function WalletConnection() {
         <div className={styles.controls}><button type="button" className={styles.button} disabled={view.status === 'pending'}
           onClick={() => void session.current?.connect()}>{view.status === 'connected' ? 'تحديث المحفظة' : 'ربط MetaMask'}</button></div>}
     </div>
-  </section><WalletTrial key={view?.status === 'connected' ? view.wallet.address + ':' + view.wallet.chainId : 'detached'}
+  </section><WalletStrategyAuthority key={'authority:' + (view?.status === 'connected' ? view.wallet.address + ':' + view.wallet.chainId : 'detached')}
+    wallet={view?.status === 'connected' ? view.wallet : null}
+    ownerAction={(review, action, close) => {
+      if (!session.current) throw new Error('أعد ربط المحفظة.');
+      return session.current.authorityAction(review, action, close);
+    }} callsStatus={id => {
+      if (!session.current) throw new Error('أعد ربط المحفظة.');
+      return session.current.authorityCallsStatus(id);
+    }} /><WalletTrial key={view?.status === 'connected' ? view.wallet.address + ':' + view.wallet.chainId : 'detached'}
     wallet={view?.status === 'connected' ? view.wallet : null}
     ownerAction={(plan, side, action) => {
       if (!session.current) throw new Error('أعد ربط المحفظة.');

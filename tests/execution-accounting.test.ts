@@ -140,6 +140,14 @@ describe('source-confirmed v1 trade accounting', () => {
     expect(sourceTradeResults(decisions, orders).trades).toEqual([]);
     expect(sourceTradeResults([], orders)).toEqual({ trades: [], complete: true });
   });
+  it('reports embedded protocol fees but subtracts only additional gas from net token prices', () => {
+    const { decisions, orders, buy, sell } = trade();
+    buy.feeEur = '1.2'; buy.feeIncludedInPriceEur = '1';
+    sell.feeEur = '1.3'; sell.feeIncludedInPriceEur = '1';
+    expect(sourceTradeResults(decisions, orders).trades[0]).toMatchObject({ netPnlEur: '3.5', feesEur: '2.5' });
+    sell.feeIncludedInPriceEur = '1.31';
+    expect(sourceTradeResults(decisions, orders).trades[0].netPnlEur).toBeNull();
+  });
   it('accounts for base-denominated fees once and protects only the delivered quantity', () => {
     const { decisions, orders, buy } = trade(true);
     expect(sourceTradeResults(decisions, orders).trades[0].netPnlEur).toBe('3.8024936');

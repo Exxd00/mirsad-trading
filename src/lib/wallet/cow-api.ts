@@ -182,6 +182,7 @@ export class CowReadClient {
     // Keep the transport sink read-only too; TypeScript private visibility is
     // not a runtime guarantee that a future caller cannot pass another route.
     const readable = /^\/mainnet\/api\/v1\/orders\/0x[0-9a-f]{112}$/.test(path)
+      || /^\/mainnet\/api\/v1\/account\/0x[0-9a-f]{40}\/orders\?offset=\d{1,7}&limit=\d{1,3}$/.test(path)
       || /^\/mainnet\/api\/v2\/trades\?orderUid=0x[0-9a-f]{112}&offset=\d{1,7}&limit=\d{1,3}$/.test(path)
       || path === '/mainnet/api/v1/version';
     if (payload === undefined ? !readable : path !== '/mainnet/api/v1/quote') return fail('cow_request_invalid');
@@ -209,6 +210,19 @@ export class CowReadClient {
     const identity = expected(raw), value = await this.read(`/mainnet/api/v1/orders/${identity.uid}`, undefined, true);
     return value === NOT_FOUND ? { status: 'unknown', reason: 'order_not_found' }
       : { status: 'found', evidence: orderEvidence(value, identity, this.now()) };
+  }
+  /** Complete pagination is a caller responsibility. These rows identify
+   * commitments only; indexed cancellation/fills cannot prove chain finality. */
+  async getAccountOrders(ownerInput: string, offset = 0, limit = 100): Promise<{ orders: CowOrderEvidence[]; nextOffset: number | null }> {
+    const owner = address(ownerInput).toLowerCase(); integer(offset, 0, 1_000_000); integer(limit, 1, 100);
+    const value = await this.read(`/mainnet/api/v1/account/${owner}/orders?offset=${offset}&limit=${limit}`);
+    if (!Array.isArray(value) || value.length > limit) return fail('cow_response_invalid');
+    const orders = value.map(raw => {
+      const v = object(raw), identity = expected({ order: order(v), owner, uid: uid(v.uid) });
+      return orderEvidence(v, identity, this.now());
+    });
+    if (new Set(orders.map(o => o.uid)).size !== orders.length) return fail('cow_response_invalid');
+    return { orders, nextOffset: orders.length === limit ? offset + limit : null };
   }
   async getTrades(raw: CowExpectedOrder, pagination: { offset?: number; limit?: number } = {}): Promise<CowTradePage> {
     const identity = expected(raw); let offset: number, limit: number;

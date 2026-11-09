@@ -54,6 +54,17 @@ beforeEach(async () => {
 });
 afterEach(async () => { installWalletExecutionSource(null); vi.useRealTimers(); await closeDatabase(); vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 describe('durable SQL ownership and orchestration', () => {
+  it('applies executable-size refinement before ranking and again before recording the single decision', async () => {
+    const j = new SqlJournal(); await seed(j, ['AAA-EUR', 'BBB-EUR']); const { port } = makePort();
+    port.entryPlan = vi.fn(async (a, s, i, q, risk, now) => {
+      expect(await j.accountDecisions(CONFIG.accountId)).toEqual([]);
+      return planBuy(a, s, { ...i, costs: { ...i.costs!, buyFeeRate: s.symbol === 'BBB-EUR' ? '0.0001' : '0.001',
+        sellFeeRate: s.symbol === 'BBB-EUR' ? '0.0001' : '0.001' } }, q, risk, now);
+    });
+    expect(await cycle(port, j, ['AAA-EUR', 'BBB-EUR'], () => NOW)).toMatchObject({ status: 'submitted', intent: { symbol: 'BBB-EUR' } });
+    expect(port.entryPlan).toHaveBeenCalledTimes(3); expect(port.submit).toHaveBeenCalledOnce();
+    expect((await j.accountDecisions(CONFIG.accountId))).toHaveLength(1);
+  });
   it.each(['conflict', 'unavailable'] as const)('keeps the strategy cycle blocked on %s source evidence, including would-be exits', async status => {
     const j = new SqlJournal(); await seed(j); const { port, a } = makePort();
     a.positions = [position()];

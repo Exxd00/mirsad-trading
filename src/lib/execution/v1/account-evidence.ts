@@ -2,12 +2,16 @@ import { executionReason, sourceErrorCode } from './errors';
 import type { SourceClient, SourceTransaction } from './source-model';
 import { SourceApiError } from './source-model';
 import type { Journal } from './journal';
-import { D, decimal, fresh } from './model';
+import { D, decimal, fresh, positive, type FundingEvidence } from './model';
+import { assertFundingEvidence, validateQuoteConversion } from './readiness';
 import { berlinBounds } from './risk';
 import { emptyAccounting, extendValuations, sameAmounts, sourceAmounts, transactionHash, transactionMovement, type Mark } from './accounting';
 
 type Client = Pick<SourceClient, 'getBalances' | 'getTransactionsPage' | 'getTransaction' | 'getOrderBook' | 'getValuationCandles'>
-  & Partial<Pick<SourceClient, 'getOrder' | 'getFillsForOrders'>>;
+  & Partial<Pick<SourceClient, 'getOrder' | 'getFillsForOrders' | 'getExpenses'>> & { getFunding?: () => Promise<FundingEvidence> };
+const sameFunding = (a: FundingEvidence, b: FundingEvidence) => a.currency === b.currency && a.sourceId === b.sourceId
+  && a.rateAt === b.rateAt && a.rateMaxAgeSeconds === b.rateMaxAgeSeconds
+  && (['available', 'reserved', 'total', 'eurPerUnit'] as const).every(key => decimal(a[key]).eq(b[key]));
 /** Read-only source work happens OUTSIDE the account execution lock. Only its
  * final evidence commit takes the existing lock, with a compare-and-set guard.
  * It cannot change runtime switches, positions, source orders or balances. */
@@ -18,10 +22,15 @@ export async function refreshSourceAccounting(client: Client, journal: Journal, 
   const began = Date.now();
   const budget = () => { if (Date.now() - began > 18000) throw new Error('accounting_read_budget'); };
   try {
-    const before = await client.getBalances(), amounts = sourceAmounts(before);
+    const before = await client.getBalances();
+    const funding = client.getFunding ? { ...await client.getFunding() } : undefined;
+    if (funding) assertFundingEvidence(funding, before, clock());
+    const amounts = sourceAmounts(before, funding?.currency ?? 'EUR');
     const at = Math.min(...before.map(b => Date.parse(b.observedAt) / 1000));
     if (!Number.isFinite(at) || at > clock() + 1 || clock() - at > 30) throw new Error('accounting_source_stale');
     const start = old.anchor?.at ?? berlinBounds(at).start;
+    const costs = client.getExpenses ? await client.getExpenses() : undefined;
+    if (costs && (!costs.complete || !fresh(costs.sourceAt, clock(), 30) || costs.coverageFrom > start)) throw new Error('accounting_expense_coverage_incomplete');
     if (at - start > 3 * 86400) throw new Error('accounting_backfill_required');
     const from = Math.max(0, Math.min(start - 300, at - 86400));
     const collected = new Map<string, SourceTransaction>();
@@ -69,13 +78,23 @@ export async function refreshSourceAccounting(client: Client, journal: Journal, 
       ...movements.flatMap(m => [...Object.keys(m!.delta), ...Object.keys(m!.flow)])])].filter(c => c !== 'EUR');
     if (currencies.length > 20) throw new Error('accounting_price_coverage_incomplete');
     const marks: Mark[] = [];
-    let current = decimal(amounts.EUR);
+    let current = decimal(amounts.EUR ?? '0');
     for (const currency of currencies) {
       budget();
       if (!decimal(amounts[currency] ?? '0').eq(0)) {
         const book = await client.getOrderBook(`${currency}-EUR`);
         if (!fresh(Math.floor(book.sourceAt / 1000), clock(), 15)) throw new Error('accounting_quote_stale');
-        current = current.add(decimal(amounts[currency]).mul(book.bids[0].price));
+        if (book.symbol !== `${currency}-EUR` || !book.bids[0]) throw new Error('accounting_source_valuation_unavailable');
+        if (funding && currency === funding.currency) {
+          const conversion = book.conversion;
+          if (conversion) validateQuoteConversion(conversion, clock());
+          if (!conversion || conversion.currency !== funding.currency || conversion.sourceId !== funding.sourceId
+            || conversion.rateAt !== funding.rateAt || conversion.rateMaxAgeSeconds !== funding.rateMaxAgeSeconds
+            || !decimal(conversion.eurPerUnit).eq(funding.eurPerUnit)) {
+            throw new Error('funding_conversion_invalid');
+          }
+        }
+        current = current.add(decimal(amounts[currency]).mul(positive(book.bids[0].price)));
       }
       const needed = [...new Set(times.map(t => Math.floor(t / 60) * 60))];
       if (!needed.length) continue;
@@ -95,7 +114,12 @@ export async function refreshSourceAccounting(client: Client, journal: Journal, 
     }
     budget();
     const after = await client.getBalances();
-    if (!sameAmounts(amounts, sourceAmounts(after))) throw new Error('accounting_balance_changed_during_read');
+    if (!sameAmounts(amounts, sourceAmounts(after, funding?.currency ?? 'EUR'))) throw new Error('accounting_balance_changed_during_read');
+    if (funding) {
+      const afterFunding = await client.getFunding!();
+      assertFundingEvidence(afterFunding, after, clock());
+      if (!sameFunding(funding, afterFunding)) throw new Error('accounting_funding_changed_during_read');
+    }
     // The ledger ends at the first balance response. Stable second balances
     // validate that this read did not combine two different account states.
     const anchor = { at, amounts };
@@ -117,8 +141,9 @@ export async function refreshSourceAccounting(client: Client, journal: Journal, 
         }
       }
     }
-    next = { ...old, anchor, transactions: records, lastError: null,
-      observations: extendValuations(old, anchor, records, marks, current.toFixed()), fills: [...fills.values()] };
+    const expenses = costs?.expenses.filter(e => e.at <= at) ?? old.expenses ?? [];
+    next = { ...old, anchor, transactions: records, lastError: null, ...(costs ? { expenses } : {}),
+      observations: extendValuations(old, anchor, records, marks, current.toFixed(), expenses), fills: [...fills.values()] };
   } catch (error) {
     next.lastError = error instanceof SourceApiError ? `accounting_source_${sourceErrorCode(error.code).toLowerCase()}` : executionReason(error, 'accounting_source_unavailable');
   }

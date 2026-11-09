@@ -1,19 +1,19 @@
 import { createHash } from 'node:crypto';
-import type { SourceBalance, ReportedFill, SourceTransaction } from './source-model';
+import type { SourceBalance, ReportedFill, SourceTransaction, ExternalExpense } from './source-model';
 import type { DecisionRecord } from './journal';
 import { D, VERSION, decimal, positive, terminal, type ClosedTrade, type EquityObservation, type SourceOrder } from './model';
 import { berlinBounds } from './risk';
 
 export type AccountingAnchor = { at: number; amounts: Record<string, string> };
 export type AccountingEvidence = { version: 1; checkedAt: number; lastError: string | null;
-  anchor: AccountingAnchor | null; observations: EquityObservation[]; transactions: SourceTransaction[]; fills: ReportedFill[] };
+  anchor: AccountingAnchor | null; observations: EquityObservation[]; transactions: SourceTransaction[]; fills: ReportedFill[]; expenses?: ExternalExpense[] };
 export const emptyAccounting = (): AccountingEvidence => ({ version: 1, checkedAt: 0, lastError: null,
   anchor: null, observations: [], transactions: [], fills: [] });
 export const transactionHash = (t: SourceTransaction) => createHash('sha256').update(JSON.stringify([
   t.id, t.status, t.type, t.processedAt, t.source?.netAmount, t.source?.currency, t.source?.accountType,
   t.destination?.netAmount, t.destination?.currency, t.destination?.accountType,
 ])).digest('hex');
-export function sourceAmounts(balances: SourceBalance[]) {
+export function sourceAmounts(balances: SourceBalance[], requiredCurrency = 'EUR') {
   const amounts: Record<string, string> = {};
   for (const b of balances) {
     if (b.accountId !== 'metamask-strategy-v1' || !/^[A-Z0-9]{2,16}$/.test(b.currency) || b.currency in amounts
@@ -22,7 +22,7 @@ export function sourceAmounts(balances: SourceBalance[]) {
     if (b.staked && !decimal(b.staked).eq(0)) throw new Error('accounting_staked_valuation_missing');
     amounts[b.currency] = decimal(b.total).toFixed();
   }
-  if (!('EUR' in amounts)) throw new Error('accounting_eur_missing');
+  if (!/^[A-Z0-9]{2,16}$/.test(requiredCurrency) || !(requiredCurrency in amounts)) throw new Error('accounting_eur_missing');
   return amounts;
 }
 export const sameAmounts = (a: Record<string, string>, b: Record<string, string>) =>
@@ -100,8 +100,22 @@ export function markedValue(amounts: Record<string, string>, at: number, marks: 
  * complete source movements. These amounts are NEVER an available balance or
  * an order authority. Event prices use the last completed one-minute source
  * close, explicitly recorded; they are not historical executable bid quotes. */
-export function extendValuations(old: AccountingEvidence, anchor: AccountingAnchor, transactions: SourceTransaction[], marks: Mark[], currentEquity: string) {
+export function extendValuations(old: AccountingEvidence, anchor: AccountingAnchor, transactions: SourceTransaction[], marks: Mark[], currentEquity: string,
+  expenses: ExternalExpense[] = old.expenses ?? []) {
   const start = old.anchor?.at ?? berlinBounds(anchor.at).start;
+  const uniqueExpenses = new Map<string, ExternalExpense>();
+  for (const e of expenses) {
+    if (!e.id || !Number.isSafeInteger(e.at) || e.at < 0 || e.at > anchor.at || decimal(e.amountEur).lt(0)
+      || !/^0x[0-9a-f]{64}$/i.test(e.transactionHash) || !e.source || uniqueExpenses.has(e.id)) throw new Error('accounting_expense_invalid');
+    uniqueExpenses.set(e.id, e);
+  }
+  for (const prior of old.expenses ?? []) {
+    const e = uniqueExpenses.get(prior.id);
+    if (!e || JSON.stringify(e) !== JSON.stringify(prior)) throw new Error('accounting_expense_revision');
+  }
+  if (old.anchor && expenses.some(e => e.at <= start && !(old.expenses ?? []).some(p => p.id === e.id))) throw new Error('accounting_late_expense');
+  const expenseAt = (at: number) => expenses.filter(e => e.at <= at).reduce((n, e) => n.add(e.amountEur), new D(0));
+  const netValue = (amounts: Record<string, string>, at: number) => decimal(markedValue(amounts, at, marks)).sub(expenseAt(at)).toFixed();
   if (anchor.at <= start) throw new Error('accounting_snapshot_not_new');
   for (const prior of old.transactions) {
     const replacement = transactions.find(t => t.id === prior.id);
@@ -135,20 +149,20 @@ export function extendValuations(old: AccountingEvidence, anchor: AccountingAnch
   for (const m of [...events].reverse()) move(amounts, m.delta, -1);
   if (old.anchor && !sameAmounts(old.anchor.amounts, amounts)) throw new Error('accounting_source_reconciliation_failed');
   const observations = [...old.observations];
-  if (!old.anchor) observations.push({ id: `baseline:${start}`, at: start, equityEur: markedValue(amounts, start, marks),
+  if (!old.anchor) observations.push({ id: `baseline:${start}`, at: start, equityEur: netValue(amounts, start),
     netFlowEur: '0', beforeFlowEquityEur: null, transfersComplete: true,
     evidence: { kind: 'source_ledger', markAt: Math.floor(start / 60) * 60, transactionIds: movements.map(m => m.transaction.id) } });
   const days: number[] = [];
   for (let at = berlinBounds(start).end; at <= anchor.at; at = berlinBounds(at).end) days.push(at);
   let dayIndex = 0;
-  const dayPoint = (at: number) => observations.push({ id: `day:${at}`, at, equityEur: markedValue(amounts, at, marks),
+  const dayPoint = (at: number) => observations.push({ id: `day:${at}`, at, equityEur: netValue(amounts, at),
     netFlowEur: '0', beforeFlowEquityEur: null, transfersComplete: true,
     evidence: { kind: 'source_ledger', markAt: at, transactionIds: movements.map(m => m.transaction.id) } });
   for (const m of events) {
     while (dayIndex < days.length && days[dayIndex] <= m.at) dayPoint(days[dayIndex++]);
     move(amounts, m.delta, 1);
     if (Object.values(m.flow).some(v => !decimal(v).eq(0))) {
-      const equity = markedValue(amounts, m.at, marks), flow = markedValue(m.flow, m.at, marks);
+      const equity = netValue(amounts, m.at), flow = markedValue(m.flow, m.at, marks);
       observations.push({ id: `flow:${m.ids.join(':')}`, at: m.at, equityEur: equity, netFlowEur: flow,
         beforeFlowEquityEur: decimal(equity).sub(flow).toFixed(), transfersComplete: true,
         evidence: { kind: 'source_ledger', markAt: Math.floor(m.at / 60) * 60, transactionIds: m.ids } });
@@ -156,7 +170,7 @@ export function extendValuations(old: AccountingEvidence, anchor: AccountingAnch
   }
   while (dayIndex < days.length) dayPoint(days[dayIndex++]);
   if (!sameAmounts(amounts, anchor.amounts)) throw new Error('accounting_source_reconciliation_failed');
-  observations.push({ id: `snapshot:${anchor.at}`, at: anchor.at, equityEur: currentEquity, netFlowEur: '0',
+  observations.push({ id: `snapshot:${anchor.at}`, at: anchor.at, equityEur: decimal(currentEquity).sub(expenseAt(anchor.at)).toFixed(), netFlowEur: '0',
     beforeFlowEquityEur: null, transfersComplete: true,
     evidence: { kind: 'source_snapshot', markAt: anchor.at, transactionIds: movements.map(m => m.transaction.id) } });
   return observations;
@@ -181,12 +195,13 @@ export function sourceTradeResults(decisions: DecisionRecord[], orders: SourceOr
     if (sold.gt(buy.filledQuantity)) throw new Error('accounting_exit_quantity_mismatch');
     if (!terminal(buy) || !sold.eq(buy.filledQuantity) || confirmed.some(s => !terminal(s))) continue;
     const all = [buy, ...confirmed.filter(s => decimal(s.filledQuantity).gt(0))];
-    const costsKnown = all.every(s => s.feeEur !== null && decimal(s.feeEur).gte(0) && s.averageFillPrice !== null);
+    const costsKnown = all.every(s => s.feeEur !== null && decimal(s.feeEur).gte(0) && s.averageFillPrice !== null
+      && decimal(s.feeIncludedInPriceEur ?? '0').gte(0) && decimal(s.feeIncludedInPriceEur ?? '0').lte(s.feeEur));
     const fees = costsKnown ? all.reduce((v, s) => v.add(s.feeEur!), new D(0)) : null;
     const proceeds = costsKnown ? confirmed.reduce((v, s) => v.add(decimal(s.filledQuantity).mul(s.averageFillPrice ?? '0'))
-      .sub(s.baseFeeQuantity === undefined ? s.feeEur ?? '0' : '0'), new D(0)) : null;
+      .sub(s.baseFeeQuantity === undefined ? decimal(s.feeEur ?? '0').sub(s.feeIncludedInPriceEur ?? '0') : '0'), new D(0)) : null;
     const buyCash = costsKnown ? decimal(buy.filledQuantity).mul(buy.averageFillPrice!)
-      .add(buy.baseFeeQuantity === undefined ? buy.feeEur! : '0') : null;
+      .add(buy.baseFeeQuantity === undefined ? decimal(buy.feeEur!).sub(buy.feeIncludedInPriceEur ?? '0') : '0') : null;
     let slippage = entry.intent.side === 'buy' && buy.averageFillPrice ? decimal(buy.filledQuantity).mul(decimal(buy.averageFillPrice).sub(entry.intent.quote.ask)) : null;
     for (const exit of exits) {
       const s = confirmed.find(s => s.clientKey === exit.key);

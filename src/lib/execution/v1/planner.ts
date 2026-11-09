@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { CONFIG, D, decimal, positive, fresh, terminal, type Account, type BuyIntent, type Instrument,
   type Quote, type RiskResult, type Signal, type SellIntent } from './model';
 import { exitDepthValue } from './costs';
+import { assertAccountFunding, validateQuoteConversion } from './readiness';
 const keyFor = (account: string, decision: string) => createHash('sha256').update(JSON.stringify([account, decision])).digest('hex');
 export function planBuy(account: Account, signal: Signal, instrument: Instrument, quote: Quote, risk: RiskResult, now: number): { intent: BuyIntent | null; reason: string } {
   const blocked = (reason: string) => ({ intent: null, reason });
@@ -11,6 +12,16 @@ export function planBuy(account: Account, signal: Signal, instrument: Instrument
   if (!fresh(account.sourceAt, now, CONFIG.accountMaxAgeSeconds)) return blocked('account_stale');
   if (instrument.symbol !== signal.symbol || quote.symbol !== signal.symbol || !instrument.active || instrument.quoteCurrency !== 'EUR') return blocked('instrument_unavailable');
   if (!fresh(quote.sourceAt, now, CONFIG.quoteMaxAgeSeconds) || !fresh(quote.readAt, now, CONFIG.quoteMaxAgeSeconds)) return blocked('quote_stale');
+  if (account.funding) {
+    try {
+      assertAccountFunding(account, now);
+      if (!quote.conversion) return blocked('funding_conversion_invalid');
+      validateQuoteConversion(quote.conversion, now);
+      if (quote.conversion.currency !== account.funding.currency || quote.conversion.sourceId !== account.funding.sourceId
+        || quote.conversion.rateAt !== account.funding.rateAt || quote.conversion.rateMaxAgeSeconds !== account.funding.rateMaxAgeSeconds
+        || !decimal(quote.conversion.eurPerUnit).eq(account.funding.eurPerUnit)) return blocked('funding_conversion_invalid');
+    } catch (error) { return blocked(executionReason(error, 'funding_conversion_invalid')); }
+  }
   const ask = positive(quote.ask), bid = positive(quote.bid);
   if (bid.gt(ask)) return blocked('invalid_quote');
   if (risk.entryBlocked) return blocked(risk.entryBlocked);

@@ -92,7 +92,67 @@ Primary integration references:
 - [GPv2 signing and persistent presigns](https://github.com/cowprotocol/contracts/blob/main/src/contracts/mixins/GPv2Signing.sol)
 - [Canonical app-data schema](https://github.com/cowprotocol/cow-sdk/blob/main/packages/app-data/src/schemas/v1.3.0.json)
 
-The remaining production gate includes approved market mappings, deployed-policy
-identity, finite allowances, actual authority verification, finalized transfers,
-complete market/FX/history evidence, durable prepared transaction identities and
-the concrete strategy-source bootstrap. Until those pass, entries stay blocked.
+## Mainnet adapter and owner handoff (9 November 2026)
+
+The source now boots on the existing execution host from a versioned owner
+profile and encrypted server gas signer. No deployment, page read, wallet
+connection or saved selection arms trading. The owner uses `/wallet` to prepare
+setup, review the exact contract/limits, deploy the pinned enforcer, request the
+MetaMask atomic-account upgrade and finite approvals, verify finalized receipts,
+and sign the scoped delegation. `/automation` performs fresh readiness checks
+before its existing execution switch can arm entries.
+
+Funding is physical mainnet USDC. EUR is a dated valuation, never a manufactured
+balance. Capital covers only the approved ERC20 tokens; native ETH funds gas and
+is excluded from capital. Actual owner/executor gas, including reverted actions
+and owner setup/closure, is a separate finalized expense. Solver settlement gas
+is not charged to the owner. A verified first external deposit starts the return
+index after an evidenced empty period; a later wipeout cannot reset losses.
+
+The reference candles use explicitly pinned Coinbase Exchange EUR products.
+Exact Ethereum contract matching is mandatory. Canonical WETH9 uses the declared
+native ETH redemption reference; this is a reference methodology, not a claim
+that Coinbase executes the wallet order. Sparse candle histories are excluded.
+The source requires 1,000 contiguous completed 15-minute bars without gap fill.
+Entry ranking and the final pre-claim check use verified, exact-quantity CoW
+buy/sell quotes. Token fees are embedded in net prices, with a separate bounded
+two-nonce gas reserve per leg. A reduced-size budget cannot reuse a larger
+order's average fee estimate. The existing 0.4% cap remains unchanged.
+
+CoW-reported aggregate network plus protocol fees are joined by exact UID and
+canonical totals, then marked at the last finalized fill's completed EUR minute.
+The report names this order-level recognition method and its raw token amount,
+rate and timestamp. The public API does not prove total fees per historical
+fill; no proportional payment-time allocation or invented zero is supplied.
+Net cash PnL uses actual token deltas at each fill's own historical reference.
+The reviewed orderbook version is pinned for fee classification. Every indexed
+canonical trade must have the non-null attribution coverage sentinel that its
+reviewed database transaction commits with total fees. This solver-gas field is
+coverage only and never becomes an owner expense. Missing attribution, changed
+versions and conflicting totals leave the breakdown unknown. The report does
+not claim to independently prove the provider's internal fee formula; actual
+net owner cash movements remain the authoritative all-cost PnL basis.
+
+Unsigned intent, UID, encrypted signed raw bytes, nonce and replacement lineage
+are persisted before any broadcast/publication. Fresh authority fences run
+before signing, broadcast and publication. An intent proven never signed or
+posted can become terminal absent; uncertain transmitted bytes retain their
+identity. A non-tail unused nonce gap blocks entries until resolved. Old grants
+remain separate read-only history readers after renewal; they cannot publish or
+reinterpret an old UID under a new delegation.
+
+The proposed grant is finite for seven days. Per-buy ceiling is 10% of initial
+USDC; cumulative presigns are capped at ten times initial USDC and are not
+refunded by cancellation. Runtime 10%/5% sizing, three positions, 30% exposure,
+EMA and Berlin-day 1% halt remain engine rules. Signed price bounds allow at most
+twice the initial buy price and impose a half-initial-price sell floor. An entry
+whose original 2% stop is outside that scope is rejected. Expiry, missing gas,
+price-floor restrictions, unavailable data and chain finality can block work;
+there is no guarantee of an immediately executable stop or perpetual authority.
+
+Closing durably fences new authority/actions, invalidates every tracked standing
+UID in bounded batches, disables the delegation and zeroes allowances, with
+canonical verification. Managed assets remain the owner's assets. Renewal
+requires authoritative terminal orders and flat managed positions; it preserves
+physical identity, capital history, prior grant configurations and actual fees.
+No live owner transaction or trading grant is established by local tests.

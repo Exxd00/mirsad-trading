@@ -77,8 +77,8 @@ describe('server-managed protection from actual source fills', () => {
     await expect(s.venue.submit(s.buy)).rejects.toThrow('execution_not_armed');
     expect(s.client.submitOrder).not.toHaveBeenCalled();
     await protectionCycle(s.venue, s.journal, () => NOW);
-    expect(s.client.cancelOrder).toHaveBeenCalledExactlyOnceWith(s.entry.id);
-    expect(s.client.submitOrder).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ quantity: '0.4', side: 'sell' }));
+    expect(s.client.cancelOrder).toHaveBeenCalledExactlyOnceWith(s.entry.id, expect.objectContaining({ decisionKey: s.buy.key, lease: expect.objectContaining({ key: `execution:v1:${CONFIG.accountId}:lock` }) }));
+    expect(s.client.submitOrder).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ quantity: '0.4', side: 'sell' }), expect.objectContaining({ intent: expect.objectContaining({ quantity: '0.4', side: 'sell' }), lease: expect.objectContaining({ key: `execution:v1:${CONFIG.accountId}:lock` }) }));
   });
   it('persists partial-fill levels without requiring native TP/SL or an open browser', async () => {
     const s = await setup({ fill: '0.4', entryStatus: 'partially_filled' });
@@ -92,7 +92,7 @@ describe('server-managed protection from actual source fills', () => {
   it.each([['97', 'stop'], ['104', 'target']])('exits on bid %s with one persistent %s decision while entries are paused', async (bid, reason) => {
     const s = await setup({ bid });
     expect(await protectionCycle(s.venue, s.journal, () => NOW)).toMatchObject({ status: 'watching', errors: [] });
-    expect(s.client.submitOrder).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ side: 'sell', type: 'market', quantity: '1' }));
+    expect(s.client.submitOrder).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ side: 'sell', type: 'market', quantity: '1' }), expect.objectContaining({ intent: expect.objectContaining({ reason, quantity: '1' }), lease: expect.objectContaining({ key: `execution:v1:${CONFIG.accountId}:lock` }) }));
     const decisions = await s.journal.accountDecisions(CONFIG.accountId);
     expect(decisions.find(d => d.intent.side === 'sell')?.intent).toMatchObject({ reason, reduceOnly: true });
     await protectionCycle(new ConnectedWalletVenue({ ...s.source, ...testWalletSource() }, () => NOW), new SqlJournal(), () => NOW);
@@ -102,8 +102,8 @@ describe('server-managed protection from actual source fills', () => {
   it('cancels only its own unfilled entry before selling the confirmed partial quantity', async () => {
     const s = await setup({ bid: '97', fill: '0.4', entryStatus: 'partially_filled' });
     await protectionCycle(s.venue, s.journal, () => NOW);
-    expect(s.client.cancelOrder).toHaveBeenCalledExactlyOnceWith(s.entry.id);
-    expect(s.client.submitOrder).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ quantity: '0.4', side: 'sell' }));
+    expect(s.client.cancelOrder).toHaveBeenCalledExactlyOnceWith(s.entry.id, expect.objectContaining({ decisionKey: s.buy.key, lease: expect.objectContaining({ key: `execution:v1:${CONFIG.accountId}:lock` }) }));
+    expect(s.client.submitOrder).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ quantity: '0.4', side: 'sell' }), expect.objectContaining({ intent: expect.objectContaining({ quantity: '0.4', side: 'sell' }), lease: expect.objectContaining({ key: `execution:v1:${CONFIG.accountId}:lock` }) }));
     expect(s.client.cancelOrder.mock.invocationCallOrder[0]).toBeLessThan(s.client.submitOrder.mock.invocationCallOrder[0]);
   });
   it('preserves a stop trigger through unknown cancellation, a restart and a price rebound', async () => {
@@ -116,7 +116,7 @@ describe('server-managed protection from actual source fills', () => {
     expect(s.client.cancelOrder).toHaveBeenCalledTimes(1); expect(s.client.submitOrder).not.toHaveBeenCalled();
     s.entry.status = 'cancelled';
     await protectionCycle(s.venue, s.journal, () => NOW);
-    expect(s.client.submitOrder).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ quantity: '0.4' }));
+    expect(s.client.submitOrder).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ quantity: '0.4' }), expect.objectContaining({ intent: expect.objectContaining({ quantity: '0.4', side: 'sell' }), lease: expect.objectContaining({ key: `execution:v1:${CONFIG.accountId}:lock` }) }));
     expect((await s.journal.protections(CONFIG.accountId))[0].trigger?.reason).toBe('stop');
   });
   it('never repeats an uncertain sell and reconciles a late source acknowledgment', async () => {
@@ -148,7 +148,7 @@ describe('server-managed protection from actual source fills', () => {
     s.market.bid = '101';
     await protectionCycle(s.venue, s.journal, () => NOW);
     expect(s.client.submitOrder).toHaveBeenCalledTimes(2);
-    expect(s.client.submitOrder).toHaveBeenLastCalledWith(expect.objectContaining({ quantity: '0.6' }));
+    expect(s.client.submitOrder).toHaveBeenLastCalledWith(expect.objectContaining({ quantity: '0.6' }), expect.objectContaining({ intent: expect.objectContaining({ quantity: '0.6', side: 'sell' }), lease: expect.objectContaining({ key: `execution:v1:${CONFIG.accountId}:lock` }) }));
   });
   it('preserves manual holdings, reservations and native protection orders', async () => {
     const s = await setup({ bid: '97' }); s.market.extraBalance = '2'; s.market.reserved = '2';
