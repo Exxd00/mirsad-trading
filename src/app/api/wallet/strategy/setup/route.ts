@@ -15,7 +15,9 @@ export async function POST(request: Request) {
     response.headers.append('Set-Cookie', await refreshSessionCookie(request, session));
     return response;
   } catch (error) {
-    if (error instanceof AuthorityError) return json({ code: error.code, error: 'لم يكتمل إعداد الحساب. راجع حالة الشبكة والرصيد والمراجعة الحالية.' }, 409);
+    if (error instanceof AuthorityError) return json({ code: error.code, error: error.code === 'wallet_authority_feasibility_blocked'
+      ? 'لم تثبت جدوى التنفيذ ضمن حد التكلفة 0.4%. افحص أصول المحفظة والتكلفة قبل أي تمويل أو توقيع.'
+      : 'لم يكتمل إعداد الحساب. راجع حالة الشبكة والرصيد والمراجعة الحالية.' }, 409);
     return failure(error);
   }
 }

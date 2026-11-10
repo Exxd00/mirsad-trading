@@ -4,7 +4,10 @@ import { useEffect, useRef, useState } from 'react';
 import type { AuthorityCloseReview, AuthorityReview } from '@/lib/wallet/authority';
 import type { AuthorityPublic } from '@/lib/wallet/authority-service';
 import type { Snapshot } from '@/lib/wallet/metamask';
+import type { WalletFeasibility } from '@/lib/wallet/wallet-feasibility';
+import { currentFeasibility } from '@/lib/wallet/wallet-feasibility';
 import styles from '@/app/automation/page.module.css';
+import { WalletFeasibilityAudit } from './WalletFeasibilityAudit';
 
 type Report = AuthorityPublic & { csrfToken: string };
 type Setup = { status: 'funding-required' | 'configured'; owner: string; executor: string; chainId?: number;
@@ -33,6 +36,7 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus }: { 
   const [notice, setNotice] = useState(''), [error, setError] = useState(''), [reviewed, setReviewed] = useState(false);
   const [submittedReferences, setSubmittedReferences] = useState<string[]>([]);
   const [setup, setSetup] = useState<Setup | null>(null);
+  const [feasibility, setFeasibility] = useState<WalletFeasibility | null>(null);
   const busy = useRef(false), alive = useRef(true);
   useEffect(() => {
     alive.current = true;
@@ -64,10 +68,19 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus }: { 
   const quoteAsset = review?.allowances.find(a => a.token.toLowerCase() === review.terms.quoteToken.toLowerCase());
   const matched = !!wallet && !!review && wallet.chainId === '1' && wallet.address.toLowerCase() === review.owner.toLowerCase();
   const expiredReview = !review || Math.floor(Date.now() / 1000) >= review.reviewExpiresAt;
+  const feasibleNow = () => !!wallet && currentFeasibility(feasibility, wallet.address, wallet.chainId);
+  const feasible = feasibleNow();
+  const walletOwner = wallet?.address.toLowerCase(), walletChain = wallet?.chainId;
+  useEffect(() => { setReviewed(false); setSetup(null); }, [walletOwner, walletChain]);
+  useEffect(() => {
+    if (!feasibility) return;
+    const timer = setTimeout(() => { setFeasibility(null); setReviewed(false); }, Math.min(2147483647, Math.max(0, feasibility.expiresAt - Date.now())));
+    return () => clearTimeout(timer);
+  }, [feasibility]);
   const canPrepare = report && !['verified', 'closing'].includes(report.state);
-  const canBootstrap = matched && reviewed && !expiredReview && review && !review.blockers.length && !review.deploymentStep
+  const canBootstrap = feasible && matched && reviewed && !expiredReview && review && !review.blockers.length && !review.deploymentStep
     && ['draft', 'owner-actions-pending'].includes(report?.state ?? '');
-  const canSign = matched && reviewed && !expiredReview && review && !review.blockers.length && !review.deploymentStep
+  const canSign = feasible && matched && reviewed && !expiredReview && review && !review.blockers.length && !review.deploymentStep
     && report?.state === 'signature-pending';
   async function post(payload: Record<string, unknown>): Promise<Report> {
     if (!report) throw new Error('أعد قراءة سجل الصلاحية.');
@@ -84,6 +97,9 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus }: { 
     busy.current = true; setPending(true); setError(''); setNotice('');
     const reference = review ? { id: review.id, digest: review.digest, expectedRevision: report.revision } : {};
     try {
+      if (['setup', 'prepare', 'deploy', 'bootstrap', 'sign'].includes(action) && !feasibleNow()) {
+        throw new Error('أكمل فحص الأصول والتكلفة الحديث لهذا الحساب والشبكة قبل تجهيز الإعداد أو مراجعة صلاحية جديدة.');
+      }
       if (action === 'setup') {
         if (!wallet || wallet.chainId !== '1') throw new Error('افتح حساب المالك على Ethereum (1) أولاً.');
         const response = await fetch('/api/wallet/strategy/setup', { method: 'POST', credentials: 'same-origin', cache: 'no-store',
@@ -148,6 +164,8 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus }: { 
     <div className={styles.panelHeading}><h2 id="strategy-authority-heading">صلاحية المحرك على Ethereum</h2></div>
     <div className={styles.reportDetails}>
       <p role="status">{report ? labels[report.state] : 'جارٍ قراءة سجل الصلاحية…'}</p>
+      <WalletFeasibilityAudit wallet={wallet} csrfToken={report?.csrfToken ?? null} onAudit={setFeasibility} disabled={pending} />
+      {!feasible && <p>لم يثبت فحص حديث يجيز إعداداً جديداً. يبقى التحقق وإغلاق الصلاحيات السابقة متاحين.</p>}
       <p>هذه الصلاحية لاستراتيجية المحرك الرئيسية. يراجع صاحب المحفظة ترقية الحساب والموافقات المحدودة والتفويض قبل أي طلب من MetaMask.</p>
       {review && <>
         <dl className={styles.details}>
@@ -188,9 +206,9 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus }: { 
       </>}
       <div className={styles.controls}>
         {report && !['verified', 'closing'].includes(report.state) && <button className={styles.button} type="button"
-          disabled={pending || !wallet || wallet.chainId !== '1'} onClick={() => void run('setup')}>تجهيز إعداد المحرك من المحفظة والأسواق</button>}
-        {canPrepare && <button className={styles.button} type="button" disabled={pending} onClick={() => void run('prepare')}>إعداد مراجعة حديثة</button>}
-        {review?.deploymentStep && <button className={styles.button} type="button" disabled={pending || !matched || !reviewed || expiredReview || !review.deploymentStep.gasEstimate || !!review.deploymentStep.blocker}
+          disabled={pending || !wallet || wallet.chainId !== '1' || !feasible} onClick={() => void run('setup')}>تجهيز إعداد المحرك من المحفظة والأسواق</button>}
+        {canPrepare && <button className={styles.button} type="button" disabled={pending || !feasible} onClick={() => void run('prepare')}>إعداد مراجعة حديثة</button>}
+        {review?.deploymentStep && <button className={styles.button} type="button" disabled={pending || !feasible || !matched || !reviewed || expiredReview || !review.deploymentStep.gasEstimate || !!review.deploymentStep.blocker}
           onClick={() => void run('deploy')}>مراجعة نشر عقد الحماية في MetaMask</button>}
         {review && ['draft', 'owner-actions-pending'].includes(report?.state ?? '') && <button className={styles.button} type="button" disabled={pending || !canBootstrap || !review.calls.length}
           onClick={() => void run('bootstrap')}>مراجعة الترقية والموافقات المحدودة</button>}
@@ -206,7 +224,7 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus }: { 
         </>}
       </div>
       {setup && <div role="status">
-        <p>{setup.status === 'configured' ? 'إعداد مرشح محفوظ؛ لا يمنح صلاحية التداول.' : 'الإعداد يحتاج تمويلاً أو بيانات سوق مكتملة قبل إنشاء تفويض محدود.'}</p>
+        <p>{setup.status === 'configured' ? 'إعداد مرشح محفوظ؛ لا يمنح صلاحية التداول.' : 'متطلبات مسار USDC الحالي غير مكتملة. تُراجع الأصول والتكلفة في الفحص أعلاه قبل اتخاذ قرار الإعداد.'}</p>
         <dl className={styles.details}>
           <dt>حساب المالك</dt><dd><bdi dir="ltr">{setup.owner}</bdi></dd>
           <dt>حساب رسوم المشغّل</dt><dd><bdi dir="ltr">{setup.executor}</bdi></dd>
