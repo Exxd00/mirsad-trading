@@ -13,6 +13,8 @@ import { walletBindingIdentity, type WalletExecutionBinding } from './execution-
 import { AuthorityError } from './authority';
 import { expectedCowEnforcerRuntime } from './cow-artifact';
 import manifest from './generated/mainnet-contracts.json';
+import { assertCowSetupFeasible } from './cow-feasibility';
+import { COW_SETUP_GAS_LIMITS } from './wallet-feasibility';
 
 const abi = parseAbi(['function decimals() view returns(uint8)', 'function balanceOf(address) view returns(uint256)']);
 const journal = new SqlJournal();
@@ -84,6 +86,9 @@ export async function prepareCowSetup(ownerInput: string, chainId: number) {
   const [existing, grant, existingRuntime] = await Promise.all([loadStrategyProfile(tx, now), loadAuthority(tx), loadCowRuntime(tx)]);
   if (grant && ['verified', 'closing'].includes(grant.state)) throw new AuthorityError('wallet_authority_close_required');
   if (existing && existing.profile.owner !== owner.toLowerCase()) throw new AuthorityError('wallet_authority_account_changed');
+  // Read-only gate precedes executor creation, candidate writes and wallet
+  // funding/grant prompts. The client cannot attest its own feasibility.
+  await assertCowSetupFeasible(owner, chainId);
   if (existing && existingRuntime && existing.profile.authority.expiresAt > now && grant?.state !== 'closed') {
     const refreshed = await refreshUnusedDeployment(existing, existingRuntime, grant);
     return { status: 'configured' as const, profileRevision: refreshed.profileRevision, owner, executor: refreshed.executorAddress,
@@ -157,8 +162,7 @@ export async function prepareCowSetup(ownerInput: string, chainId: number) {
       || protections.some(p => p.status !== 'closed')) throw new AuthorityError('wallet_authority_close_required');
     const proposed = { version: 1, profileRevision: (existing?.revision ?? 0) + 1, terms, createdAt: existingRuntime?.createdAt ?? now,
       manager: manifest.contracts.manager, implementation: manifest.contracts.implementation, enforcer, executorAddress: executor.address,
-      tokenCodeHashes, gasLimits: { maxGas: '1500000', maxFeePerGasWei: '20000000000', maxPriorityFeePerGasWei: '2000000000',
-        maxTransactionCostWei: '30000000000000000' }, mappings: eligible.map(m => m.mapping) };
+      tokenCodeHashes, gasLimits: COW_SETUP_GAS_LIMITS, mappings: eligible.map(m => m.mapping) };
     const proposedIdentity = walletBindingIdentity(cowBinding(parseCowRuntime(proposed)));
     if (state.walletIdentity && state.walletIdentity !== proposedIdentity) throw new AuthorityError('wallet_authority_account_changed');
     const saved = await transaction(async t => {

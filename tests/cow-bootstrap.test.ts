@@ -21,6 +21,9 @@ import { installWalletExecutionSource, walletExecutionSource } from '../src/lib/
 import { POST as setupPOST } from '../src/app/api/wallet/strategy/setup/route';
 import manifest from '../src/lib/wallet/generated/mainnet-contracts.json';
 import { authorityVerification } from './fixtures/wallet-authority';
+import { AuthorityError } from '../src/lib/wallet/authority';
+const feasibility = vi.hoisted(() => ({ guard: vi.fn() }));
+vi.mock('../src/lib/wallet/cow-feasibility', () => ({ assertCowSetupFeasible: feasibility.guard }));
 
 const NOW = Math.floor(Date.now() / 1000), ownerAccount = privateKeyToAccount(generatePrivateKey()), owner = ownerAccount.address;
 const executorKey = generatePrivateKey(), executor = privateKeyToAccount(executorKey).address;
@@ -83,11 +86,21 @@ beforeAll(async () => {
 beforeEach(async () => {
   await query('TRUNCATE app_settings,app_owner,app_sessions,auth_rate_limits,audit_events,order_intents RESTART IDENTITY');
   installWalletExecutionSource(null);
+  feasibility.guard.mockReset(); feasibility.guard.mockResolvedValue({ decision: 'eligible-for-setup' });
   vi.stubGlobal('fetch', vi.fn(() => { throw new Error('No financial network or RPC may run during isolated bootstrap tests'); }));
 });
 afterEach(() => { try { expect(fetch).not.toHaveBeenCalled(); } finally { installWalletExecutionSource(null); vi.restoreAllMocks(); vi.unstubAllGlobals(); } });
 afterAll(async () => { await closeDatabase(); vi.unstubAllEnvs(); });
 describe('cold start with durable wallet configuration', () => {
+  it('rejects unproven setup before creating a gas executor, profile, runtime or authority', async () => {
+    const before = await settings(), executor = vi.spyOn(runtime, 'cowExecutor');
+    feasibility.guard.mockRejectedValue(new AuthorityError('wallet_authority_feasibility_blocked'));
+    await expect(prepareCowSetup(owner, 1)).rejects.toThrow('wallet_authority_feasibility_blocked');
+    expect(feasibility.guard).toHaveBeenCalledWith(owner, 1); expect(executor).not.toHaveBeenCalled();
+    expect(await settings()).toEqual(before); expect(await loadStrategyProfile({ query })).toBeNull();
+    expect(await loadAuthority({ query })).toBeNull(); expect(await runtime.loadCowRuntime({ query })).toBeNull();
+    expect(walletExecutionSource()).toBeNull();
+  });
   it('retains a prior grant reader and its unresolved nonce gate without restoring its write authority', async () => {
     const current = await seeded(), old = runtime.parseCowRuntime({ ...current, terms: { ...current.terms, id: randomUUID() } });
     const draft = createCowPolicyDraft(old.terms, { manager: old.manager, enforcer: old.enforcer }), id = randomUUID();

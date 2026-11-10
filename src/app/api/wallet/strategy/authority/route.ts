@@ -5,6 +5,8 @@ import { body, failure, json } from '@/lib/http';
 import { AuthorityError } from '@/lib/wallet/authority';
 import { loadAuthority } from '@/lib/wallet/authority-store';
 import { productionAuthorityEnvironment } from '@/lib/wallet/authority-environment';
+import { assertCowSetupFeasible } from '@/lib/wallet/cow-feasibility';
+import { loadStrategyProfile } from '@/lib/wallet/strategy-profile';
 import { acceptAuthoritySignature, prepareAuthority, prepareAuthorityClose, publicAuthority,
   recordAuthorityOwnerActions, recheckAuthority, verifyAuthorityClose, verifyAuthorityOwnerActions } from '@/lib/wallet/authority-service';
 
@@ -33,6 +35,7 @@ function authorityFailure(error: unknown) {
     const messages: Record<string, string> = {
       wallet_authority_profile_missing_or_unsupported: 'ابدأ بتجهيز إعداد المحرك من المحفظة والأسواق، ثم أنشئ مراجعة الصلاحية.',
       wallet_authority_runtime_missing: 'جهّز إعداد المحرك من المحفظة والأسواق قبل مراجعة الصلاحية.',
+      wallet_authority_feasibility_blocked: 'لم تثبت جدوى التنفيذ ضمن حد التكلفة 0.4%. افحص أصول المحفظة والتكلفة قبل أي تمويل أو توقيع.',
       wallet_authority_review_expired: 'انتهت نافذة المراجعة. أنشئ مراجعة حديثة؛ تبقى مراجع العمليات السابقة محفوظة.',
       wallet_authority_receipt_unfinalized_or_invalid: 'لم تثبت إيصالات العمليات نهائياً. انتظر تأكيد السلسلة وأعد التحقق دون إعادة الإرسال.',
       wallet_authority_verification_unavailable: 'تعذرت قراءة التحقق الحالية. السجل محفوظ؛ أعد التحقق عند عودة القراءة.',
@@ -59,11 +62,19 @@ export async function POST(request: Request) {
   try {
     const session = await requireMutation(request), parsed = inputSchema.safeParse(await body(request));
     if (!parsed.success) throw new AuthorityError('wallet_authority_request_invalid');
-    const input = parsed.data, now = Math.floor(Date.now() / 1000), tx = { query };
+    const input = parsed.data, tx = { query };
+    let now = Math.floor(Date.now() / 1000);
     // Persist unverified submission references even if RPC setup is unavailable.
     // This metadata path cannot progress a grant or infer a fee/receipt.
     const metadataOnly = input.action === 'record-owner-actions' || input.action === 'record-close-actions';
     const env = metadataOnly ? null : await productionAuthorityEnvironment();
+    if (env && (input.action === 'prepare' || input.action === 'accept-signature')) {
+      const profile = await loadStrategyProfile(tx, now);
+      if (!profile) throw new AuthorityError('wallet_authority_profile_missing_or_unsupported');
+      await assertCowSetupFeasible(profile.profile.owner, profile.profile.chainId);
+    }
+    // Provider I/O must not freeze a review's validity at request start.
+    now = Math.floor(Date.now() / 1000);
     const reference = 'digest' in input ? { id: input.id, digest: input.digest as `0x${string}`, expectedRevision: input.expectedRevision } : null;
     let record;
     switch (input.action) {

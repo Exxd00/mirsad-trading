@@ -94,6 +94,36 @@ Primary integration references:
 
 ## Mainnet adapter and owner handoff (9 November 2026)
 
+### Asset and cost feasibility gate (10 November 2026)
+
+`/wallet` first offers an authenticated read-only feasibility audit. It reads
+native ETH, canonical USDC and MetaMask/M0 mUSD at one Ethereum block and checks
+that block hash again after the reads. These are physical balances, not a
+complete wallet valuation or a certificate of unreserved capital. Native BTC
+has a separate address/network and is outside this audit. mUSD is identified
+by its official contract, never by the ticker or an assumed USDC peg.
+
+The audit samples 10% and 5% of the configured quote balance, or mUSD when no
+USDC exists. A verified entry fee exceeding the entire 0.4% cost cap is enough
+to reject that sample without inventing a sell quote. Otherwise it requests
+buy/sell quotes for the same WETH quantity, uses net paid minus net returned
+without double-counting embedded CoW fees, and adds the adapter's reviewed
+four-nonce gas ceiling with fresh EUR conversion for USDC. This ceiling is not
+a measured fee. mUSD has no verified execution/EUR adapter and cannot become
+eligible merely because an indicative quote is inexpensive. Missing, stale,
+unverified or rate-limited evidence stays unknown. A tested WETH sample does
+not establish the economics of every possible market.
+
+New setup, authority preparation and signature acceptance repeat the gate on
+the server. Blocked setup creates no executor key, profile or authority.
+Existing rechecks, receipt reconciliation and closure remain accessible.
+An eligible sample only permits preparing a non-active setup; actual entry
+still requires available-capital accounting, market history, signal, authority
+and the existing per-intent cost/budget checks. One-time deployment, approval,
+upgrade and bridge costs remain unestimated by this audit and require their
+own review. No transfer, bridge or top-up is proposed as a remedy for an
+unproven route.
+
 The source now boots on the existing execution host from a versioned owner
 profile and encrypted server gas signer. No deployment, page read, wallet
 connection or saved selection arms trading. The owner uses `/wallet` to prepare
