@@ -218,6 +218,45 @@ upgrade and bridge costs remain unestimated by this audit and require their
 own review. No transfer, bridge or top-up is proposed as a remedy for an
 unproven route.
 
+### Partial-fill pricing compatibility (15 November 2026)
+
+The current public CoW `/quote` request has no `partiallyFillable` field, and
+the reviewed response builder fixes the returned value to `false`:
+[request schema](https://github.com/cowprotocol/services/blob/7ece6a65e4d3c8735f4043ef387f0f423e5ba1d5/crates/model/src/quote.rs#L118),
+[response construction](https://github.com/cowprotocol/services/blob/7ece6a65e4d3c8735f4043ef387f0f423e5ba1d5/crates/orderbook/src/quoter.rs#L395).
+A single read-only Base quote probe at 21:52:09 UTC confirmed that an explicit
+`partiallyFillable=true` request is ignored: HTTP 200 and `verified=true` still
+returned `false`. Canonical-format full app-data and its matching hash were
+accepted, but that does not change the response's order semantics. The probe
+used hypothetical unfunded Base USDC and unsigned research identity values;
+it created no wallet profile, authority or order.
+
+These market quotes remain indicative price/fee samples. A high sample fee
+rejects that sample; it is not a demonstrated lower bound for another order
+type. The existing strategy requires partially fillable orders plus active
+cancellation of unfilled entry remainders after 60 seconds. A non-partial quote
+cannot certify their cost, even if its displayed round-trip estimate is below
+0.4%. Sending an unsupported request field, changing the returned flag, or
+changing the strategy to all-or-nothing orders is not a compatibility proof.
+
+New entries require explicit partial-fill compatibility for both exact-size
+legs and app-data hashes matching the canonical grant/intent binding. The
+evidence travels with the intent and is checked again before preparing or
+publishing a buy. Missing evidence in an older intent prevents a new financial
+write; it does not prevent reading its history or cancelling an existing
+order. The feasibility gate cannot use incompatible samples to prepare a
+profile or request a signature. Reference books, measurement, reconciliation,
+cancellation and protective exits remain available through their existing
+checks. A future pricing adapter must establish the missing compatibility and
+all existing fee, gas, funding, authority and deadline requirements.
+
+The fixed public adapter declares this unsupported entry capability directly,
+so readiness cannot report that it can open new trades. This declaration adds
+no network probe to the 10-second protection path. Positive composed lifecycle
+tests explicitly install a synthetic reviewed pricing capability and compatible
+HTTP fixtures; a separate current-factory test must remain blocked. Those tests
+exercise conditional execution plumbing, not public-provider readiness.
+
 ### mUSD reference valuation (15 November 2026)
 
 The owner-authenticated, CSRF-protected `POST /api/wallet/strategy/valuation`
@@ -315,8 +354,10 @@ Exact Ethereum contract matching is mandatory. Canonical WETH9 uses the declared
 native ETH redemption reference; this is a reference methodology, not a claim
 that Coinbase executes the wallet order. Sparse candle histories are excluded.
 The source requires 1,000 contiguous completed 15-minute bars without gap fill.
-Entry ranking and the final pre-claim check use verified, exact-quantity CoW
-buy/sell quotes. Token fees are embedded in net prices, with a separate bounded
+Entry ranking and the final pre-claim check require compatible, verified,
+exact-quantity CoW buy/sell quotes with the partial-fill and app-data evidence
+described above. Current public non-partial quotes cannot open an entry.
+Token fees are embedded in net prices, with a separate bounded
 two-nonce gas reserve per leg. A reduced-size budget cannot reuse a larger
 order's average fee estimate. The existing 0.4% cap remains unchanged.
 

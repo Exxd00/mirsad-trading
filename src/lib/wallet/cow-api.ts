@@ -122,32 +122,40 @@ export type CowTradePage = { trades: CowTradeEvidence[]; offset: number; nextOff
 export type CowQuoteRequest = {
   owner: string; sellToken: string; buyToken: string; receiver: string; kind: 'buy' | 'sell'; amount: string;
   validTo: number; signingScheme: 'presign' | 'eip1271';
+  /** Exact JSON bytes or a digest. Omission retains the public research default. */
+  appData?: string; appDataHash?: Hex;
 };
 export type CowQuoteEvidence = {
   owner: Address; sellToken: Address; buyToken: Address; receiver: Address; kind: 'buy' | 'sell'; validTo: number;
   sellAmount: string; buyAmount: string; quotedFeeAmount: string; partiallyFillable: boolean;
   signingScheme: 'presign' | 'eip1271'; expiration: string; quoteId: number | null; verified: boolean; readAt: number;
+  appDataHash?: Hex;
 };
 function quoteRequest(raw: CowQuoteRequest, now: number) {
   try {
     const owner = normalizeCowAddress(raw.owner), sellToken = normalizeCowAddress(raw.sellToken), buyToken = normalizeCowAddress(raw.buyToken), receiver = normalizeCowAddress(raw.receiver);
     const amount = units(raw.amount, true), validTo = integer(raw.validTo, 1, 0xffffffff);
+    const document = raw.appData ?? '0x' + '0'.repeat(64);
+    const hash = appData({ appData: document, ...(raw.appDataHash === undefined ? {} : { appDataHash: raw.appDataHash }) });
     if (sameAddress(sellToken, buyToken) || !['buy', 'sell'].includes(raw.kind) || !['presign', 'eip1271'].includes(raw.signingScheme)
       || validTo < Math.floor(now / 1000) + 60) return fail('cow_request_invalid');
-    return { owner, sellToken, buyToken, receiver, amount, kind: raw.kind, validTo, signingScheme: raw.signingScheme };
+    return { owner, sellToken, buyToken, receiver, amount, kind: raw.kind, validTo, signingScheme: raw.signingScheme,
+      appData: document, appDataHash: hash };
   } catch { return fail('cow_request_invalid'); }
 }
 function quoteEvidence(raw: unknown, request: ReturnType<typeof quoteRequest>, readAt: number): CowQuoteEvidence {
   const value = object(raw), q = object(value.quote), owner = address(value.from), sellToken = address(q.sellToken), buyToken = address(q.buyToken), receiver = address(q.receiver);
   if (!sameAddress(owner, request.owner) || !sameAddress(sellToken, request.sellToken) || !sameAddress(buyToken, request.buyToken)
-    || !sameAddress(receiver, request.receiver) || q.kind !== request.kind || q.validTo !== request.validTo || q.signingScheme !== request.signingScheme) return fail('cow_identity_mismatch');
+    || !sameAddress(receiver, request.receiver) || q.kind !== request.kind || q.validTo !== request.validTo || q.signingScheme !== request.signingScheme
+    || appData(q) !== request.appDataHash) return fail('cow_identity_mismatch');
   if (q.sellTokenBalance !== 'erc20' || q.buyTokenBalance !== 'erc20' || typeof q.partiallyFillable !== 'boolean'
     || typeof value.verified !== 'boolean') return fail('cow_response_invalid');
   const sold = units(q.sellAmount, true), bought = units(q.buyAmount, true), fee = units(q.feeAmount), expiration = date(value.expiration);
   if (Date.parse(expiration) <= readAt || (request.kind === 'sell' ? BigInt(sold) + BigInt(fee) !== BigInt(request.amount) : bought !== request.amount)) return fail('cow_response_invalid');
   return { owner, sellToken, buyToken, receiver, kind: request.kind, validTo: request.validTo, sellAmount: sold, buyAmount: bought,
     quotedFeeAmount: fee, partiallyFillable: q.partiallyFillable, signingScheme: request.signingScheme, expiration,
-    quoteId: value.id === undefined || value.id === null ? null : integer(value.id), verified: value.verified, readAt };
+    quoteId: value.id === undefined || value.id === null ? null : integer(value.id), verified: value.verified, readAt,
+    appDataHash: request.appDataHash };
 }
 async function bodyText(response: Response, signal: AbortSignal, maximumBytes: number): Promise<string> {
   const declared = response.headers.get('content-length');
@@ -255,6 +263,7 @@ export class CowReadClient {
     const request = quoteRequest(raw, this.now());
     const payload = { from: request.owner, sellToken: request.sellToken, buyToken: request.buyToken, receiver: request.receiver,
       kind: request.kind, validTo: request.validTo, signingScheme: request.signingScheme, priceQuality: 'verified',
+      appData: request.appData, ...(/^0x[0-9a-fA-F]{64}$/.test(request.appData) ? {} : { appDataHash: request.appDataHash }),
       ...(request.kind === 'sell' ? { sellAmountBeforeFee: request.amount } : { buyAmountAfterFee: request.amount }) };
     const value = await this.read('/mainnet/api/v1/quote', payload);
     return quoteEvidence(value, request, this.now());

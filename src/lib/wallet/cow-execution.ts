@@ -7,6 +7,7 @@ import type { SourceSubmitOrder } from '../execution/v1/source-model';
 import { validateQuoteConversion } from '../execution/v1/readiness';
 import { cowOrderUid, normalizeCowOrder } from './cow-order';
 import { cowPolicyOrderAppData } from './cow-policy';
+import { assertCowEntryQuote } from './cow-entry-quote';
 import { CowExecutionJournal } from './cow-execution-journal';
 import { cowFail, CowExecutionError, type CowAuthority, type CowCancelContext, type CowConversion, type CowExecutionApi,
   type CowExecutionMarket, type CowExecutionRpc, type CowOrderInspection, type CowOrderRecord, type CowSubmitContext,
@@ -62,6 +63,7 @@ export class CowExecution {
       || !fresh(conversion.sourceAt, this.clock(), CONFIG.quoteMaxAgeSeconds) || !decimal(conversion.eurPerUnit).gt(0)) return cowFail('cow_conversion_evidence_missing');
     try { validateQuoteConversion(conversion, this.clock()); } catch { return cowFail('cow_conversion_evidence_missing'); }
     if (intent.side === 'buy') {
+      assertCowEntryQuote(intent, cowPolicyOrderAppData(this.options.authority.draft, key(intent)).hash, this.clock());
       const exact = quote.exactSize, rawBase = decimal(intent.quantity).mul(decimal('10').pow(market.baseDecimals));
       if (!exact || exact.provider !== 'cow-mainnet-v1' || exact.quantity !== intent.quantity
         || exact.buyBuyAmount !== rawBase.toFixed(0)
@@ -137,6 +139,7 @@ export class CowExecution {
         if (record.cancelAt !== null && this.clock() >= record.cancelAt) return cowFail('entry_expired_before_send');
       }
       const previous = phase === 'clear-presign' ? (await journal.getTransaction(record.uid, 'presign'))?.attempts[0] : undefined;
+      if (phase === 'presign') assertCowEntryQuote(record.intent, record.order.appData);
       const prepared = await rpc.prepare(record.uid, phase, record.order, key(record.intent), tx.nonce, previous);
       await rpc.validatePrepared(prepared, phase, record.order, key(record.intent));
       tx = await journal.savePrepared(lease, record, tx, prepared);
@@ -145,8 +148,19 @@ export class CowExecution {
     await rpc.validatePrepared(prepared, phase, record.order, key(record.intent));
     // The durable prepared bytes exist before this fenced attempt marker and
     // before any network send. An uncertain send retries only these bytes.
+    if (phase === 'presign' && record.intent.side === 'buy') this.frozenConversion(record.intent,
+      this.options.markets.find(m => m.symbol === record.intent.symbol)!);
     await journal.markBroadcast(lease, record, tx, prepared.hash);
-    await rpc.broadcast(prepared); return tx;
+    if (phase === 'presign' && record.intent.side === 'buy') this.frozenConversion(record.intent,
+      this.options.markets.find(m => m.symbol === record.intent.symbol)!);
+    await rpc.broadcast(prepared, phase === 'presign' ? () => {
+      const now = this.clock();
+      if (now >= record.order.validTo || (record.intent.side === 'buy' && record.cancelAt !== null && now >= record.cancelAt)) {
+        return cowFail('entry_expired_before_send');
+      }
+      if (record.intent.side === 'buy') this.frozenConversion(record.intent,
+        this.options.markets.find(m => m.symbol === record.intent.symbol)!);
+    } : undefined); return tx;
   }
   private async state(record: CowOrderRecord, phase: CowTxPhase): Promise<CowTxState | null> {
     const tx = await this.options.journal.getTransaction(record.uid, phase);
@@ -208,6 +222,8 @@ export class CowExecution {
         if (this.clock() >= record.order.validTo || (record.cancelAt !== null && this.clock() >= record.cancelAt)) {
           await this.advance(lease, record, { entriesEnabled: false }); return;
         }
+        if (record.intent.side === 'buy') this.frozenConversion(record.intent,
+          this.options.markets.find(m => m.symbol === record.intent.symbol)!);
         record = await this.patch(lease, record, { postState: 'unknown', lastError: null });
         const posted = await this.options.api.post(record);
         record = await this.patch(lease, record, { postState: posted, cancelRequested: posted === 'rejected' });

@@ -25,7 +25,9 @@ export type Quote = { symbol: string; bid: string; ask: string; sourceAt: number
   conversion?: QuoteConversion;
   exactSize?: { provider: 'cow-mainnet-v1'; quantity: string; buyQuoteId: number | null; sellQuoteId: number | null;
     buySellAmount: string; buyBuyAmount: string; buyFeeAmount: string; sellSellAmount: string; sellBuyAmount: string;
-    sellFeeAmount: string; buyExpiration: number; sellExpiration: number };
+    sellFeeAmount: string; buyExpiration: number; sellExpiration: number;
+    /** Absent on historical journals. New CoW entries require compatible evidence. */
+    buyPartiallyFillable?: boolean; sellPartiallyFillable?: boolean; buyAppDataHash?: string; sellAppDataHash?: string };
   depth?: { bids: { price: string; quantity: string }[]; asks: { price: string; quantity: string }[] } };
 export type Costs = { buyFeeRate: string; sellFeeRate: string; buyFixedEur: string; sellFixedEur: string;
   buySlippageRate: string; sellSlippageRate: string; source: string; observedAt: number; depthRequired?: boolean };

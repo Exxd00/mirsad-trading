@@ -130,7 +130,7 @@ export function WalletFeasibilityAudit({ wallet, csrfToken, onAudit, disabled = 
       <p>mUSD وUSDC رمزان مختلفان على Ethereum. وجود أصل غير مهيأ يختلف عن نقص الغاز أو ارتفاع التكلفة، ولا يعني أن المحفظة فارغة.</p>
       <p>القراءة تخص الأصول الثلاثة المحددة، وليست تقييماً لكل المحفظة أو رأس مال متاحاً للتداول. Bitcoin الأصلي شبكة مستقلة وعنوانه ورصيده لم يُفحصا هنا.</p>
       <div className={styles.scroll} role="region" aria-label="عينات تكلفة التنفيذ" tabIndex={0}>
-        <table className={styles.table}><caption>عينات افتراضية إلى WETH: ‏10% و5% من رصيد رمز التسعير المقروء، وليست أموالاً متاحة للتنفيذ.</caption>
+        <table className={styles.table}><caption>أسعار مرجعية لعينات إلى WETH: ‏10% و5% من رصيد رمز التسعير المقروء. اكتمال بيانات العينة لا يعني جاهزية أمر المحرك.</caption>
           <thead><tr><th scope="col">العينة</th><th scope="col">مبلغ العينة</th><th scope="col">رسوم الدخول</th><th scope="col">الدخول %</th>
             <th scope="col">الدورة %</th><th scope="col">الغاز: حد أعلى</th><th scope="col">الإجمالي: حد أعلى</th></tr></thead>
           <tbody>{audit.samples.map(s => {
@@ -138,7 +138,7 @@ export function WalletFeasibilityAudit({ wallet, csrfToken, onAudit, disabled = 
             return <tr key={s.quoteSymbol + ':' + s.allocationPercent}>
               <th scope="row">{s.quoteSymbol} · {s.allocationPercent}%</th><td><bdi>{units(s.budgetRaw, asset.decimals)} {s.quoteSymbol}</bdi></td>
               <td><bdi>{s.entryFeeRaw === null ? 'غير مثبتة' : units(s.entryFeeRaw, asset.decimals) + ' ' + s.quoteSymbol}</bdi>
-                <small>{s.status === 'complete' ? 'عينة مكتملة' : s.status === 'partial' ? 'عينة جزئية' : 'قراءة غير متاحة'}</small></td>
+                <small>{s.status === 'complete' ? 'بيانات العينة مكتملة' : s.status === 'partial' ? 'بيانات العينة غير مكتملة' : 'قراءة غير متاحة'}</small></td>
               <td><bdi>{percentage(s.entryFeeFraction)}</bdi></td><td><bdi>{percentage(s.roundTripCostFraction)}</bdi></td>
               <td><bdi>{percentage(s.gasCostUpperFraction)}</bdi></td><td><bdi>{percentage(s.totalCostUpperFraction)}</bdi></td>
             </tr>;
@@ -146,6 +146,7 @@ export function WalletFeasibilityAudit({ wallet, csrfToken, onAudit, disabled = 
         </table>
       </div>
       <p>العينات تخص مسار الرمز المعروض إلى WETH؛ نجاحها أو تعذرها لا يثبت حالة جميع الأسواق أو سيولتها.</p>
+      {audit.blockers.includes('wallet_partial_fill_quote_unavailable') && <p role="status"><strong>عروض الأسعار المقروءة لا تثبت تكلفة أوامر المحرك التي تسمح بالتنفيذ الجزئي. يبقى تجهيز التفويض والدخول الجديد محجوبين حتى يتوفر دليل متوافق.</strong></p>}
       <p>الحد المحفوظ للدورة الكاملة: <bdi>{percentage(audit.maximumCostFraction)}</bdi>. تكاليف النشر والترقية والموافقات لم تُقدّر بعد؛ المكونات غير المثبتة تبقى مجهولة.</p>
       {entryExceeds && <p><strong>رسوم الدخول وحدها تتجاوز حد الدورة الكاملة. لا تكفي هذه العينة لإثبات جدوى تحويل الأصول أو تمويل المسار.</strong></p>}
       <details><summary>هوية الأصول وتفاصيل العوائق</summary>

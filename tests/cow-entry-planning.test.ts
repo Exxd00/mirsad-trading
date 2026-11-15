@@ -20,14 +20,19 @@ function fixture(reduced = false) {
     buySlippageRate: '0', sellSlippageRate: '0', source: 'isolated-seed', observedAt: NOW, depthRequired: true };
   const q = { ...quote('WETH-EUR'), conversion, depth: { bids: [{ price: '99.99', quantity: '10' }], asks: [{ price: '100', quantity: '10' }] } };
   const terms = setupPolicy({ owner, executor, quoteRaw: 1000_000000n, now: NOW, markets: [{ mapping, euroPrice: '100' }], eurPerQuote: '1' });
-  const config = { terms, mappings: [mapping], gasLimits: { maxGas: '100000', maxFeePerGasWei: '1000000000', maxPriorityFeePerGasWei: '100000000',
-    maxTransactionCostWei: '100000000000000' } } as CowRuntimeConfig;
+  const config: CowRuntimeConfig = { version: 1, profileRevision: 1, createdAt: NOW, terms, executorAddress: executor,
+    implementation: '0x9999999999999999999999999999999999999999', tokenCodeHashes: {},
+    manager: '0x7777777777777777777777777777777777777777', enforcer: '0x8888888888888888888888888888888888888888',
+    mappings: [mapping], gasLimits: { maxGas: '100000', maxFeePerGasWei: '1000000000', maxPriorityFeePerGasWei: '100000000',
+    maxTransactionCostWei: '100000000000000' } };
   let ask = '100', bid = '99.99', verified = true;
   const api = { getQuote: vi.fn(async (r: CowQuoteRequest) => {
     const base = decimal(r.amount).div('1000000000000000000');
     return { ...r, buyAmount: r.kind === 'buy' ? r.amount : base.mul(bid).mul('1000000').floor().toFixed(0),
       sellAmount: r.kind === 'sell' ? r.amount : base.mul(ask).mul('1000000').ceil().toFixed(0), quotedFeeAmount: '0', quoteId: 42,
-      partiallyFillable: true, verified, readAt: NOW * 1000, expiration: new Date((NOW + 30) * 1000).toISOString() };
+      // Compatible partial quotes are a synthetic future-provider fixture;
+      // the current public CoW endpoint always reports false.
+      partiallyFillable: true, appDataHash: r.appDataHash ?? ('0x' + '0'.repeat(64)), verified, readAt: NOW * 1000, expiration: new Date((NOW + 30) * 1000).toISOString() };
   }) };
   const market = { referenceBook: vi.fn(async () => ({ ask: '100', bid: '99.99' })) };
   const client = { estimateFeesPerGas: vi.fn(async () => ({ maxFeePerGas: 1000000000n, maxPriorityFeePerGas: 100000000n })) };
@@ -65,8 +70,23 @@ describe('exact executable quantity before the durable strategy decision', () =>
     expect(requests.at(-1)?.amount).toBe(decimal(size).mul('1000000000000000000').toFixed(0));
     expect(requests.at(-2)?.kind).toBe('buy'); expect(requests.at(-1)?.kind).toBe('sell');
     expect(result.intent?.quote.exactSize).toMatchObject({ provider: 'cow-mainnet-v1', quantity: size, buyQuoteId: 42, sellQuoteId: 42 });
+    expect(requests.every(r => typeof r.appData === 'string' && r.appData.includes('mirsad:') && !!r.appDataHash)).toBe(true);
+    expect(result.intent?.quote.exactSize).toMatchObject({ buyPartiallyFillable: true, sellPartiallyFillable: true,
+      buyAppDataHash: requests.at(-2)!.appDataHash, sellAppDataHash: requests.at(-1)!.appDataHash });
     expect(result.intent).toMatchObject({ stopFraction: '0.02', targetFraction: '0.04', expiresAt: NOW + 60 });
     expect(Number(result.intent?.estimatedCostFraction)).toBeLessThanOrEqual(Number(CONFIG.maximumRoundTripCost));
+  });
+  it.each(['false', 'missing', 'changed-appdata'] as const)('does not turn %s quote semantics into an eligible entry', async mode => {
+    const f = fixture(), original = f.api.getQuote.getMockImplementation()!;
+    f.api.getQuote.mockImplementation(async r => {
+      const q = await original(r);
+      if (mode === 'false') q.partiallyFillable = false;
+      if (mode === 'missing') Reflect.deleteProperty(q, 'partiallyFillable');
+      if (mode === 'changed-appdata') q.appDataHash = '0x' + 'f'.repeat(64);
+      return q;
+    });
+    expect(await f.quotes.entryPlan(f.a, signal('WETH-EUR'), f.i, f.q, f.risk, NOW)).toMatchObject({ intent: null,
+      reason: mode === 'changed-appdata' ? 'wallet_quote_appdata_mismatch' : 'wallet_partial_fill_quote_unavailable' });
   });
   it('quotes exposure-room and explicit preclaim quantity caps instead of scaling the larger book', async () => {
     const f = fixture(); f.a.positions = [{ ...position('AAA-EUR'), marketValueEur: '280' }];

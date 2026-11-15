@@ -59,6 +59,16 @@ beforeEach(() => { vi.stubGlobal('fetch', vi.fn(() => { throw new Error('No netw
 afterEach(() => { expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('read-only wallet asset and exact-size economic audit', () => {
+  it.each([false, true])('retains dated market samples but never grants setup eligibility from public false partial quotes (high fee=%s)', async highFee => {
+    const f = fixture({ usdc: 100000_000000n, eth: 1_000000000000000000n, feeRaw: highFee ? 1000_000000n : 1n });
+    const original = f.api.getQuote.getMockImplementation()!;
+    f.api.getQuote.mockImplementation(async r => ({ ...await original(r), partiallyFillable: false }));
+    const result = await auditCowFeasibility(owner, 1, f.deps);
+    expect(result.decision).not.toBe('eligible-for-setup');
+    expect(result.blockers.filter(c => c === 'wallet_partial_fill_quote_unavailable')).toHaveLength(1);
+    expect(result.samples.every(s => s.entryFeeRaw !== null && s.sourceAt !== null)).toBe(true);
+    expect(result.samples.every(s => s.reason === (highFee ? 'wallet_sample_entry_fee_exceeds_roundtrip_cap' : 'wallet_partial_fill_quote_unavailable'))).toBe(true);
+  });
   it('reports actual mUSD holdings instead of calling a USDC-zero wallet empty, with exact 10%/5% fee-only rejection', async () => {
     const f = fixture({ feeRaw: 217685n }), audit = await auditCowFeasibility(owner, 1, f.deps);
     expect(audit).toMatchObject({ decision: 'blocked', maximumCostFraction: '0.004', createdExecutionState: false, setupCosts: 'not-estimated' });

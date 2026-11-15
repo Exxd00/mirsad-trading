@@ -28,7 +28,7 @@ function request(kind: 'buy' | 'sell' = 'sell'): CowQuoteRequest {
 }
 function quote(kind: 'buy' | 'sell' = 'sell') {
   return { from: owner, quote: { ...data, kind, sellAmount: kind === 'sell' ? '990' : '450',
-    buyAmount: kind === 'sell' ? '2000' : '1000', feeAmount: '10', partiallyFillable: false, signingScheme: 'presign' },
+    buyAmount: kind === 'sell' ? '2000' : '1000', feeAmount: '10', appData: '0x' + '0'.repeat(64), partiallyFillable: false, signingScheme: 'presign' },
     expiration: '2026-11-08T18:00:30Z', id: 7, verified: true };
 }
 function response(value: unknown, status = 200, headers: Record<string, string> = {}) {
@@ -200,7 +200,22 @@ describe('read-only CoW quote boundary', () => {
     expect(options).toMatchObject({ method: 'POST', redirect: 'error', cache: 'no-store', credentials: 'omit' });
     expect(JSON.parse(options!.body as string)).toEqual({ from: owner, sellToken, buyToken, receiver: owner, kind,
       validTo: data.validTo, signingScheme: 'presign', priceQuality: 'verified',
+      appData: '0x' + '0'.repeat(64),
       ...(kind === 'sell' ? { sellAmountBeforeFee: '1000' } : { buyAmountAfterFee: '1000' }) });
+  });
+  it('binds exact appData bytes/hash while preserving the actual false partial-fill response', async () => {
+    const full = JSON.stringify({ appCode: 'mirsad:isolated-research', metadata: {}, version: '1.3.0' });
+    const hash = keccak256(stringToHex(full)), response = quote();
+    const f = client({ ...response, quote: { ...response.quote, appData: full, appDataHash: hash } });
+    expect(await f.client.getQuote({ ...request(), appData: full, appDataHash: hash }))
+      .toMatchObject({ appDataHash: hash, partiallyFillable: false });
+    expect(JSON.parse(String(f.fetcher.mock.calls[0][1]?.body))).toMatchObject({ appData: full, appDataHash: hash });
+  });
+  it('rejects an appData mismatch in either the request or quote response', async () => {
+    const full = '{}', hash = keccak256(stringToHex(full)), f = client(quote());
+    await expect(f.client.getQuote({ ...request(), appData: full, appDataHash: data.appData })).rejects.toMatchObject({ code: 'cow_request_invalid' });
+    expect(f.fetcher).not.toHaveBeenCalled();
+    await expect(f.client.getQuote({ ...request(), appData: full, appDataHash: hash })).rejects.toMatchObject({ code: 'cow_identity_mismatch' });
   });
   it.each([
     { amount: '0' }, { amount: '01' }, { amount: 1000 }, { sellToken: buyToken }, { owner: '0x' + '0'.repeat(40) },
