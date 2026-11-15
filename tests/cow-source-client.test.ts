@@ -77,7 +77,8 @@ function indexedFeeFixture(version = currentFeeVersion) {
   delete tradeJson.gasCostEstimateWei; delete tradeJson.chainFinality;
   const fetcher = vi.fn<typeof fetch>(async url => {
     const path = new URL(String(url)).pathname;
-    const value = path.endsWith('/version') ? version : path.includes('/orders/') ? orderJson
+    if (path.endsWith('/version')) return new Response(version, { headers: { 'content-type': 'text/plain; charset=utf-8' } });
+    const value = path.includes('/orders/') ? orderJson
       : path.endsWith('/trades') ? [tradeJson] : (() => { throw new Error('Unexpected isolated read'); })();
     return new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
   });

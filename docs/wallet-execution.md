@@ -192,8 +192,9 @@ Fee classification accepts only the exact reviewed releases
 checked against its atomic attribution/fee save and order total/token query;
 this is compatibility with that release, not permission to accept future
 versions or an independent proof of the provider's internal fee formula.
-Every indexed
-canonical trade must have the non-null attribution coverage sentinel that its
+The version endpoint returns plain text even with `Accept: application/json`;
+its bounded response is parsed separately from order, trade and quote JSON.
+Every indexed canonical trade must have the non-null attribution coverage sentinel that its
 reviewed database transaction commits with total fees. This solver-gas field is
 coverage only and never becomes an owner expense. Missing attribution, changed
 versions and conflicting totals leave the breakdown unknown. The report does
