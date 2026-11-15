@@ -92,6 +92,41 @@ beforeEach(() => { vi.stubGlobal('fetch', vi.fn(() => { throw new Error('No netw
 afterEach(() => { expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('CoW SourceClient canonical evidence composition', () => {
+  it('keeps finalized fill time stable while observation time advances and indexed costs are unavailable', async () => {
+    const f = fixture(); f.fill(); f.inspection.cancellation = 'finalized';
+    vi.mocked(f.options.api.getVersion).mockRejectedValue(new Error('isolated unavailable index'));
+    let readAt = NOW;
+    const client = new CowSourceClient({ ...f.options, clock: () => readAt });
+    const first = await client.getOrder(uid); readAt += 120;
+    const later = await client.getOrder(uid);
+    expect(first.lastFillAt).toBe(new Date(block.timestamp * 1000).toISOString());
+    expect(later.lastFillAt).toBe(first.lastFillAt);
+    expect(Date.parse(later.updatedAt)).toBe(Date.parse(first.updatedAt) + 120000);
+    expect(sourceOrder(later)).toMatchObject({ lastFillAt: block.timestamp, sourceAt: readAt, filledQuantity: '1', feeEur: null });
+    expect(f.options.execution.submitOrder).not.toHaveBeenCalled(); expect(f.options.execution.cancelOrder).not.toHaveBeenCalled();
+  });
+  it('does not give a pending or zero-fill order a fabricated finalized event time', async () => {
+    const f = fixture(); f.inspection.pendingEvidence = true; f.inspection.unconfirmedBuyAmount = '1000000000000000000';
+    const actual = await f.client.getOrder(uid);
+    expect(actual).toMatchObject({ filledQuantity: '0', finality: { status: 'mined', unconfirmedFilledQuantity: '1' } });
+    expect(actual.lastFillAt).toBeUndefined(); expect(sourceOrder(actual).lastFillAt).toBeUndefined();
+  });
+  it.each([NOW + 1, NOW - 61, NOW - 20.5, Number.MAX_SAFE_INTEGER])('rejects an invalid canonical finalized fill timestamp %s', async at => {
+    const f = fixture(); f.fill(); f.inspection.finalizedTrades[0].block = { ...block, timestamp: at };
+    await expect(f.client.getOrder(uid)).rejects.toThrow('cow_fill_timestamp_invalid');
+    expect(f.options.quotes.conversionAt).not.toHaveBeenCalled();
+  });
+  it.each([undefined, 'not-a-date', new Date((NOW - 61) * 1000).toISOString(), new Date((NOW + 1) * 1000).toISOString()])(
+    'rejects missing or invalid canonical event metadata %s rather than using read time', async lastFillAt => {
+      const f = fixture(); f.fill(); const actual = await f.client.getOrder(uid);
+      expect(() => sourceOrder({ ...actual, lastFillAt })).toThrow('source_timestamp_invalid');
+    });
+  it('keeps legacy generic orders compatible but rejects event metadata on a zero-fill order', async () => {
+    const f = fixture(); f.fill(); const actual = await f.client.getOrder(uid);
+    const { finality: _finality, lastFillAt: _lastFillAt, ...legacy } = actual;
+    expect(sourceOrder(legacy).lastFillAt).toBeUndefined();
+    expect(() => sourceOrder({ ...actual, filledQuantity: '0' })).toThrow('source_timestamp_invalid');
+  });
   it.each([
     { version: COW_FEE_API_VERSION, raw: '200000', token: quote, embedded: '0.24', total: '0.34', currency: 'USDC', rate: '1.2' },
     { version: currentFeeVersion, raw: '200000', token: quote, embedded: '0.24', total: '0.34', currency: 'USDC', rate: '1.2' },
@@ -199,6 +234,7 @@ describe('CoW SourceClient canonical evidence composition', () => {
   it('recognizes a terminal multi-fill total at the named last-fill mark while retaining actual per-fill cash FX and unknown fill fees', async () => {
     const f = fixture(), { t, api } = f.fill();
     expect((await f.client.getOrder(uid)).fee).toBeUndefined(); // An open partial total can still grow.
+    f.inspection.record.createdAt = NOW - 100;
     f.inspection.finalizedTrades[0].block = { ...t.block, timestamp: NOW - 80 };
     f.inspection.finalizedTrades.push({ ...structuredClone(t), logIndex: 8, transactionHash: h('6'),
       block: { ...t.block, number: '101', timestamp: NOW - 20 } });
@@ -206,7 +242,7 @@ describe('CoW SourceClient canonical evidence composition', () => {
       offset: 0, nextOffset: null, coverage: 'page-only', readAt: NOW * 1000 });
     vi.mocked(f.options.quotes.conversionAt).mockImplementation(async (_currency, at) => at <= NOW - 60 ? '1.1' : '1.2');
     const o = await f.client.getOrder(uid), fills = (await f.client.getFillsForOrders([o])).fills;
-    expect(o).toMatchObject({ status: 'filled', filledQuantity: '2', filledAmount: '115', averageFillPrice: '57.5',
+    expect(o).toMatchObject({ status: 'filled', filledQuantity: '2', filledAmount: '115', averageFillPrice: '57.5', lastFillAt: new Date((NOW - 20) * 1000).toISOString(),
       fee: '0.34', feeIncludedInPriceEur: '0.24', feeRecognition: { recognitionAt: NOW - 20, eurPerToken: '1.2', rawAmount: '200000' } });
     expect(fills.map(f => f.price)).toEqual(['55', '60']);
     expect(fills.every(f => f.fee === undefined && f.feeCurrency === undefined && f.feeIncludedInPriceEur === undefined)).toBe(true);

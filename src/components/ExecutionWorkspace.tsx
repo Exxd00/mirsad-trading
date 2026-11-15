@@ -152,6 +152,7 @@ export function ExecutionWorkspace() {
         <p className={styles.sectionNote}>شموع مرجعية مكتملة بفاصل 15 دقيقة، مع تهيئة من 1000 شمعة وفق قواعد الاستراتيجية. يستمر هذا القياس مستقلاً عن تفويض التداول. بياناته لا تثبت تنفيذ صفقة أو تحقق ربح.</p>
         {report.market_observation ? <>
           <p className={styles.sectionNote}>الحالة: {{ current: 'محدّث', partial: 'تغطية جزئية', stale: 'قراءة قديمة', unconfigured: 'لم يبدأ القياس', unavailable: 'تعذر القياس' }[report.market_observation.status]}
+            {' · '}أسواق محدّثة: {report.market_observation.markets.filter(market => market.status === 'current').length} من {report.market_observation.markets.length}
             {' · '}آخر نجاح: {report.market_observation.lastSuccessAt === null ? 'لم يُسجل بعد' : new Date(report.market_observation.lastSuccessAt * 1000).toISOString()}
             {report.market_observation.lastTrigger && ` · آخر تشغيل: ${report.market_observation.lastTrigger === 'scheduler' ? 'مجدول' : 'يدوي'}`}
             {report.market_observation.lastError && ' · توجد بيانات ناقصة؛ تُعرض القراءات المحفوظة بأوقاتها.'}</p>

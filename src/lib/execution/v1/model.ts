@@ -44,7 +44,7 @@ export type SourceOrder = { id: string; clientKey: string; symbol: string; side:
   finality?: { status: 'pending' | 'mined' | 'finalized'; unconfirmedFilledQuantity: string; transactionHashes: string[] };
   status: 'open' | 'partial' | 'filled' | 'cancelled' | 'rejected' | 'expired' | 'unknown';
   quantity: string | null; filledQuantity: string; remainingBudgetEur: string | null;
-  submittedAt: number; sourceAt: number; managed: boolean; purpose: 'entry' | 'exit' | 'protection';
+  submittedAt: number; sourceAt: number; lastFillAt?: number; managed: boolean; purpose: 'entry' | 'exit' | 'protection';
   averageFillPrice: string | null; feeEur: string | null; baseFeeQuantity?: string; feeIncludedInPriceEur?: string };
 export type ClosedTrade = { id: string; symbol: string; version: string; sourceConfirmed: boolean;
   closedAt: number; netPnlEur: string | null; feesEur: string | null; slippageEur: string | null;

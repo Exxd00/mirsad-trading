@@ -5,6 +5,8 @@ export interface ReportedOrder {
   quantity: string | null; filledQuantity: string;
   status: 'pending_new' | 'new' | 'partially_filled' | 'filled' | 'cancelled' | 'rejected' | 'replaced'; price?: string; averageFillPrice?: string; filledAmount?: string;
   createdAt: string; updatedAt: string; fee?: string; feeCurrency?: string;
+  /** Latest confirmed execution event, independent of the observation updatedAt. */
+  lastFillAt?: string;
   previousOrderId?: string; rejectReason?: string;
   feeIncludedInPriceEur?: string;
   feeRecognition?: { method: 'cow-api-total-at-finalized-last-fill-v1'; token: string; rawAmount: string;

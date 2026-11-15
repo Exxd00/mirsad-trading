@@ -133,6 +133,8 @@ export class CowSourceClient implements SourceClient {
     if (!i.finalizedTrades.length) return [];
     const market = this.options.markets.find(m => m.symbol === i.record.intent.symbol)!;
     return Promise.all(i.finalizedTrades.map(async (t: CowFinalizedTrade) => {
+      if (!Number.isSafeInteger(t.block.timestamp) || t.block.timestamp < 0 || t.block.timestamp > 253402300799
+        || t.block.timestamp < i.record.createdAt || t.block.timestamp > this.clock()) fail('cow_fill_timestamp_invalid');
       const baseRaw = i.record.intent.side === 'buy' ? t.buyAmount : t.sellAmount;
       const quoteRaw = i.record.intent.side === 'buy' ? t.sellAmount : t.buyAmount;
       const quantity = this.units(baseRaw, market.baseToken);
@@ -217,6 +219,7 @@ export class CowSourceClient implements SourceClient {
       ...(fees ? { fee: fees.toFixed(), feeCurrency: 'EUR', feeIncludedInPriceEur: embedded!.amountEur,
         ...(embedded!.recognition ? { feeRecognition: embedded!.recognition } : {}) } : {}),
       createdAt: iso(i.record.createdAt), updatedAt: iso(this.clock()),
+      ...(fills.length ? { lastFillAt: iso(Math.max(...fills.map(f => Date.parse(f.createdAt) / 1000))) } : {}),
       finality: { status: finality, unconfirmedFilledQuantity: unconfirmed.toFixed(),
         transactionHashes: [...new Set([...i.finalizedTrades.map(t => t.transactionHash), ...i.transactions.map(t => t.state.hash)])] } } };
   }

@@ -88,8 +88,9 @@ export class CowMarketQuotes {
       const maximumQuantity = quantityCap === undefined ? instrument.maximumQuantity
         : D.min(instrument.maximumQuantity ?? quantityCap, quantityCap).toFixed();
       let candidate = planBuy(account, signal, { ...instrument, maximumQuantity }, referenceQuote, risk, Math.max(now, this.clock()));
+      let requestedQuantity = candidate.intent?.quantity ?? '0';
       for (let attempt = 0; candidate.intent && attempt < 3; attempt++) {
-        const size = candidate.intent.quantity;
+        const size = requestedQuantity;
         const [quote, gas] = await Promise.all([this.exactQuote(signal.symbol, size, conversion), this.gasReserveEur()]);
         const current = Math.max(now, this.clock());
         const exactInstrument = { ...instrument, maximumQuantity: size, costs: { buyFeeRate: '0', sellFeeRate: '0',
@@ -97,7 +98,18 @@ export class CowMarketQuotes {
           source: 'CoW exact-size net quotes and bounded executor gas v1', observedAt: current } };
         const refined = planBuy(account, signal, exactInstrument, quote, risk, current);
         if (!refined.intent) return refined;
-        if (refined.intent.quantity !== size) { candidate = refined; continue; }
+        if (refined.intent.quantity !== size) {
+          // A whole USDC atom can keep the raw buy debit unchanged as quantity
+          // falls, making its per-unit ask cross another price tick each pass.
+          // Leave two quote atoms plus one unit-price tick of unspent budget;
+          // ceil the reduction to the base step, then obtain NEW exact quotes.
+          // This is a quantity cap, not a fee or a change to the allocation.
+          const reserve = decimal(conversion.eurPerUnit).mul('0.000002').add(decimal(size).mul(instrument.priceStep));
+          const trim = reserve.div(refined.intent.limitPrice).div(instrument.quantityStep).ceil().mul(instrument.quantityStep);
+          requestedQuantity = decimal(refined.intent.quantity).sub(trim).toFixed();
+          if (!decimal(requestedQuantity).gt(0)) return blocked('budget_below_minimum');
+          candidate = refined; continue;
+        }
         const baseScale = decimal('10').pow(mapping.tokenDecimals), rawBase = decimal(size).mul(baseScale);
         const rawQuote = decimal(size).mul(refined.intent.limitPrice).div(conversion.eurPerUnit).mul('1000000').floor();
         const stopQuote = decimal(size).mul(refined.intent.limitPrice).mul(decimal('1').sub(CONFIG.stopFraction))

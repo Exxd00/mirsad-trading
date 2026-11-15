@@ -34,7 +34,26 @@ function fixture(reduced = false) {
   const risk: RiskResult = evaluateRisk({ reduced, dailyHaltDate: null }, [], a.equityHistory, true, NOW);
   const quotes = new CowMarketQuotes({ config, client: client as unknown as PublicClient, market: market as unknown as CoinbaseMarketClient,
     api: api as unknown as CowReadClient, balances: async () => [], clock: () => NOW });
-  return { a, i, q, risk, api, config, quotes, prices: (buy: string, sell = '99.99') => { ask = buy; bid = sell; }, unverified: () => { verified = false; } };
+  return { a, i, q, risk, api, config, quotes, market, prices: (buy: string, sell = '99.99') => { ask = buy; bid = sell; }, unverified: () => { verified = false; } };
+}
+function atomicFixture(reduced = false, rate = '1', ask = '150', bid = ask) {
+  const f = fixture(reduced), equity = decimal('100000').mul(rate).toFixed();
+  f.a.availableEur = equity; f.a.equityEur = equity;
+  f.a.balances = [{ currency: 'USDC', available: '100000', total: '100000', reserved: '0' }];
+  f.a.funding = { ...f.a.funding!, eurPerUnit: rate, available: '100000', total: '100000', reserved: '0' };
+  f.a.equityHistory = f.a.equityHistory.map(point => ({ ...point, equityEur: equity }));
+  f.i.quantityStep = '0.000000000000000001'; f.i.priceStep = '0.000000000001';
+  f.i.costs = { ...f.i.costs!, buyFixedEur: '9', sellFixedEur: '9' };
+  const eurAsk = decimal(ask).mul(rate).toFixed(), eurBid = decimal(bid).mul(rate).toFixed();
+  f.q.ask = eurAsk; f.q.bid = eurBid; f.q.conversion = { ...f.q.conversion, eurPerUnit: rate };
+  f.q.depth = { bids: [{ price: eurBid, quantity: '1000' }], asks: [{ price: eurAsk, quantity: '1000' }] };
+  f.config.terms = setupPolicy({ owner, executor, quoteRaw: 100000_000000n, now: NOW,
+    markets: [{ mapping, euroPrice: eurAsk }], eurPerQuote: rate });
+  f.config.gasLimits = { maxGas: '1500000', maxFeePerGasWei: '20000000000', maxPriorityFeePerGasWei: '2000000000',
+    maxTransactionCostWei: '30000000000000000' };
+  f.market.referenceBook.mockResolvedValue({ ask: '150', bid: '150' }); // Existing ceiling gives EUR9 per leg.
+  f.prices(ask, bid);
+  return { ...f, entrySignal: { ...signal('WETH-EUR'), close: eurAsk } };
 }
 beforeEach(() => { vi.stubGlobal('fetch', vi.fn(() => { throw new Error('No network in exact entry planning tests'); })); });
 afterEach(() => { expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -59,11 +78,39 @@ describe('exact executable quantity before the durable strategy decision', () =>
     const f = fixture(true); f.prices('100.2', '99.7');
     expect(await f.quotes.entryPlan(f.a, signal('WETH-EUR'), f.i, f.q, f.risk, NOW)).toMatchObject({ intent: null, reason: 'round_trip_cost_limit' });
   });
-  it('shrinks and requotes price-dependent size and refuses a third still-changing quantity', async () => {
+  it('shrinks and requotes price-dependent size and refuses a third still-changing atomic quantity', async () => {
     const f = fixture(), original = f.api.getQuote.getMockImplementation()!; let pair = 0;
-    f.api.getQuote.mockImplementation(async r => { if (r.kind === 'buy') { pair++; f.prices((100 + pair * 0.1).toFixed(2), '100'); } return original(r); });
+    f.i.quantityStep = '0.000000000000000001'; f.i.priceStep = '0.000000000001';
+    f.api.getQuote.mockImplementation(async r => { if (r.kind === 'buy') { pair++; f.prices((100 + pair * 0.05).toFixed(2), '100'); } return original(r); });
     expect(await f.quotes.entryPlan(f.a, signal('WETH-EUR'), f.i, f.q, f.risk, NOW)).toMatchObject({ intent: null, reason: 'wallet_exact_quote_unstable' });
     expect(f.api.getQuote).toHaveBeenCalledTimes(6);
+  });
+  it.each([{ reduced: false, rate: '1', ask: '150' }, { reduced: true, rate: '1', ask: '150' },
+    { reduced: false, rate: '1.2', ask: '150.1' }, { reduced: true, rate: '1.2', ask: '150.1' }])(
+    'converges for atomic quote/price rounding at reduced=$reduced FX=$rate without changing fees or the budget', async input => {
+      const f = atomicFixture(input.reduced, input.rate, input.ask), result = await f.quotes.entryPlan(f.a, f.entrySignal, f.i, f.q, f.risk, NOW);
+      expect(result.reason).toBe('entry'); const intent = result.intent!, exact = intent.quote.exactSize!;
+      expect(intent.allocation).toBe(input.reduced ? CONFIG.reducedAllocation : CONFIG.allocation);
+      expect(intent.budgetEur).toBe(decimal(f.a.availableEur).mul(intent.allocation).toFixed());
+      expect(intent.expectedEntryFeeEur).toBe('9');
+      expect(decimal(intent.estimatedCostFraction).lte(CONFIG.maximumRoundTripCost)).toBe(true);
+      const signedQuoteRaw = decimal(intent.quantity).mul(intent.limitPrice).div(input.rate).mul('1000000').floor();
+      expect(signedQuoteRaw.gte(decimal(exact.buySellAmount).add(exact.buyFeeAmount))).toBe(true);
+      expect(signedQuoteRaw.div('1000000').mul(input.rate).add(intent.expectedEntryFeeEur).lte(intent.budgetEur)).toBe(true);
+      expect(exact.quantity).toBe(intent.quantity);
+      const finalPair = f.api.getQuote.mock.calls.slice(-2).map(([request]) => request);
+      expect(finalPair.map(request => request.kind)).toEqual(['buy', 'sell']);
+      expect(finalPair.every(request => request.amount === decimal(intent.quantity).mul('1000000000000000000').toFixed(0))).toBe(true);
+      const preclaim = await f.quotes.entryPlan(f.a, f.entrySignal, f.i, f.q, f.risk, NOW, intent.quantity);
+      expect(preclaim.intent).toMatchObject({ quantity: intent.quantity, limitPrice: intent.limitPrice,
+        expectedEntryFeeEur: intent.expectedEntryFeeEur, budgetEur: intent.budgetEur });
+    });
+  it('resolves the composed-cycle EUR150/149.9 quote loop while retaining the reduced-allocation cost rejection', async () => {
+    const f = atomicFixture(false, '1', '150', '149.9'), result = await f.quotes.entryPlan(f.a, f.entrySignal, f.i, f.q, f.risk, NOW);
+    expect(result.reason).toBe('entry'); expect(result.intent!.budgetEur).toBe('10000');
+    expect(result.intent!.expectedEntryFeeEur).toBe('9');
+    const g = atomicFixture(true, '1', '150', '149.9');
+    expect(await g.quotes.entryPlan(g.a, g.entrySignal, g.i, g.q, g.risk, NOW)).toMatchObject({ intent: null, reason: 'round_trip_cost_limit' });
   });
   it('requires verified responses and rejects a stop below the signed emergency sell floor without changing the 2% rule', async () => {
     const f = fixture(); f.unverified();
