@@ -5,6 +5,7 @@ import { decodeEventLog, domainSeparator, erc20Abi, getAddress, keccak256, parse
   type Address, type Hex, type PublicClient, type TransactionSerialized } from 'viem';
 import { COW_CHAIN_ID, COW_DOMAIN, COW_SETTLEMENT, COW_VAULT_RELAYER, cowOrderUid, type CowOrder } from './cow-order';
 import { createCowPolicyDraft, cowPolicyCancel, cowPolicyPresign, encodeCowPolicyRedemption } from './cow-policy';
+import { gasForPhase, normalizeCowGasLimits } from './cow-gas-limits';
 import { cowFail, CowExecutionError, type CowAuthority, type CowBlock, type CowExecutionRpc, type CowFinalizedTrade,
   type CowGasLimits, type CowLog, type CowOrderRecord, type CowPreparedTx, type CowReceipt, type CowTransaction, type CowFinalizedArchive,
   type CowTxPhase, type CowTxState } from './cow-execution-types';
@@ -47,9 +48,13 @@ export type CowRpcOptions = { client: PublicClient; signer?: CowExecutorSigner; 
  * cannot pass. Read DTOs keep chain amounts exact and never assert API finality. */
 export class CowRpcTransport implements CowExecutionRpc {
   private readonly clock: () => number;
+  private readonly gasLimits: CowGasLimits;
   private readonly approved = new Map<Hex, CowTxPhase>();
   private readonly expiryBlocks = new Map<Hex, CowBlock>();
-  constructor(private readonly options: CowRpcOptions) { this.clock = options.clock ?? (() => Math.floor(Date.now() / 1000)); }
+  constructor(private readonly options: CowRpcOptions) {
+    this.clock = options.clock ?? (() => Math.floor(Date.now() / 1000));
+    this.gasLimits = normalizeCowGasLimits(options.gasLimits);
+  }
   private async guarded<T>(work: () => Promise<T>): Promise<T> {
     try { return await work(); } catch (e) { throw e instanceof CowExecutionError ? e : new CowExecutionError('cow_rpc_unavailable'); }
   }
@@ -144,7 +149,7 @@ export class CowRpcTransport implements CowExecutionRpc {
   }
   async prepare(uid: Hex, phase: CowTxPhase, order: CowOrder, intentKey: Hex, nonce: number, previous?: CowPreparedTx): Promise<CowPreparedTx> {
     return this.guarded(async () => {
-      const { client, signer, gasLimits: limits } = this.options;
+      const { client, signer } = this.options, limits = this.gasLimits;
       if (!this.options.authorizeWrite) return cowFail('cow_authority_unavailable');
       await this.options.authorizeWrite(phase);
       if (!signer || !same(signer.address, this.options.authority.draft.terms.executor)
@@ -172,7 +177,7 @@ export class CowRpcTransport implements CowExecutionRpc {
       const maxFee = previous ? (fees.maxFeePerGas > bump(BigInt(previous.maxFeePerGasWei)) ? fees.maxFeePerGas : bump(BigInt(previous.maxFeePerGasWei))) : fees.maxFeePerGas;
       const tip = previous ? (fees.maxPriorityFeePerGas > bump(BigInt(previous.maxPriorityFeePerGasWei)) ? fees.maxPriorityFeePerGas : bump(BigInt(previous.maxPriorityFeePerGasWei))) : fees.maxPriorityFeePerGas;
       const gasLimit = (gas * 12n + 9n) / 10n;
-      if (gasLimit > units(limits.maxGas) || maxFee > units(limits.maxFeePerGasWei) || tip > units(limits.maxPriorityFeePerGasWei)
+      if (gasLimit === 0n || gasLimit > gasForPhase(limits, phase) || maxFee > units(limits.maxFeePerGasWei) || tip > units(limits.maxPriorityFeePerGasWei)
         || gasLimit * maxFee > units(limits.maxTransactionCostWei) || balance < gasLimit * maxFee) return cowFail('cow_gas_budget_exceeded');
       await this.options.authorizeWrite(phase);
       const raw = await signer.signTransaction({ type: 'eip1559', chainId: 1, to: target.to, data: target.data, value: 0n,
@@ -191,8 +196,8 @@ export class CowRpcTransport implements CowExecutionRpc {
         || !same(tx.to, expected.to) || tx.data !== expected.data || tx.value !== '0' || parsed.gas?.toString() !== tx.gas
         || parsed.maxFeePerGas?.toString() !== tx.maxFeePerGasWei || parsed.maxPriorityFeePerGas?.toString() !== tx.maxPriorityFeePerGasWei) return cowFail('cow_transaction_identity_invalid');
       if (phase === 'clear-presign' && !tx.replaces) return cowFail('owner_cancellation_required');
-      const limits = this.options.gasLimits;
-      if (units(tx.gas) === 0n || units(tx.gas) > units(limits.maxGas) || units(tx.maxFeePerGasWei) > units(limits.maxFeePerGasWei)
+      const limits = this.gasLimits;
+      if (units(tx.gas) === 0n || units(tx.gas) > gasForPhase(limits, phase) || units(tx.maxFeePerGasWei) > units(limits.maxFeePerGasWei)
         || units(tx.maxPriorityFeePerGasWei) > units(limits.maxPriorityFeePerGasWei) || units(tx.maxPriorityFeePerGasWei) > units(tx.maxFeePerGasWei)
         || units(tx.gas) * units(tx.maxFeePerGasWei) > units(limits.maxTransactionCostWei)) return cowFail('cow_gas_budget_exceeded');
       this.approved.set(tx.hash, phase);

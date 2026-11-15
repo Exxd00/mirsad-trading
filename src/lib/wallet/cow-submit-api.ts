@@ -3,9 +3,10 @@ import { assertCowEntryQuote } from './cow-entry-quote';
 import { keccak256, stringToHex } from 'viem';
 import { CowReadClient, COW_API_ORIGIN } from './cow-api';
 import { assertCowOrderUid, normalizeCowOrder, normalizeCowUid } from './cow-order';
-import { cowFail, type CowExecutionApi, type CowOrderRecord } from './cow-execution-types';
+import { cowFail, type CowExecutionApi, type CowOrderRecord, type CowGasLimits } from './cow-execution-types';
 
 export type CowSubmitApiOptions = { fetcher?: typeof fetch; clock?: () => number;
+  gasLimits?: CowGasLimits;
   /** Trusted server authority verifier, not a browser/persisted proof flag. */
   authorize?: (record: CowOrderRecord) => Promise<void> };
 const knownRejected = new Set(['QuoteNotFound', 'QuoteNotVerified', 'InvalidQuote', 'MissingFrom', 'WrongOwner',
@@ -44,7 +45,7 @@ export class CowSubmitApi implements CowExecutionApi {
     if (!this.options.authorize) return cowFail('cow_authority_unavailable');
     await this.options.authorize(record);
     if (record.intent.side !== order.kind) return cowFail('cow_order_identity_invalid');
-    assertCowEntryQuote(record.intent, order.appData, Math.floor((this.options.clock ?? Date.now)() / 1000));
+    assertCowEntryQuote(record.intent, order.appData, Math.floor((this.options.clock ?? Date.now)() / 1000), this.options.gasLimits, order);
     const controller = new AbortController(); let timeout: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<never>((_, reject) => { timeout = setTimeout(() => { controller.abort(); reject(new Error('timeout')); }, 5000); });
     try {

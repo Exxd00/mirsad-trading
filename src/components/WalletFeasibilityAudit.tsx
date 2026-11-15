@@ -146,7 +146,8 @@ export function WalletFeasibilityAudit({ wallet, csrfToken, onAudit, disabled = 
         </table>
       </div>
       <p>العينات تخص مسار الرمز المعروض إلى WETH؛ نجاحها أو تعذرها لا يثبت حالة جميع الأسواق أو سيولتها.</p>
-      {audit.blockers.includes('wallet_partial_fill_quote_unavailable') && <p role="status"><strong>عروض الأسعار المقروءة لا تثبت تكلفة أوامر المحرك التي تسمح بالتنفيذ الجزئي. يبقى تجهيز التفويض والدخول الجديد محجوبين حتى يتوفر دليل متوافق.</strong></p>}
+      {audit.blockers.includes('wallet_partial_fill_quote_unavailable') && <p role="status"><strong>يلزم دليل مستقل لحدود التنفيذ الجزئي؛ عرض السعر المرجعي وحده لا يفتح التداول.</strong></p>}
+      {audit.blockers.some(code => ['wallet_token_behavior_unsupported', 'wallet_net_limit_runtime_unsupported'].includes(code)) && <p role="status"><strong>لم تكتمل مراجعة عقود أصول هذا المسار وتسويته. لا يمكن تجهيز التفويض من هذه القراءة.</strong></p>}
       <p>الحد المحفوظ للدورة الكاملة: <bdi>{percentage(audit.maximumCostFraction)}</bdi>. تكاليف النشر والترقية والموافقات لم تُقدّر بعد؛ المكونات غير المثبتة تبقى مجهولة.</p>
       {entryExceeds && <p><strong>رسوم الدخول وحدها تتجاوز حد الدورة الكاملة. لا تكفي هذه العينة لإثبات جدوى تحويل الأصول أو تمويل المسار.</strong></p>}
       <details><summary>هوية الأصول وتفاصيل العوائق</summary>

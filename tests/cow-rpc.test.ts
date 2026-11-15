@@ -93,6 +93,60 @@ async function fixture() {
 }
 
 describe('actual RPC transaction construction with isolated signer and injected chain reads', () => {
+  it('enforces independent phase caps after the full 20% estimate margin and never clamps an oversized estimate', async () => {
+    const f = await fixture(), limits = { ...f.options.gasLimits,
+      phaseMaxGas: { presign: '120000', cancel: '60000', 'clear-presign': '30000' } };
+    const rpc = new CowRpcTransport({ ...f.options, gasLimits: limits });
+    const first = await rpc.prepare(f.uid, 'presign', f.order, intentKey, 7);
+    expect(first.gas).toBe('120000');
+    f.client.estimateGas.mockResolvedValue(100001n);
+    f.signer.signTransaction.mockClear();
+    await expect(rpc.prepare(f.uid, 'presign', f.order, intentKey, 7, first)).rejects.toThrow('cow_gas_budget_exceeded');
+    expect(f.signer.signTransaction).not.toHaveBeenCalled();
+    f.client.estimateGas.mockResolvedValue(50001n);
+    await expect(rpc.prepare(f.uid, 'cancel', f.order, intentKey, 8)).rejects.toThrow('cow_gas_budget_exceeded');
+    expect(f.signer.signTransaction).not.toHaveBeenCalled();
+    f.client.estimateGas.mockResolvedValue(25001n);
+    await expect(rpc.prepare(f.uid, 'clear-presign', f.order, intentKey, 7, first)).rejects.toThrow('cow_gas_budget_exceeded');
+    expect(f.signer.signTransaction).not.toHaveBeenCalled(); expect(f.client.sendRawTransaction).not.toHaveBeenCalled();
+  });
+  it('keeps a presign replacement/clearance on its original nonce and cancellation separately budgeted', async () => {
+    const f = await fixture(), rpc = new CowRpcTransport({ ...f.options, gasLimits: { ...f.options.gasLimits,
+      phaseMaxGas: { presign: '120000', cancel: '60000', 'clear-presign': '30000' } } });
+    const first = await rpc.prepare(f.uid, 'presign', f.order, intentKey, 7);
+    const replaced = await rpc.prepare(f.uid, 'presign', f.order, intentKey, 7, first);
+    expect(replaced).toMatchObject({ nonce: 7, gas: '120000', replaces: first.hash, maxFeePerGasWei: '12', maxPriorityFeePerGasWei: '2' });
+    f.client.estimateGas.mockResolvedValue(21000n);
+    const clear = await rpc.prepare(f.uid, 'clear-presign', f.order, intentKey, 7, replaced);
+    expect(clear).toMatchObject({ nonce: 7, gas: '25200', replaces: replaced.hash, to: executor.address });
+    await expect(rpc.prepare(f.uid, 'clear-presign', f.order, intentKey, 8, replaced)).rejects.toThrow('owner_cancellation_required');
+    f.client.estimateGas.mockResolvedValue(50000n);
+    const cancel = await rpc.prepare(f.uid, 'cancel', f.order, intentKey, 8);
+    expect(cancel).toMatchObject({ nonce: 8, gas: '60000' });
+    expect(f.client.sendRawTransaction).not.toHaveBeenCalled();
+  });
+  it('rejects resumed or newly signed bytes above the phase cap even below the legacy global cap', async () => {
+    const f = await fixture(), original = await f.rpc.prepare(f.uid, 'presign', f.order, intentKey, 3);
+    const rpc = new CowRpcTransport({ ...f.options, gasLimits: { ...f.options.gasLimits,
+      phaseMaxGas: { presign: '100000', cancel: '100000', 'clear-presign': '30000' } } });
+    await expect(rpc.validatePrepared(original, 'presign', f.order, intentKey)).rejects.toThrow('cow_gas_budget_exceeded');
+    await expect(rpc.broadcast(original, () => {})).rejects.toThrow('cow_transaction_not_verified');
+    const raw = await executor.signTransaction({ type: 'eip1559', chainId: 1, nonce: original.nonce, to: manager,
+      data: original.data, value: 0n, gas: 150000n, maxFeePerGas: 10n, maxPriorityFeePerGas: 1n });
+    await expect(rpc.validatePrepared({ ...original, gas: '150000', raw, hash: keccak256(raw) }, 'presign', f.order, intentKey))
+      .rejects.toThrow('cow_gas_budget_exceeded');
+    expect(f.client.sendRawTransaction).not.toHaveBeenCalled();
+  });
+  it('takes a canonical immutable budget snapshot and refuses zero gas estimates before signing', async () => {
+    const f = await fixture(), limits = { ...f.options.gasLimits,
+      phaseMaxGas: { presign: '120000', cancel: '60000', 'clear-presign': '30000' } };
+    const rpc = new CowRpcTransport({ ...f.options, gasLimits: limits });
+    limits.phaseMaxGas.presign = '200000'; f.client.estimateGas.mockResolvedValue(110000n);
+    await expect(rpc.prepare(f.uid, 'presign', f.order, intentKey, 0)).rejects.toThrow('cow_gas_budget_exceeded');
+    f.client.estimateGas.mockResolvedValue(0n);
+    await expect(rpc.prepare(f.uid, 'presign', f.order, intentKey, 0)).rejects.toThrow('cow_gas_budget_exceeded');
+    expect(f.signer.signTransaction).not.toHaveBeenCalled(); expect(f.client.sendRawTransaction).not.toHaveBeenCalled();
+  });
   it('bounds old order logs by canonical validity instead of losing coverage after fourteen days', async () => {
     const f = await fixture();
     f.client.getBlock.mockImplementation(async o => {

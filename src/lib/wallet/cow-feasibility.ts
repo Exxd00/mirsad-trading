@@ -1,5 +1,5 @@
 import 'server-only';
-import { getAddress, parseAbi, type Address, type PublicClient } from 'viem';
+import { getAddress, keccak256, parseAbi, type Address, type PublicClient } from 'viem';
 import { CONFIG, decimal, fresh } from '../execution/v1/model';
 import { validateQuoteConversion } from '../execution/v1/readiness';
 import { AuthorityError } from './authority';
@@ -7,13 +7,16 @@ import { CowReadClient, type CowQuoteEvidence } from './cow-api';
 import { CoinbaseMarketClient, COINBASE_USDC, COINBASE_WETH9 } from './coinbase-market';
 import { productionCowClient } from './cow-runtime-config';
 import { COW_SETUP_GAS_LIMITS, type WalletFeasibility } from './wallet-feasibility';
+import { cowGasWeiPerLeg } from './cow-gas-limits';
+import { readCowStandardTokenEvidence } from './cow-net-limit-proof';
+import manifest from './generated/mainnet-contracts.json';
 
 // MetaMask/M0 deployment, not mStable or Mezo's similarly named tokens.
 // https://github.com/m0-platform/mUSD (Ethereum deployment)
 export const METAMASK_MUSD = '0xaca92e438df0b2401ff60da7e4337b687a2435da' as Address;
 const abi = parseAbi(['function decimals() view returns(uint8)', 'function balanceOf(address) view returns(uint256)']);
 export type CowFeasibilityDependencies = {
-  client: Pick<PublicClient, 'getChainId' | 'getBlock' | 'getBalance' | 'readContract'>;
+  client: Pick<PublicClient, 'getChainId' | 'getBlock' | 'getBalance' | 'readContract' | 'getCode' | 'getStorageAt'>;
   api: Pick<CowReadClient, 'getQuote'>;
   market: Pick<CoinbaseMarketClient, 'referenceBook' | 'fundingConversion'>;
   clock: () => number;
@@ -48,17 +51,34 @@ export async function auditCowFeasibility(ownerInput: string, chainId: number,
     || usdcDecimals !== 6 || musdDecimals !== 6) throw new AuthorityError('wallet_authority_verification_unavailable');
   const readAt = clock(), quoteSymbol = usdc > 0n ? 'USDC' : 'mUSD';
   const quoteRaw = usdc > 0n ? usdc : musd, quoteToken = usdc > 0n ? COINBASE_USDC : METAMASK_MUSD;
-  let partialQuoteUnavailable = false;
-  const partialCompatible = new Set<number>();
+  // Setup review has no grant, executor or order identity yet. Check only the
+  // reviewed net-limit method's actual token/runtime prerequisites here. Each
+  // later BUY still needs its own complete, canonical admission certificate.
+  let methodIssue: string | null = null, methodExpiresAt: number | null = null;
+  if (usdc > 0n) {
+    try {
+      const tokens = await readCowStandardTokenEvidence(client, () => Math.floor(clock() / 1000));
+      methodIssue = 'wallet_net_limit_runtime_unsupported';
+      const number = BigInt(tokens.block.number);
+      const [code, check] = await Promise.all([
+        client.getCode({ address: manifest.contracts.settlement as Address, blockNumber: number }),
+        client.getBlock({ blockNumber: number }),
+      ]);
+      if (code && keccak256(code) === manifest.codeHashes.settlement && check.hash === tokens.block.hash
+        && Number(check.timestamp) === tokens.block.timestamp) {
+        methodExpiresAt = Math.min((tokens.readAt + CONFIG.quoteMaxAgeSeconds) * 1000, (tokens.block.timestamp + 60) * 1000);
+        methodIssue = null;
+      }
+    } catch { methodIssue ??= 'wallet_token_behavior_unsupported'; }
+  }
   // A frozen, independently dated EUR price is required for USDC/gas. There is
   // no mUSD=USDC peg substitution. mUSD fee ratios need no FX assumption.
   const gas = quoteSymbol === 'USDC' ? await Promise.all([market.referenceBook('ETH'), market.fundingConversion(Math.floor(clock() / 1000))])
     .then(([ethBook, conversion]) => {
       const now = Math.floor(clock() / 1000); validateQuoteConversion(conversion, now);
       if (!fresh(ethBook.tradeAt, now, 15) || !fresh(ethBook.readAt, now, 15) || !decimal(ethBook.ask).gt(0)) throw new Error('stale_gas_price');
-      const limits = COW_SETUP_GAS_LIMITS, perGas = BigInt(limits.maxGas) * BigInt(limits.maxFeePerGasWei);
-      const bound = perGas < BigInt(limits.maxTransactionCostWei) ? perGas : BigInt(limits.maxTransactionCostWei);
-      return { quoteRaw: decimal(bound.toString()).mul(4).div('1000000000000000000').mul(ethBook.ask)
+      const roundTrip = cowGasWeiPerLeg(COW_SETUP_GAS_LIMITS) * 2n;
+      return { quoteRaw: decimal(roundTrip.toString()).div('1000000000000000000').mul(ethBook.ask)
         .div(conversion.eurPerUnit).mul('1000000').ceil(), sourceAt: Math.min(ethBook.tradeAt, conversion.sourceAt) * 1000,
         expiresAt: Math.min((ethBook.tradeAt + 15) * 1000, (ethBook.readAt + 15) * 1000,
           (conversion.sourceAt + CONFIG.quoteMaxAgeSeconds) * 1000,
@@ -76,7 +96,6 @@ export async function auditCowFeasibility(ownerInput: string, chainId: number,
       const seedBudget = budget > entryGas ? budget - entryGas : budget;
       const seed = await api.getQuote({ ...input, sellToken: quoteToken, buyToken: COINBASE_WETH9, kind: 'sell', amount: seedBudget.toString() });
       if (!quoteFresh(seed, clock())) throw new Error('unverified_quote');
-      if (seed.partiallyFillable !== true) partialQuoteUnavailable = true;
       value.status = 'partial'; value.entryFeeRaw = seed.quotedFeeAmount;
       value.entryFeeFraction = decimal(seed.quotedFeeAmount).div(seedBudget.toString()).toFixed();
       value.sourceAt = seed.readAt; value.expiresAt = Math.min(seed.readAt + 15000, Date.parse(seed.expiration));
@@ -87,8 +106,6 @@ export async function auditCowFeasibility(ownerInput: string, chainId: number,
         api.getQuote({ ...input, sellToken: COINBASE_WETH9, buyToken: quoteToken, kind: 'sell', amount: seed.buyAmount }),
       ]);
       if (![buy, sell].every(q => quoteFresh(q, clock()))) throw new Error('unverified_quote');
-      const compatible = [seed, buy, sell].every(q => q.partiallyFillable === true);
-      if (!compatible) partialQuoteUnavailable = true;
       const paid = decimal(buy.sellAmount).add(buy.quotedFeeAmount);
       if (paid.gt(budget.toString()) || buy.buyAmount !== seed.buyAmount
         || decimal(sell.sellAmount).add(sell.quotedFeeAmount).toFixed(0) !== seed.buyAmount) throw new Error('size_mismatch');
@@ -105,13 +122,12 @@ export async function auditCowFeasibility(ownerInput: string, chainId: number,
         value.sourceAt = Math.min(value.sourceAt, gas.sourceAt);
         value.expiresAt = Math.min(value.expiresAt, gas.expiresAt);
       }
-      value.reason = !compatible ? 'wallet_partial_fill_quote_unavailable' : !gas ? 'wallet_sample_gas_cost_unproven'
+      value.reason = !gas ? 'wallet_sample_gas_cost_unproven'
         : decimal(value.totalCostUpperFraction!).gt(CONFIG.maximumRoundTripCost) ? 'wallet_sample_cost_ceiling_exceeded'
         : paid.add(gas.quoteRaw.div(2)).gt(budget.toString()) ? 'wallet_sample_entry_budget_exceeded' : null;
       if (value.expiresAt <= clock()) {
         value.reason = 'wallet_sample_cost_stale'; value.gasCostUpperFraction = null; value.totalCostUpperFraction = null;
       }
-      if (compatible) partialCompatible.add(allocationPercent);
       return value;
     } catch {
       // Even partial evidence must remain labelled partial, never free/zero.
@@ -123,13 +139,14 @@ export async function auditCowFeasibility(ownerInput: string, chainId: number,
   if (finalBlock.hash !== block.hash || !fresh(startedAt, now, 45000)
     || !fresh(Number(block.timestamp) * 1000, now, 180000)) throw new AuthorityError('wallet_authority_verification_unavailable');
   const freshSamples = samples.filter(s => s.expiresAt !== null && s.expiresAt > now);
-  const eligible = eth > 0n && quoteSymbol === 'USDC' && freshSamples.some(s => partialCompatible.has(s.allocationPercent) && s.status === 'complete' && s.reason === null
+  if (usdc > 0n && methodIssue === null && (methodExpiresAt === null || methodExpiresAt <= now)) methodIssue = 'wallet_net_limit_evidence_stale';
+  const eligible = eth > 0n && quoteSymbol === 'USDC' && methodIssue === null && freshSamples.some(s => s.status === 'complete' && s.reason === null
     && s.totalCostUpperFraction !== null && !decimal(s.totalCostUpperFraction).gt(CONFIG.maximumRoundTripCost));
   const blockers = [...new Set([
     ...(usdc === 0n ? ['wallet_configured_quote_balance_missing'] : []),
     ...(usdc === 0n && musd > 0n ? ['wallet_musd_execution_unconfigured'] : []),
     ...(eth === 0n ? ['wallet_owner_gas_unavailable'] : []),
-    ...(partialQuoteUnavailable ? ['wallet_partial_fill_quote_unavailable'] : []),
+    ...(methodIssue ? [methodIssue] : []),
     ...(!eligible ? ['wallet_sample_feasibility_unproven'] : []),
     ...samples.flatMap(s => s.reason ? [s.reason] : []),
   ])];
@@ -138,7 +155,8 @@ export async function auditCowFeasibility(ownerInput: string, chainId: number,
   const decision = eligible ? 'eligible-for-setup' : usdc === 0n
     || freshSamples.some(s => s.reason === 'wallet_sample_entry_fee_exceeds_roundtrip_cap' || s.reason === 'wallet_sample_cost_ceiling_exceeded') ? 'blocked' : 'unproven';
   return { version: 1, owner, chainId: 1, readAt,
-    expiresAt: freshSamples.length ? Math.min(...freshSamples.map(s => s.expiresAt!), readAt + 30000) : readAt + 30000,
+    expiresAt: Math.min(freshSamples.length ? Math.min(...freshSamples.map(s => s.expiresAt!), readAt + 30000) : readAt + 30000,
+      ...(eligible && methodExpiresAt !== null ? [methodExpiresAt] : [])),
     block: { number: blockNumber.toString(), hash: block.hash, timestamp: Number(block.timestamp) },
     assets: [
       { symbol: 'ETH', address: null, decimals: 18, balanceRaw: eth.toString(), role: 'gas' },

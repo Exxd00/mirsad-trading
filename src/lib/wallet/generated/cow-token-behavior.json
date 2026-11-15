@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "chainId": 1,
+  "scope": "USDC/WETH9 standard-transfer net-limit admission only",
+  "governanceAssumption": "reviewed-code-at-admission-no-future-upgrade-guarantee",
+  "observedBlock": {
+    "number": "26423424",
+    "hash": "0x6c345ceffeb90c07e2a1a17c1d462474c88927f4814c8108f2d87d0963b2e7ed",
+    "timestamp": 1794782039
+  },
+  "usdc": {
+    "proxy": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    "proxyCodeHash": "0xd80d4b7c890cb9d6a4893e6b52bc34b56b25335cb13716e0d1d31383e6b41505",
+    "implementationSlot": "0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3",
+    "implementation": "0x43506849d7c04f9138d1a2050bbf3a0c054402dd",
+    "implementationCodeHash": "0xcdfb7d322961af3acae7a8f7ee8b69c205b36f576cc5b077f170c7eb8ecbe3ea",
+    "source": "https://sourcify.dev/server/v2/contract/1/0x43506849d7c04f9138d1a2050bbf3a0c054402dd?fields=runtimeBytecode,compilation,sources,metadata",
+    "officialSourceRepository": "https://github.com/circlefin/stablecoin-evm",
+    "reviewedImplementation": "FiatTokenV2_2",
+    "compiler": "0.6.12+commit.27d51765",
+    "runtimeCorrespondence": "Sourcify match; executable bytes match, 53-byte CBOR metadata replacement at byte 23411",
+    "transferSource": { "file": "FiatTokenV1.sol", "keccak256": "0xd7d4cb362789154d93f826ada42dc65f0a1a1efa4864c0376c416452b4c4f434", "review": "transfer/transferFrom use exact-value debit and credit; pause/blacklist revert; V2_2 does not override _transfer" }
+  },
+  "weth9": {
+    "address": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+    "codeHash": "0xd0a06b12ac47863b5c7be4185c2deaad1c61557033f56c7d4ea74429cbb25e23",
+    "source": "https://etherscan.io/address/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2#code"
+  }
+}

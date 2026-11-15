@@ -25,6 +25,8 @@ import * as runtime from '../src/lib/wallet/cow-runtime-config';
 import { installWalletExecutionSource } from '../src/lib/wallet/execution-connection';
 import manifest from '../src/lib/wallet/generated/mainnet-contracts.json';
 import pinned from './fixtures/cow-mainnet-runtime.json';
+import usdcImplementation from './fixtures/cow-usdc-implementation-runtime.json';
+import tokenPolicy from '../src/lib/wallet/generated/cow-token-behavior.json';
 
 // Software composition only: ephemeral keys, PGlite and synthetic capital.
 // The transport models JSON-RPC/HTTP evidence, not EVM execution or real CoW
@@ -49,7 +51,7 @@ type Posted = { uid: Hex; order: CowOrder; fullAppData: string; at: number };
 type Trade = { posted: Posted; block: number; hash: Hex; sold: bigint; bought: bigint; logIndex: number };
 
 function boundary(partialPricing = false) {
-  let now = START, head = 30000, finalized = head, spot = '150', feeVersionAvailable=true;
+  let now = START, head = 30000, finalized = head, spot = '150', feeVersionAvailable=true, implementationChanged=false;
   const calls: string[] = [], failures: string[] = [], posted: Posted[] = [], trades: Trade[] = [];
   const transactions = new Map<Hex, { wire: Record<string, unknown>; receipt: Record<string, unknown> | null; action: { uid: Hex; kind: 'presign' | 'cancel' } }>();
   const signatures = new Map<Hex, number>(), cancelled = new Map<Hex, number>();
@@ -91,8 +93,14 @@ function boundary(partialPricing = false) {
         if (![owner.address, executor.address].some(a => same(a, String(params[0])))) throw new Error('Unscoped native owner');
         return toHex(10n ** 18n);
       }
+      if (method === 'eth_getStorageAt') {
+        expect(String(params[0]).toLowerCase()).toBe(tokenPolicy.usdc.proxy);
+        expect(String(params[1]).toLowerCase()).toBe(tokenPolicy.usdc.implementationSlot);
+        return '0x' + (implementationChanged ? '8'.repeat(40) : tokenPolicy.usdc.implementation.slice(2)).padStart(64, '0');
+      }
       if (method === 'eth_getCode') {
         const address = String(params[0]);
+        if (same(address, tokenPolicy.usdc.implementation)) return usdcImplementation.runtime;
         if (same(address, owner.address)) return '0xef0100' + manifest.contracts.implementation.slice(2).toLowerCase();
         if (same(address, executor.address)) return '0x';
         if (same(address, enforcer)) return expectedCowEnforcerRuntime(manifest.contracts.manager as Address);
@@ -225,7 +233,8 @@ function boundary(partialPricing = false) {
     trades.push({ posted:p, block:head, hash, sold, bought, logIndex:0 });
   }
   return { now: () => now, enforcer, rpc, fetcher, calls, failures, posted, trades, transactions, advance, mineWrites, fill,
-    finalize:()=>{finalized=head;},setSpot: (v:string) => { spot=v; },removeFeeVersion:()=>{feeVersionAvailable=false;} };
+    finalize:()=>{finalized=head;},setSpot: (v:string) => { spot=v; },removeFeeVersion:()=>{feeVersionAvailable=false;},
+    changeUsdcImplementation:()=>{implementationChanged=true;} };
 }
 
 async function seed(b: ReturnType<typeof boundary>) {
@@ -262,50 +271,47 @@ beforeEach(async()=>{await query('TRUNCATE app_settings,audit_events RESTART IDE
 afterEach(()=>{installWalletExecutionSource(null);vi.restoreAllMocks();vi.unstubAllGlobals();});
 afterAll(async()=>{await closeDatabase();vi.unstubAllEnvs();});
 
-describe('production components with explicit synthetic compatible-pricing capability for the positive cycle',()=>{
-  it('keeps realistic public false-partial quotes as market data and blocks new buys through the actual client/runner',async()=>{
+describe('production source composition with public-shaped false-partial references and per-intent net-limit certificates',()=>{
+  it('keeps market data readable but blocks financial writes when current USDC implementation evidence changes',async()=>{
     const b=boundary();vi.spyOn(Date,'now').mockImplementation(()=>b.now()*1000);vi.stubGlobal('fetch',b.fetcher);
     const client=createPublicClient({chain:mainnet,transport:custom({request:({method,params})=>b.rpc(method,params as unknown[]|undefined)},{retryCount:0})});
     vi.spyOn(runtime,'productionCowClient').mockReturnValue(client as unknown as ReturnType<typeof runtime.productionCowClient>);
     await seed(b);
     const source=await ensureCowWalletSource();expect(source?.client).toBeInstanceOf(CowSourceClient);
     if(!source)throw new Error('Production source was not constructed');
-    expect(await source.entryBlocker?.()).toBe('wallet_partial_fill_quote_unavailable');
-    expect(await new ConnectedWalletVenue(source).capabilities()).toMatchObject({entryRiskData:false,cancelRemainder:true,managedProtection:true});
+    expect(await source.entryBlocker?.()).toBeNull();
+    expect(await new ConnectedWalletVenue(source).capabilities()).toMatchObject({entryRiskData:true,cancelRemainder:true,managedProtection:true});
     // Reference books still use the actual public-shape false response.
     expect((await source.client.getOrderBook!('WETH-EUR')).asks.length).toBeGreaterThan(0);
-    await runProtection();expect(await entrySwitch(true)).toMatchObject({status:'blocked',entriesEnabled:false});
+    await runProtection();expect(await entrySwitch(true)).toEqual({entriesEnabled:true});
+    b.changeUsdcImplementation();
     const result=await runHost();
-    expect(result.status).not.toBe('submitted');
+    expect(result).toMatchObject({status:'waiting',blocks:[{symbol:'WETH-EUR',reason:'wallet_net_limit_proof_invalid'}]});
     expect(b.calls.some(c=>c.startsWith('quote:buy:'))).toBe(true);
     expect(b.transactions.size).toBe(0);expect(b.posted).toHaveLength(0);
     expect(b.calls).not.toContain('eth_sendRawTransaction');
     expect(b.calls).not.toContain('POST /mainnet/api/v1/orders');
     expect(b.failures).toEqual([]);
   },30000);
-  it('conditionally composes entry, partial fill, cancellation, protective exit and reporting with synthetic compatible pricing',async()=>{
+  it('composes entry, partial fill, cancellation, protective exit and reporting through the unmodified real factory',async()=>{
     for(const [name,contract]of Object.entries(pinned.contracts))expect(keccak256(contract.runtime as Hex)).toBe(manifest.codeHashes[name as keyof typeof manifest.codeHashes]);
-    // Explicit synthetic future-compatible pricing. The real public API
-    // returns false and is covered by the no-financial-write regression above.
-    const b=boundary(true);vi.spyOn(Date,'now').mockImplementation(()=>b.now()*1000);vi.stubGlobal('fetch',b.fetcher);
+    // HTTP/RPC/capital remain isolated fixtures. Quote responses match the
+    // public false-partial shape; no source capability is overridden.
+    const b=boundary();vi.spyOn(Date,'now').mockImplementation(()=>b.now()*1000);vi.stubGlobal('fetch',b.fetcher);
     const client=createPublicClient({chain:mainnet,transport:custom({request:({method,params})=>b.rpc(method,params as unknown[]|undefined)},{retryCount:0})});
     vi.spyOn(runtime,'productionCowClient').mockReturnValue(client as unknown as ReturnType<typeof runtime.productionCowClient>);
     await seed(b);
     const source=await ensureCowWalletSource();expect(source?.client).toBeInstanceOf(CowSourceClient);
     if(!(source?.client instanceof CowSourceClient))throw new Error('Production source was not constructed');
     const cow=source.client;
-    expect(await new ConnectedWalletVenue(source).capabilities()).toMatchObject({entryRiskData:false});
-    const publicPricingBlocker=source.entryBlocker;
-    // Server test installation only: replace exactly the explicitly unsupported
-    // public pricing capability with the synthetic HTTP-true provider above.
-    // Keep all genuine authority, nonce-gap and lifecycle checks intact.
-    installWalletExecutionSource({...source,entryBlocker:async()=>{
-      const reason=await publicPricingBlocker?.();return reason==='wallet_partial_fill_quote_unavailable'?null:reason??null;
-    }});
+    expect(await new ConnectedWalletVenue(source).capabilities()).toMatchObject({entryRiskData:true});
     await runProtection();expect(await entrySwitch(true)).toEqual({entriesEnabled:true});
     const entry=await runHost();expect(entry,JSON.stringify(entry)+'\n'+b.failures.join('\n')+'\n'+b.calls.filter(c=>c.startsWith('quote:')).join('\n')).toMatchObject({status:'submitted',intent:{side:'buy',symbol:'WETH-EUR'}});
     if(!('intent' in entry)||!entry.intent)throw new Error('Entry did not produce an intent');
+    expect(entry.intent).toMatchObject({side:'buy',quote:{exactSize:{buyPartiallyFillable:false,sellPartiallyFillable:false,
+      netLimitProof:{method:'gpv2-partial-net-limit-admission-v1',bounds:{actualExpenses:'not-certified'}}}}});
     expect(b.posted).toHaveLength(1);expect(b.calls.indexOf('POST /schedule')).toBeLessThan(b.calls.indexOf('POST /mainnet/api/v1/orders'));
+    expect(b.posted[0].order.partiallyFillable).toBe(true);
     b.mineWrites();const buy=b.posted[0];b.fill(buy,BigInt(buy.order.sellAmount)/2n,BigInt(buy.order.buyAmount)/2n);
     const pendingBuy=await cow.getOrder(buy.uid);
     expect(pendingBuy).toMatchObject({filledQuantity:'0',finality:{status:'mined'}});

@@ -8,6 +8,7 @@ import { decryptSecret, encryptSecret } from '../secrets';
 import { CoinbaseMarketClient, type CoinbaseMarketMapping } from './coinbase-market';
 import { parseCowPolicyTerms, type CowPolicyTerms } from './cow-policy';
 import type { CowGasLimits } from './cow-execution-types';
+import { normalizeCowGasLimits } from './cow-gas-limits';
 import manifest from './generated/mainnet-contracts.json';
 
 export const COW_RUNTIME_KEY = 'wallet:strategy:cow-runtime:v1';
@@ -26,11 +27,10 @@ export type CowRuntimeConfig = {
   tokenCodeHashes: Record<string, Hex>; gasLimits: CowGasLimits; mappings: CoinbaseMarketMapping[];
 };
 const address = z.string().regex(/^0x[0-9a-fA-F]{40}$/).transform(v => getAddress(v.toLowerCase()));
-const raw = z.string().regex(/^[1-9][0-9]{0,38}$/);
 const schema = z.object({ version: z.literal(1), profileRevision: z.number().int().positive(), terms: z.unknown(),
   createdAt: z.number().int().nonnegative(), manager: address, implementation: address, enforcer: address, executorAddress: address,
   tokenCodeHashes: z.record(z.string().regex(/^0x[0-9a-f]{40}$/), z.string().regex(/^0x[0-9a-f]{64}$/)),
-  gasLimits: z.object({ maxGas: raw, maxFeePerGasWei: raw, maxPriorityFeePerGasWei: raw, maxTransactionCostWei: raw }).strict(),
+  gasLimits: z.unknown().transform(normalizeCowGasLimits),
   mappings: z.array(z.unknown()).min(1).max(30) }).strict();
 export function parseCowRuntime(value: unknown): CowRuntimeConfig {
   try {

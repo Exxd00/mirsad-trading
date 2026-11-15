@@ -218,7 +218,7 @@ upgrade and bridge costs remain unestimated by this audit and require their
 own review. No transfer, bridge or top-up is proposed as a remedy for an
 unproven route.
 
-### Partial-fill pricing compatibility (15 November 2026)
+### Partial-fill net-limit admission (16 November 2026)
 
 The current public CoW `/quote` request has no `partiallyFillable` field, and
 the reviewed response builder fixes the returned value to `false`:
@@ -231,31 +231,64 @@ accepted, but that does not change the response's order semantics. The probe
 used hypothetical unfunded Base USDC and unsigned research identity values;
 it created no wallet profile, authority or order.
 
-These market quotes remain indicative price/fee samples. A high sample fee
-rejects that sample; it is not a demonstrated lower bound for another order
-type. The existing strategy requires partially fillable orders plus active
-cancellation of unfilled entry remainders after 60 seconds. A non-partial quote
-cannot certify their cost, even if its displayed round-trip estimate is below
-0.4%. Sending an unsupported request field, changing the returned flag, or
-changing the strategy to all-or-nothing orders is not a compatibility proof.
+The market quotes keep their actual non-partial flag. Compatibility instead
+requires a separate `gpv2-partial-net-limit-admission-v1` certificate. The
+reviewed, deployed Settlement runtime rounds partial BUY debits down and SELL
+credits up. With signed `feeAmount=0`, exact-transfer tokens and owner receiver,
+all BUY partials debit at most `sellAmount * totalBought / buyAmount`, bounded
+by the signed sell amount. SELL partials credit at least the signed ratio.
+The runtime, constructor immutables, embedded Relayer, deployment metadata and
+literal Solidity source hashes are pinned in the real EVM test fixture.
 
-New entries require explicit partial-fill compatibility for both exact-size
-legs and app-data hashes matching the canonical grant/intent binding. The
-evidence travels with the intent and is checked again before preparing or
-publishing a buy. Missing evidence in an older intent prevents a new financial
-write; it does not prevent reading its history or cancelling an existing
-order. The feasibility gate cannot use incompatible samples to prepare a
-profile or request a signature. Reference books, measurement, reconciliation,
-cancellation and protective exits remain available through their existing
-checks. A future pricing adapter must establish the missing compatibility and
-all existing fee, gas, funding, authority and deadline requirements.
+The certificate binds the full admission decision, raw amounts, original
+BUY/SELL reference evidence, canonical grant/intent app-data, current token
+implementation evidence, dated FX and the actual runtime gas limits. It
+recomputes the existing planner's fees, spread once, extra slippage and fixed
+gas formula and preserves the 0.4% admission ceiling. It does not freeze the
+future exit price or change the 2% stop, 4% target or 60-second cancellation.
+The certificate is checked at preparation, resumed presign and publication;
+the RPC sink runs a synchronous final freshness/deadline guard after awaited
+authorization, immediately before sending a presign transaction.
 
-The fixed public adapter declares this unsupported entry capability directly,
-so readiness cannot report that it can open new trades. This declaration adds
-no network probe to the 10-second protection path. Positive composed lifecycle
-tests explicitly install a synthetic reviewed pricing capability and compatible
-HTTP fixtures; a separate current-factory test must remain blocked. Those tests
-exercise conditional execution plumbing, not public-provider readiness.
+This first proof method supports canonical Ethereum USDC and WETH9 only.
+USDC's actual proxy implementation slot and implementation runtime are checked,
+as well as proxy/WETH/Settlement identities and canonical block evidence.
+The reviewed implementation has standard transfer semantics; the evidence
+does not promise that governance can never upgrade it. Unknown token behavior
+cannot acquire this proof merely by matching a ticker or proxy runtime hash.
+A local transfer-tax negative demonstrates why this restriction is necessary.
+
+The scope is the existing EXPECTED cost admission at the intended size and
+frozen reference, not a promise that every eventual partial fill has realized
+expenses below 0.4%. Fixed gas can exceed that ratio for a tiny fill, and
+protocol fees taken from favorable price improvement can exceed it while
+respecting the signed net limit. Actual expenses remain separately measured;
+neither signed fee zero nor a gas ceiling is a zero-expense claim.
+
+The factory no longer declares partial pricing unsupported unconditionally.
+Every new BUY still needs a valid certificate. Setup eligibility checks current
+reviewed token and Settlement evidence plus sample economics, without creating
+a signer, profile or grant. Later financial authorization also verifies the
+Relayer runtime through the authority environment. Historical inspection,
+cancellation, clearance and protective sells keep their existing paths.
+The composed positive now uses the real factory and non-partial HTTP fixtures
+without a synthetic capability override; changed implementation evidence
+produces no financial writes. External chain/provider outcomes are still
+simulated in that lifecycle test, so it is not a live financial cycle.
+
+Optional `phaseMaxGas` bounds are enforced by RPC after the existing 20%
+estimate margin. A leg reserves the greater of presign/clear costs at their
+shared nonce, plus cancellation at the next nonce. The old uniform limit gives
+the same two-nonce total. Local full-policy measurements tested 1/3/9-market
+ceilings of 350k/210k, 375k/235k and 450k/300k for presign/cancel; these are
+tested candidates, not lowered production defaults or future gas-price promises.
+
+The Gnosis public quote endpoint returned a pay-as-you-go quota response during
+research. Its unsigned x402 challenge priced quotes at 0.001 USDC/request.
+No payment integration or deposit was enabled. Two paid quotes every 10 seconds
+would cost 17.28 USDC/day for one market, so that polling model is unsuitable
+for the observed small wallet. Free history reads and a separate on-chain
+reference-data method must not be relabelled as a firm CoW quote or paid access.
 
 ### mUSD reference valuation (15 November 2026)
 
@@ -354,9 +387,10 @@ Exact Ethereum contract matching is mandatory. Canonical WETH9 uses the declared
 native ETH redemption reference; this is a reference methodology, not a claim
 that Coinbase executes the wallet order. Sparse candle histories are excluded.
 The source requires 1,000 contiguous completed 15-minute bars without gap fill.
-Entry ranking and the final pre-claim check require compatible, verified,
-exact-quantity CoW buy/sell quotes with the partial-fill and app-data evidence
-described above. Current public non-partial quotes cannot open an entry.
+Entry ranking and the final pre-claim check require verified, exact-quantity
+reference quotes and the independent net-limit admission certificate described
+above. The public quotes retain their actual non-partial flag; that flag alone
+does not authorize an entry.
 Token fees are embedded in net prices, with a separate bounded
 two-nonce gas reserve per leg. A reduced-size budget cannot reuse a larger
 order's average fee estimate. The existing 0.4% cap remains unchanged.
