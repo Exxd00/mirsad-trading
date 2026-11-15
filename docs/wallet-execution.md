@@ -202,8 +202,9 @@ to reject that sample without inventing a sell quote. Otherwise it requests
 buy/sell quotes for the same WETH quantity, uses net paid minus net returned
 without double-counting embedded CoW fees, and adds the adapter's reviewed
 four-nonce gas ceiling with fresh EUR conversion for USDC. This ceiling is not
-a measured fee. mUSD has no verified execution/EUR adapter and cannot become
-eligible merely because an indicative quote is inexpensive. Missing, stale,
+a measured fee. mUSD has no verified execution adapter; its separate EUR
+reference valuation below cannot make it eligible merely because a simulated
+conversion is inexpensive. Missing, stale,
 unverified or rate-limited evidence stays unknown. A tested WETH sample does
 not establish the economics of every possible market.
 
@@ -216,6 +217,83 @@ and the existing per-intent cost/budget checks. One-time deployment, approval,
 upgrade and bridge costs remain unestimated by this audit and require their
 own review. No transfer, bridge or top-up is proposed as a remedy for an
 unproven route.
+
+### mUSD reference valuation (15 November 2026)
+
+The owner-authenticated, CSRF-protected `POST /api/wallet/strategy/valuation`
+reads an Ethereum mUSD balance and provides a separate reference mark. It
+creates no executor, profile, grant, financial journal, order or transaction.
+The response always retains `referenceOnly=true`, `executionReady=false` and
+`createdExecutionState=false`. Missing evidence is unavailable, never a zero
+valuation or a replacement for the execution feasibility gate.
+
+The current reference simulates exact-input **mUSD to USDC for the actual
+observed raw balance** through the pinned Uniswap v4 quoter using `eth_call`.
+It multiplies that size-specific USDC output by the actual Coinbase Exchange
+`USDC-EUR` completed one-minute close. Neither mUSD=USDC nor USDC=EUR is
+assumed. Inventory is read at a pinned block, and balance and block identity
+are checked again at the quote block. A changed balance or conflicting block
+leaves the current mark unavailable. The current block is explicitly labelled
+`latest-unfinalized`; this is a simulation, not a promised executable output.
+
+Historical reference points use a one-mUSD simulation at the last finalized
+Ethereum block at or before the requested minute, no more than 60 seconds
+earlier, and the corresponding completed `USDC-EUR` minute. The historical
+unit mark does not establish the owner's historical holdings, invested capital
+or performance. An archive failure is not filled with today's ratio or a peg.
+
+The [pinned manifest](../src/lib/wallet/generated/musd-reference.json) binds
+chain 1, token addresses and six decimals, PoolManager, StateView and quoter
+runtime hashes, pool-key hash, token direction and initialization receipt/log.
+For upgradeable token proxies, the runtime hash pins the proxy bytecode, not
+its mutable implementation; it does not prove current transferability.
+The reader checks liquidity, price state, contract relationships and the
+canonical block again. Provider, pool, block, exact input/output, liquidity,
+price state and completed EUR source identity are included in provenance.
+The zero-fee pool key does not certify a free swap or free setup: the quoter's
+gas estimate is a unit count, not actual gas paid; `actualExpenseEur` stays null.
+Allowances, transferability, CoW liquidity, authority, cancellation and full
+cycle costs require their own execution evidence.
+
+Reference work has a 20-second total budget, five-second individual reads,
+256-KiB RPC responses and a 96-read cap per attempt. Only current-reference
+transport unavailability/timeouts may try the fixed alternate RPC with the
+remaining budget; contract/identity failures are not bypassed. Historical
+reads use the fixed archive source. Current quotes reject a block over 60
+seconds old or an EUR minute over 120 seconds old; the valuation wrapper
+rejects results exceeding its 55-second response-age bound and rechecks freshness.
+
+Historical CAS storage is injectable and separate from execution state; the
+default client has no persistent storage adapter. It does not establish full
+historical coverage or a provider/service availability guarantee. Keys bind the
+provider version, chain, pool and minute. Reads validate exact raw amounts,
+arithmetic and provenance, then recheck canonical finality. Writes compare
+revisions atomically with at most three attempts. A different provenance for
+an existing minute preserves the original evidence and quarantines that key;
+it is not silently overwritten or adopted as financial history.
+
+### Dated Base cost research; no production adapter
+
+The [15 November public-quote fixture](../tests/fixtures/base-cost-sample-20261115.json)
+is research evidence from **21:15:28–33 UTC**, assuming an unperformed nominal
+1:1 conversion of existing mUSD into Base USDC. It proves neither conversion
+proceeds nor a funded Base balance. Both paired BUY/SELL quotes used exactly
+the same WETH quantity, were provider-verified within 2.279/2.081 seconds, and
+had gross buy debits inside their respective allocation caps:
+
+| Allocation cap | Actual sample debit / return (USDC) | Net quote cost before extra executor gas |
+| --- | --- | --- |
+| 10%: 1.080726 | 1.077040 / 1.073556 | 0.323479%; only 0.00082416 USDC remains under the unchanged 0.4% cap |
+| 5%: 0.540363 | 0.538625 / 0.534066 | 0.846414%; already above the cap |
+
+These quotes used `presign`, zero `appData` and `partiallyFillable=false`.
+They do not certify the production profile's calldata, partial-fill limit
+orders, active cancellation after 60 seconds or settlement finality. Net quote
+amounts already include their quoted fees; another protocol percentage is not
+added again. Additional executor, cancellation/replacement, setup, conversion,
+bridge and EUR-conversion costs remain unproven. There is no live Base adapter
+or financial action from this research. An expired sample stays dated research;
+even a fresh under-cap quote cannot certify financial readiness.
 
 The source now boots on the existing execution host from a versioned owner
 profile and encrypted server gas signer. No deployment, page read, wallet

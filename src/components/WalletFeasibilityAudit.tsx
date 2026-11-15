@@ -4,6 +4,7 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import type { Snapshot } from '@/lib/wallet/metamask';
 import type { WalletFeasibility } from '@/lib/wallet/wallet-feasibility';
 import styles from '@/app/automation/page.module.css';
+import { WalletMusdValuation } from './WalletMusdValuation';
 
 const integer = /^(0|[1-9][0-9]{0,77})$/;
 const fraction = /^(0|[1-9][0-9]{0,38})(\.[0-9]{1,160})?$/;
@@ -115,6 +116,7 @@ export function WalletFeasibilityAudit({ wallet, csrfToken, onAudit, disabled = 
       disabled={disabled || pending || !wallet || wallet.chainId !== '1' || !csrfToken} onClick={() => void read()}>
       {pending ? 'جارٍ فحص الأصول والتكلفة…' : 'فحص أصول المحفظة وتكلفة التشغيل'}</button></div>
     {(!wallet || wallet.chainId !== '1') && <p>شارك حساب MetaMask للقراءة واختر Ethereum (1) لبدء الفحص.</p>}
+    <WalletMusdValuation wallet={wallet} csrfToken={csrfToken} disabled={disabled || pending} />
     {audit && <>
       <p role="status">{current ? decisionLabel[audit.decision] : 'هذه آخر قراءة محفوظة؛ يلزم فحص حديث قبل متابعة الإعداد.'}</p>
       <dl className={`${styles.details} ${styles.auditTimes}`}>

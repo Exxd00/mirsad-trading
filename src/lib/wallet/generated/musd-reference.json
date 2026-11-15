@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "purpose": "Read-only mUSD/USDC reference pricing; not execution authority or gas-cost evidence",
+  "chainId": 1,
+  "providerVersion": "musd-uniswap-v4-usdc-eur-reference-v1",
+  "observedAt": "2026-11-15T21:16:25.887Z",
+  "observedBlock": {
+    "number": "26422947",
+    "hash": "0x17a9bc6e5c2a2ea545bd03de61c8d3b3bc1b81a85e829ad6efeace62382703db",
+    "timestamp": 1794776279
+  },
+  "sources": [
+    "https://developers.uniswap.org/deployments",
+    "https://github.com/m0-platform/mUSD",
+    "https://github.com/Uniswap/v4-periphery/blob/main/src/interfaces/IV4Quoter.sol"
+  ],
+  "contracts": {
+    "poolManager": "0x000000000004444c5dc75cB358380D2e3dE08A90",
+    "stateView": "0x7fFE42C4a5DEeA5b0feC41C94C136Cf115597227",
+    "quoter": "0x52F0E24D1c21C8A0cB1e5a5dD6198556BD9E1203",
+    "usdc": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    "musd": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA"
+  },
+  "codeHashes": {
+    "poolManager": "0x785f1014552b7ce7d5fb7d0c970ca60edee94fd00425d7ca21609acac7ce1293",
+    "stateView": "0xd7947778589cf4aac9a092a4451292a2056380941635ab7006d3c691d8dfd878",
+    "quoter": "0x06de58fa119c5deaa7a667fb92d3894e25d9160e62fb82c8d86d43b47eefe441",
+    "usdc": "0xd80d4b7c890cb9d6a4893e6b52bc34b56b25335cb13716e0d1d31383e6b41505",
+    "musd": "0x6beec3f6c97f67fd749caa154bca38b8af12da91f82a6d6f5f1654696afaa0d3"
+  },
+  "pool": {
+    "id": "0x72daf39b278fab80f18ad2adf73cc8b1ae63de1e508d36aa033285fff506f169",
+    "currency0": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    "currency1": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+    "decimals0": 6,
+    "decimals1": 6,
+    "fee": 0,
+    "tickSpacing": 1,
+    "hooks": "0x0000000000000000000000000000000000000000"
+  },
+  "initialization": {
+    "blockNumber": "23192706",
+    "blockHash": "0x4894987ccd1c1d0063aef4b11f21b742d115a60e0644c226d06a67c12af915dd",
+    "timestamp": 1755818543,
+    "transactionHash": "0x8af6dcb0bb75c3c74b4c85e861387ba1c4e480e2443ef27bde8969ed47e792d1",
+    "logIndex": 399,
+    "topics": [
+      "0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438",
+      "0x72daf39b278fab80f18ad2adf73cc8b1ae63de1e508d36aa033285fff506f169",
+      "0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+      "0x000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da"
+    ],
+    "data": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  }
+}
