@@ -1,4 +1,5 @@
 import BaseDecimal from 'decimal.js';
+import type { CowNetLimitProof } from '../../wallet/cow-net-limit-proof';
 import raw from '../../../../config/execution-v1.json';
 export const D = BaseDecimal.clone({ precision: 80, rounding: BaseDecimal.ROUND_DOWN });
 export const CONFIG = Object.freeze(raw);
@@ -27,7 +28,8 @@ export type Quote = { symbol: string; bid: string; ask: string; sourceAt: number
     buySellAmount: string; buyBuyAmount: string; buyFeeAmount: string; sellSellAmount: string; sellBuyAmount: string;
     sellFeeAmount: string; buyExpiration: number; sellExpiration: number;
     /** Absent on historical journals. New CoW entries require compatible evidence. */
-    buyPartiallyFillable?: boolean; sellPartiallyFillable?: boolean; buyAppDataHash?: string; sellAppDataHash?: string };
+    buyPartiallyFillable?: boolean; sellPartiallyFillable?: boolean; buyAppDataHash?: string; sellAppDataHash?: string;
+    netLimitProof?: CowNetLimitProof };
   depth?: { bids: { price: string; quantity: string }[]; asks: { price: string; quantity: string }[] } };
 export type Costs = { buyFeeRate: string; sellFeeRate: string; buyFixedEur: string; sellFixedEur: string;
   buySlippageRate: string; sellSlippageRate: string; source: string; observedAt: number; depthRequired?: boolean };

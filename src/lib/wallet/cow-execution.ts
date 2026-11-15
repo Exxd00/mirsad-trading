@@ -11,10 +11,11 @@ import { assertCowEntryQuote } from './cow-entry-quote';
 import { CowExecutionJournal } from './cow-execution-journal';
 import { cowFail, CowExecutionError, type CowAuthority, type CowCancelContext, type CowConversion, type CowExecutionApi,
   type CowExecutionMarket, type CowExecutionRpc, type CowOrderInspection, type CowOrderRecord, type CowSubmitContext,
-  type CowTxPhase, type CowTxRecord, type CowTxState } from './cow-execution-types';
+  type CowTxPhase, type CowTxRecord, type CowTxState, type CowGasLimits } from './cow-execution-types';
 
 export type CowExecutionOptions = { journal: CowExecutionJournal; rpc: CowExecutionRpc; api: CowExecutionApi;
   authority: CowAuthority; markets: CowExecutionMarket[]; clock?: () => number;
+  gasLimits?: CowGasLimits;
   authorizePublish?: (record: CowOrderRecord) => Promise<void>;
   armCancellation?: (decisionKey: string, expiresAt: number) => Promise<void> };
 const key = (intent: Intent): Hex => /^([0-9a-f]{64})$/.test(intent.key) ? ('0x' + intent.key) as Hex : cowFail('source_decision_key_invalid');
@@ -63,7 +64,8 @@ export class CowExecution {
       || !fresh(conversion.sourceAt, this.clock(), CONFIG.quoteMaxAgeSeconds) || !decimal(conversion.eurPerUnit).gt(0)) return cowFail('cow_conversion_evidence_missing');
     try { validateQuoteConversion(conversion, this.clock()); } catch { return cowFail('cow_conversion_evidence_missing'); }
     if (intent.side === 'buy') {
-      assertCowEntryQuote(intent, cowPolicyOrderAppData(this.options.authority.draft, key(intent)).hash, this.clock());
+      assertCowEntryQuote(intent, cowPolicyOrderAppData(this.options.authority.draft, key(intent)).hash,
+        this.clock(), this.options.gasLimits, undefined, market);
       const exact = quote.exactSize, rawBase = decimal(intent.quantity).mul(decimal('10').pow(market.baseDecimals));
       if (!exact || exact.provider !== 'cow-mainnet-v1' || exact.quantity !== intent.quantity
         || exact.buyBuyAmount !== rawBase.toFixed(0)
@@ -139,7 +141,8 @@ export class CowExecution {
         if (record.cancelAt !== null && this.clock() >= record.cancelAt) return cowFail('entry_expired_before_send');
       }
       const previous = phase === 'clear-presign' ? (await journal.getTransaction(record.uid, 'presign'))?.attempts[0] : undefined;
-      if (phase === 'presign') assertCowEntryQuote(record.intent, record.order.appData);
+      if (phase === 'presign' && record.intent.side === 'buy') this.frozenConversion(record.intent,
+        this.options.markets.find(m => m.symbol === record.intent.symbol)!);
       const prepared = await rpc.prepare(record.uid, phase, record.order, key(record.intent), tx.nonce, previous);
       await rpc.validatePrepared(prepared, phase, record.order, key(record.intent));
       tx = await journal.savePrepared(lease, record, tx, prepared);

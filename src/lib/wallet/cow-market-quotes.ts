@@ -9,16 +9,20 @@ import { CoinbaseMarketClient } from './coinbase-market';
 import { CowReadClient } from './cow-api';
 import type { CowRuntimeConfig } from './cow-runtime-config';
 import { cowPolicyOrderAppData, createCowPolicyDraft } from './cow-policy';
-import { assertCowEntryQuote } from './cow-entry-quote';
 import { CowExecutionError } from './cow-execution-types';
+import { cowNetLimitGasUpper, createCowNetLimitProof, readCowStandardTokenEvidence, type CowNetLimitGasEvidence, type CowStandardTokenEvidence } from './cow-net-limit-proof';
+import tokenPolicy from './generated/cow-token-behavior.json';
 
 export type CowMarketQuoteOptions = { config: CowRuntimeConfig; client: PublicClient; market: CoinbaseMarketClient;
-  api: CowReadClient; balances(): Promise<SourceBalance[]>; clock?: () => number };
+  api: CowReadClient; balances(): Promise<SourceBalance[]>; clock?: () => number;
+  /** Trusted read-only provider seam; never a browser/config permission flag. */
+  standardTokens?: () => Promise<CowStandardTokenEvidence> };
 /** Explicit size-bound CoW quote estimates, independent of the reference
  * candles. Token fees are embedded in net bid/ask. Executor gas is additional. */
 export class CowMarketQuotes {
   private readonly clock: () => number;
   private conversion: QuoteConversion | null = null;
+  private tokens: CowStandardTokenEvidence | null = null;
   private readonly books = new Map<string, { at: number; book: SourceOrderBook; instrument: SourceInstrument }>();
   constructor(private readonly options: CowMarketQuoteOptions) { this.clock = options.clock ?? (() => Math.floor(Date.now() / 1000)); }
   async fundingConversion(): Promise<QuoteConversion> {
@@ -43,18 +47,23 @@ export class CowMarketQuotes {
     return value;
   }
   async gasReserveEur(): Promise<string> {
+    return cowNetLimitGasUpper(await this.gasEvidence(), this.clock()).eur;
+  }
+  private async standardTokens(): Promise<CowStandardTokenEvidence> {
+    if (!this.tokens || !fresh(this.tokens.readAt, this.clock(), 5)) this.tokens = await (this.options.standardTokens
+      ? this.options.standardTokens() : readCowStandardTokenEvidence(this.options.client, this.clock));
+    return structuredClone(this.tokens);
+  }
+  private async gasEvidence(): Promise<CowNetLimitGasEvidence> {
     const [fees, eth] = await Promise.all([this.options.client.estimateFeesPerGas({ type: 'eip1559', chain: this.options.client.chain }), this.options.market.referenceBook('ETH')]);
     const maxFee = fees.maxFeePerGas, tip = fees.maxPriorityFeePerGas;
     if (!maxFee || tip === undefined || maxFee > BigInt(this.options.config.gasLimits.maxFeePerGasWei)
       || tip > BigInt(this.options.config.gasLimits.maxPriorityFeePerGasWei)) throw new Error('wallet_gas_ceiling_exceeded');
     // Two distinct charged nonces per leg: presign and cancellation/clearance.
     // A same-nonce replacement cannot charge gas twice on the canonical chain.
-    const perGasCeiling = BigInt(this.options.config.gasLimits.maxGas) * BigInt(this.options.config.gasLimits.maxFeePerGasWei);
-    const transactionCeiling = BigInt(this.options.config.gasLimits.maxTransactionCostWei);
-    const wei = perGasCeiling < transactionCeiling ? perGasCeiling : transactionCeiling;
-    return decimal(wei.toString()).mul(2).div('1000000000000000000').mul(eth.ask).toFixed();
+    return { limits: this.options.config.gasLimits, ethEurAsk: eth.ask, sourceAt: eth.tradeAt, readAt: eth.readAt, sourceId: eth.sourceId };
   }
-  private async exactQuote(symbol: string, quantity: string, conversion: QuoteConversion, intentKey?: string): Promise<Quote> {
+  private async exactQuote(symbol: string, quantity: string, conversion: QuoteConversion, intentKey?: string) {
     const m = this.options.config.mappings.find(m => m.symbol === symbol);
     if (!m) throw new Error('wallet_market_mapping_missing');
     const scale = decimal('10').pow(m.tokenDecimals), atomic = decimal(quantity).mul(scale);
@@ -76,7 +85,7 @@ export class CowMarketQuotes {
     const ask = decimal(buy.sellAmount).add(buy.quotedFeeAmount).div('1000000').mul(conversion.eurPerUnit).div(quantity);
     const bid = decimal(sell.buyAmount).div('1000000').mul(conversion.eurPerUnit).div(quantity);
     if (!bid.gt(0) || bid.gt(ask)) throw new Error('wallet_quote_invalid');
-    return { symbol, bid: bid.toFixed(), ask: ask.toFixed(), source: 'cow-mainnet-exact-size-v1',
+    const quote: Quote = { symbol, bid: bid.toFixed(), ask: ask.toFixed(), source: 'cow-mainnet-exact-size-v1',
       sourceAt: Math.floor(Math.min(buy.readAt, sell.readAt) / 1000), readAt, conversion: { ...conversion },
       depth: { bids: [{ price: bid.toFixed(), quantity }], asks: [{ price: ask.toFixed(), quantity }] },
       exactSize: { provider: 'cow-mainnet-v1', quantity, buyQuoteId: buy.quoteId, sellQuoteId: sell.quoteId,
@@ -85,6 +94,7 @@ export class CowMarketQuotes {
         buyExpiration: Math.floor(Date.parse(buy.expiration) / 1000), sellExpiration: Math.floor(Date.parse(sell.expiration) / 1000),
         buyPartiallyFillable: buy.partiallyFillable, sellPartiallyFillable: sell.partiallyFillable,
         buyAppDataHash: buy.appDataHash, sellAppDataHash: sell.appDataHash } };
+    return { quote, buy, sell };
   }
   entryPlan: EntryPlanner = async (account, signal, instrument, referenceQuote, risk, now, quantityCap) => {
     const blocked = (reason: string) => ({ intent: null, reason });
@@ -92,6 +102,9 @@ export class CowMarketQuotes {
       const terms = this.options.config.terms, mapping = this.options.config.mappings.find(m => m.symbol === signal.symbol);
       const scope = terms.markets.find(m => mapping && m.baseToken.toLowerCase() === mapping.tokenAddress.toLowerCase());
       if (!mapping || !scope || !account.funding || !referenceQuote.conversion) return blocked('funding_conversion_invalid');
+      if (mapping.tokenAddress.toLowerCase() !== tokenPolicy.weth9.address || terms.quoteToken.toLowerCase() !== tokenPolicy.usdc.proxy) {
+        return blocked('wallet_net_limit_proof_invalid');
+      }
       if (this.clock() + terms.maxOrderValiditySeconds + 900 >= terms.expiresAt) return blocked('cow_grant_renewal_required');
       const conversion = { ...referenceQuote.conversion };
       const maximumQuantity = quantityCap === undefined ? instrument.maximumQuantity
@@ -100,10 +113,8 @@ export class CowMarketQuotes {
       let requestedQuantity = candidate.intent?.quantity ?? '0';
       for (let attempt = 0; candidate.intent && attempt < 3; attempt++) {
         const size = requestedQuantity;
-        const [quote, gas] = await Promise.all([this.exactQuote(signal.symbol, size, conversion, candidate.intent.key), this.gasReserveEur()]);
-        const expected = cowPolicyOrderAppData(createCowPolicyDraft(terms, { manager: this.options.config.manager,
-          enforcer: this.options.config.enforcer }), ('0x' + candidate.intent.key) as `0x${string}`);
-        assertCowEntryQuote({ ...candidate.intent, quote }, expected.hash);
+        const [reference, gasEvidence, tokens] = await Promise.all([this.exactQuote(signal.symbol, size, conversion, candidate.intent.key), this.gasEvidence(), this.standardTokens()]);
+        const quote = reference.quote, gas = cowNetLimitGasUpper(gasEvidence, this.clock()).eur;
         const current = Math.max(now, this.clock());
         const exactInstrument = { ...instrument, maximumQuantity: size, costs: { buyFeeRate: '0', sellFeeRate: '0',
           buyFixedEur: gas, sellFixedEur: gas, buySlippageRate: '0', sellSlippageRate: '0', depthRequired: true,
@@ -128,6 +139,11 @@ export class CowMarketQuotes {
           .div(conversion.eurPerUnit).mul('1000000').floor();
         if (rawQuote.gt(terms.maxQuotePerBuy) || rawBase.gt(scope.maxBasePerSell) || rawBase.mul(scope.buyFloorQuote).lt(rawQuote.mul(scope.buyFloorBase))
           || stopQuote.mul(scope.sellFloorBase).lt(rawBase.mul(scope.sellFloorQuote))) return blocked('cow_policy_price_scope_blocked');
+        const draft = createCowPolicyDraft(terms, { manager: this.options.config.manager, enforcer: this.options.config.enforcer });
+        refined.intent.quote.exactSize!.netLimitProof = createCowNetLimitProof(refined.intent, {
+          policy: draft, market: { symbol: mapping.symbol, baseToken: mapping.tokenAddress, baseDecimals: mapping.tokenDecimals,
+            quoteToken: terms.quoteToken, quoteDecimals: 6, quoteCurrency: conversion.currency }, costs: exactInstrument.costs,
+          gas: gasEvidence, tokens, references: { buy: reference.buy, sell: reference.sell } }, current);
         return refined;
       }
       return candidate.intent ? blocked('wallet_exact_quote_unstable') : candidate;
@@ -149,7 +165,7 @@ export class CowMarketQuotes {
     const entryQuantity = budget.gt(0) ? budget.div(reference.ask).mul(scale).floor().div(scale) : new D(0);
     const size = D.max(balance, entryQuantity);
     if (!size.gt(0)) throw new Error('wallet_quote_size_unavailable');
-    const exact = await this.exactQuote(symbol, size.toFixed(), conversion), readAt = this.clock();
+    const { quote: exact } = await this.exactQuote(symbol, size.toFixed(), conversion), readAt = this.clock();
     const book: SourceOrderBook = { symbol, sourceAt: exact.sourceAt * 1000, readAt: exact.readAt * 1000,
       bids: exact.depth!.bids, asks: exact.depth!.asks, conversion };
     const instrument: SourceInstrument = { symbol, base: m.currency, quote: 'EUR', baseStep: decimal('1').div(scale).toFixed(),

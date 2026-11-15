@@ -12,6 +12,9 @@ import * as db from '../src/lib/db';
 import * as connection from '../src/lib/wallet/execution-connection';
 import { prepareCowSetup } from '../src/lib/wallet/cow-setup';
 import { AuthorityError } from '../src/lib/wallet/authority';
+import pinned from './fixtures/cow-mainnet-runtime.json';
+import usdcImplementation from './fixtures/cow-usdc-implementation-runtime.json';
+import tokenPolicy from '../src/lib/wallet/generated/cow-token-behavior.json';
 
 const NOW = Date.parse('2026-11-10T20:00:00Z'), owner = '0x1111111111111111111111111111111111111111' as Address;
 const other = '0x2222222222222222222222222222222222222222', hash = ('0x' + 'a'.repeat(64)) as Hex;
@@ -23,6 +26,13 @@ function fixture(input: { usdc?: bigint; musd?: bigint; eth?: bigint; feeRaw?: b
   const client = {
     getChainId: vi.fn(async () => 1), getBlock: vi.fn(async () => structuredClone(header)),
     getBalance: vi.fn(async () => balances.eth),
+    getStorageAt: vi.fn(async () => ('0x' + tokenPolicy.usdc.implementation.slice(2).padStart(64, '0')) as Hex),
+    getCode: vi.fn(async ({ address }: { address: Address; blockNumber?: bigint }) => {
+      if (same(address, tokenPolicy.usdc.implementation)) return usdcImplementation.runtime as Hex;
+      const contract = Object.values(pinned.contracts).find(c => same(c.address, address));
+      if (!contract) throw new Error('Unexpected code address in isolated audit');
+      return contract.runtime as Hex;
+    }),
     readContract: vi.fn(async (args: { address: Address; functionName: string; args?: readonly unknown[]; blockNumber?: bigint }): Promise<unknown> => {
       if (![COINBASE_USDC, METAMASK_MUSD].some(t => same(t, args.address))) throw new Error('Unexpected token in isolated audit');
       if (args.functionName === 'decimals') return 6;
@@ -42,7 +52,7 @@ function fixture(input: { usdc?: bigint; musd?: bigint; eth?: bigint; feeRaw?: b
     return { ...request, owner: request.owner as Address, receiver: request.receiver as Address,
       sellToken: request.sellToken as Address, buyToken: request.buyToken as Address,
       sellAmount: sellAmount.toString(), buyAmount: buyAmount.toString(), quotedFeeAmount: feeAmount.toString(),
-      partiallyFillable: true, verified: true, quoteId: 7, readAt: now,
+      partiallyFillable: false, verified: true, quoteId: 7, readAt: now,
       expiration: new Date(now + 30_000).toISOString() };
   }) };
   const market = {
@@ -59,15 +69,42 @@ beforeEach(() => { vi.stubGlobal('fetch', vi.fn(() => { throw new Error('No netw
 afterEach(() => { expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('read-only wallet asset and exact-size economic audit', () => {
-  it.each([false, true])('retains dated market samples but never grants setup eligibility from public false partial quotes (high fee=%s)', async highFee => {
-    const f = fixture({ usdc: 100000_000000n, eth: 1_000000000000000000n, feeRaw: highFee ? 1000_000000n : 1n });
-    const original = f.api.getQuote.getMockImplementation()!;
-    f.api.getQuote.mockImplementation(async r => ({ ...await original(r), partiallyFillable: false }));
+  it.each([false, true])('reviews signed net bounds using real-shaped false-partial references without skipping cost admission (high fee=%s)', async highFee => {
+    const f = fixture({ usdc: 1_000_000_000000n, eth: 1_000000000000000000n, feeRaw: highFee ? 1000_000000n : 1n });
+    const result = await auditCowFeasibility(owner, 1, f.deps);
+    expect(result.decision).toBe(highFee ? 'blocked' : 'eligible-for-setup');
+    expect(result.blockers).not.toContain('wallet_partial_fill_quote_unavailable');
+    expect(result.samples.every(s => s.entryFeeRaw !== null && s.sourceAt !== null)).toBe(true);
+    expect(result.samples.every(s => s.reason === (highFee ? 'wallet_sample_entry_fee_exceeds_roundtrip_cap' : null))).toBe(true);
+    expect(result.createdExecutionState).toBe(false);
+  });
+  it.each(['implementation', 'proxy', 'weth', 'settlement', 'missing-code'] as const)('requires current reviewed %s evidence independently of cheap samples', async scenario => {
+    const f = fixture({ usdc: 1_000_000_000000n, eth: 1_000000000000000000n, feeRaw: 1n });
+    if (scenario === 'implementation') f.client.getStorageAt.mockResolvedValue(('0x' + other.slice(2).padStart(64, '0')) as Hex);
+    else {
+      const base = f.client.getCode.getMockImplementation()!;
+      f.client.getCode.mockImplementation(async args => {
+        const target = scenario === 'proxy' ? tokenPolicy.usdc.proxy : scenario === 'weth' ? tokenPolicy.weth9.address : pinned.contracts.settlement.address;
+        return same(args.address, target) ? (scenario === 'missing-code' ? '0x' : '0x1234') : base(args);
+      });
+    }
     const result = await auditCowFeasibility(owner, 1, f.deps);
     expect(result.decision).not.toBe('eligible-for-setup');
-    expect(result.blockers.filter(c => c === 'wallet_partial_fill_quote_unavailable')).toHaveLength(1);
-    expect(result.samples.every(s => s.entryFeeRaw !== null && s.sourceAt !== null)).toBe(true);
-    expect(result.samples.every(s => s.reason === (highFee ? 'wallet_sample_entry_fee_exceeds_roundtrip_cap' : 'wallet_partial_fill_quote_unavailable'))).toBe(true);
+    expect(result.blockers).toContain(scenario === 'settlement' || scenario === 'missing-code'
+      ? 'wallet_net_limit_runtime_unsupported' : 'wallet_token_behavior_unsupported');
+    expect(result.samples.every(s => s.status === 'complete' && s.reason === null)).toBe(true);
+    expect(result.createdExecutionState).toBe(false);
+  });
+  it('pins token implementation and settlement reads and expires method evidence after all quote awaits', async () => {
+    const f = fixture({ usdc: 1_000_000_000000n, eth: 1_000000000000000000n, feeRaw: 1n });
+    const original = f.api.getQuote.getMockImplementation()!;
+    f.api.getQuote.mockImplementation(async input => { f.setNow(NOW + 16000); return original(input); });
+    const result = await auditCowFeasibility(owner, 1, f.deps);
+    expect(result.decision).not.toBe('eligible-for-setup');
+    expect(result.blockers).toContain('wallet_net_limit_evidence_stale');
+    for (const [call] of f.client.getCode.mock.calls) expect(call.blockNumber).toBe(123n);
+    expect(f.client.getStorageAt).toHaveBeenCalledWith({ address: tokenPolicy.usdc.proxy, slot: tokenPolicy.usdc.implementationSlot, blockNumber: 123n });
+    expect(currentFeasibility(result, owner, '1', NOW + 16000)).toBe(false);
   });
   it('reports actual mUSD holdings instead of calling a USDC-zero wallet empty, with exact 10%/5% fee-only rejection', async () => {
     const f = fixture({ feeRaw: 217685n }), audit = await auditCowFeasibility(owner, 1, f.deps);
@@ -193,7 +230,8 @@ describe('read-only wallet asset and exact-size economic audit', () => {
   it('creates no executor, saved profile, execution source or SQL mutation during an audit', async () => {
     const executor = vi.spyOn(runtime, 'cowExecutor'), save = vi.spyOn(profile, 'saveStrategyProfile');
     const query = vi.spyOn(db, 'query'), transaction = vi.spyOn(db, 'transaction'), install = vi.spyOn(connection, 'installWalletExecutionSource');
-    const f = fixture(); await auditCowFeasibility(owner, 1, f.deps);
+    const f = fixture({ usdc: 1_000_000_000000n, eth: 1_000000000000000000n, feeRaw: 1n });
+    expect((await auditCowFeasibility(owner, 1, f.deps)).decision).toBe('eligible-for-setup');
     expect(executor).not.toHaveBeenCalled(); expect(save).not.toHaveBeenCalled();
     expect(query).not.toHaveBeenCalled(); expect(transaction).not.toHaveBeenCalled();
     expect(install).not.toHaveBeenCalled();

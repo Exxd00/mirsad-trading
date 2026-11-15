@@ -16,14 +16,16 @@ import { CowExecutionJournal } from '../src/lib/wallet/cow-execution-journal';
 import { CowSubmitApi } from '../src/lib/wallet/cow-submit-api';
 import type { CowAuthority, CowExecutionRpc, CowPreparedTx, CowTxPhase, CowTxState } from '../src/lib/wallet/cow-execution-types';
 import { account, instrument, quote, signal } from './execution-fixtures';
+import { attachTestNetLimitProof } from './helpers/cow-net-limit-proof';
+import tokenPolicy from '../src/lib/wallet/generated/cow-token-behavior.json';
 
 const NOW = Date.parse('2026-11-09T12:00:00Z') / 1000;
 const addr = (n: string) => ('0x' + n.repeat(40)) as Address, hash = (n: string) => ('0x' + n.repeat(64)) as Hex;
 function authority(expiresAt = NOW + 3600): CowAuthority {
   return { draft: createCowPolicyDraft({ id: '00000000-0000-4000-8000-000000000001', chainId: 1,
-    owner: addr('1'), executor: addr('2'), quoteToken: addr('3'), startsAt: NOW - 60, expiresAt,
+    owner: addr('1'), executor: addr('2'), quoteToken: tokenPolicy.usdc.proxy, startsAt: NOW - 60, expiresAt,
     maxOrderValiditySeconds: 600, maxQuotePerBuy: '1000000000', maxQuoteTotal: '10000000000',
-    markets: [{ baseToken: addr('4'), maxBasePerSell: '100000000000000000000', maxBaseTotal: '1000000000000000000000',
+    markets: [{ baseToken: tokenPolicy.weth9.address, maxBasePerSell: '100000000000000000000', maxBaseTotal: '1000000000000000000000',
       buyFloorQuote: '100000000', buyFloorBase: '1000000000000000000', sellFloorBase: '1000000000000000000', sellFloorQuote: '1000000' }],
   }, { manager: addr('7'), enforcer: addr('8') }), signature: ('0x' + '11'.repeat(65)) as Hex,
   ownerImplementation: addr('9'), codeHashes: { manager: hash('1'), enforcer: hash('2'), ownerImplementation: hash('3'), settlement: hash('4') } };
@@ -35,21 +37,17 @@ function buy(): BuyIntent {
   a.funding = { ...conversion, total: '1000', available: '1000', reserved: '0' };
   a.equityHistory = [berlinBounds(NOW).start, NOW].map((at, i) => ({ id: 'isolated-value-' + i, at,
     equityEur: '1200', netFlowEur: '0', beforeFlowEquityEur: null, transfersComplete: true }));
-  const q = { ...quote(), sourceAt: NOW, readAt: NOW, conversion }, i = instrument(); i.costs!.observedAt = NOW;
+  const q = { ...quote(), sourceAt: NOW, readAt: NOW, conversion }, i = instrument();
+  i.costs = { ...i.costs!, observedAt: NOW, buyFixedEur: '0.000001', sellFixedEur: '0.000001' };
   const result = planBuy(a, signal('AAA-EUR', 'buy', NOW), i, q, evaluateRisk(initialState().risk, [], a.equityHistory, true, NOW), NOW);
   if (!result.intent) throw new Error('Invalid isolated financial evidence: ' + result.reason);
-  const intent = result.intent, raw = decimal(intent.quantity).mul('1000000000000000000').toFixed(0);
-  intent.quote.exactSize = { provider: 'cow-mainnet-v1', quantity: intent.quantity, buyQuoteId: 1, sellQuoteId: 2,
-    buyPartiallyFillable: true, sellPartiallyFillable: true,
-    buyAppDataHash: cowPolicyOrderAppData(authority().draft, ('0x' + intent.key) as Hex).hash,
-    sellAppDataHash: cowPolicyOrderAppData(authority().draft, ('0x' + intent.key) as Hex).hash,
-    buySellAmount: decimal(intent.quantity).mul(intent.quote.ask).div(conversion.eurPerUnit).mul('1000000').floor().toFixed(0),
-    buyBuyAmount: raw, buyFeeAmount: '0', sellSellAmount: raw,
-    sellBuyAmount: decimal(intent.quantity).mul(intent.quote.bid).div(conversion.eurPerUnit).mul('1000000').floor().toFixed(0),
-    sellFeeAmount: '0', buyExpiration: NOW + 30, sellExpiration: NOW + 30 };
+  const intent = result.intent;
+  attachTestNetLimitProof(intent, { policy: authority().draft, market, costs: i.costs!, gas: {
+    limits: gasLimits, ethEurAsk: '1', sourceAt: NOW, readAt: NOW, sourceId: 'isolated-eth-eur' } }, NOW);
   return intent;
 }
-const market = { symbol: 'AAA-EUR', baseToken: addr('4'), baseDecimals: 18, quoteToken: addr('3'), quoteDecimals: 6, quoteCurrency: 'USDC' };
+const market = { symbol: 'AAA-EUR', baseToken: tokenPolicy.weth9.address as Address, baseDecimals: 18, quoteToken: tokenPolicy.usdc.proxy as Address, quoteDecimals: 6, quoteCurrency: 'USDC' };
+const gasLimits = { maxGas: '100000', maxFeePerGasWei: '1000', maxPriorityFeePerGasWei: '100', maxTransactionCostWei: '100000000' };
 const codec = { seal: encryptSecret, open: decryptSecret };
 beforeAll(async () => {
   await closeDatabase(); vi.stubEnv('NODE_ENV', 'test'); vi.stubEnv('VERCEL', ''); vi.stubEnv('DATABASE_URL', '');
@@ -91,7 +89,7 @@ async function fixture(intent: BuyIntent | SellIntent = buy(), expiresAt = NOW +
   };
   const api = { post: vi.fn(async () => 'accepted' as const) }, arm = vi.fn(async () => {});
   const publish = vi.fn(async () => {});
-  const execution = new CowExecution({ journal, rpc, api, authority: a, markets: [market], clock: () => now, armCancellation: arm, authorizePublish: publish });
+  const execution = new CowExecution({ journal, rpc, api, authority: a, gasLimits, markets: [market], clock: () => now, armCancellation: arm, authorizePublish: publish });
   const input = { clientOrderId: id, symbol: intent.symbol, side: intent.side, type: intent.side === 'buy' ? 'limit' as const : 'market' as const,
     quantity: intent.quantity, ...(intent.side === 'buy' ? { limitPrice: intent.limitPrice } : {}) };
   return { a, root, lease, id, journal, phases, proof, rpc, api, arm, publish, execution, intent, input, setNow: (at: number) => { now = at; } };
@@ -100,12 +98,11 @@ async function fixture(intent: BuyIntent | SellIntent = buy(), expiresAt = NOW +
 describe('persistent CoW order lifecycle under the existing financial lease', () => {
   it.each(['false', 'missing', 'appdata'] as const)('blocks new buy preparation for %s pricing proof without creating a protocol order', async mode => {
     const intent = buy(), exact = intent.quote.exactSize!;
-    if (mode === 'false') exact.buyPartiallyFillable = false;
+    if (mode === 'false') delete exact.netLimitProof;
     if (mode === 'missing') delete exact.sellPartiallyFillable;
     if (mode === 'appdata') exact.buyAppDataHash = hash('f');
     const f = await fixture(intent);
-    await expect(f.execution.submitOrder(f.input, { lease: f.lease, intent })).rejects.toThrow(mode === 'appdata'
-      ? 'wallet_quote_appdata_mismatch' : 'wallet_partial_fill_quote_unavailable');
+    await expect(f.execution.submitOrder(f.input, { lease: f.lease, intent })).rejects.toThrow('wallet_net_limit_proof_invalid');
     expect(await f.journal.records()).toEqual([]); expect(f.rpc.prepare).not.toHaveBeenCalled();
     expect(f.rpc.broadcast).not.toHaveBeenCalled(); expect(f.api.post).not.toHaveBeenCalled();
     await f.root.release(f.lease);
@@ -116,9 +113,9 @@ describe('persistent CoW order lifecycle under the existing financial lease', ()
     const record = (await f.journal.records())[0]; f.phases.presign = phase;
     // Model an actual pre-migration journal AND its durable decision: no new
     // proof booleans are synthesized while replaying the old financial record.
-    await query("UPDATE app_settings SET value = value #- '{intent,quote,exactSize,buyPartiallyFillable}' #- '{intent,quote,exactSize,sellPartiallyFillable}' WHERE value->'intent'->>'key'=$1", [f.intent.key]);
+    await query("UPDATE app_settings SET value = value #- '{intent,quote,exactSize,buyPartiallyFillable}' #- '{intent,quote,exactSize,sellPartiallyFillable}' #- '{intent,quote,exactSize,netLimitProof}' WHERE value->'intent'->>'key'=$1", [f.intent.key]);
     vi.mocked(f.rpc.broadcast).mockClear(); f.api.post.mockClear();
-    await expect(f.execution.resumeExecution(f.lease, { entriesEnabled: true })).rejects.toThrow('wallet_partial_fill_quote_unavailable');
+    await expect(f.execution.resumeExecution(f.lease, { entriesEnabled: true })).rejects.toThrow('wallet_net_limit_proof_invalid');
     expect(f.rpc.broadcast).not.toHaveBeenCalled(); expect(f.api.post).not.toHaveBeenCalled();
     expect((await f.execution.inspectOrder(record.uid)).record.uid).toBe(record.uid);
     f.setNow(NOW + 60); f.proof.presigned = true;
@@ -310,30 +307,30 @@ describe('official CoW order POST without a synthetic execution grant', () => {
     'rejects %s evidence at the real POST sink after authorization without HTTP', async mode => {
       const f = await fixture(), result = await f.execution.submitOrder(f.input, { lease: f.lease, intent: f.intent });
       const record = structuredClone(result.record), exact = record.intent.side === 'buy' ? record.intent.quote.exactSize! : null!;
-      if (mode === 'false') exact.buyPartiallyFillable = false;
+      if (mode === 'false') delete exact.netLimitProof;
       if (mode === 'missing') delete exact.sellPartiallyFillable;
       if (mode === 'appdata') exact.sellAppDataHash = hash('f');
       if (mode === 'side') (record.intent as { side: string }).side = 'sell';
       if (mode === 'missing-expiry') Reflect.deleteProperty(exact, 'buyExpiration');
       if (mode === 'nan-expiry') exact.sellExpiration = Number.NaN;
       const fetcher = vi.fn(async () => Response.json(record.uid, { status: 201 }));
-      const api = new CowSubmitApi({ fetcher, clock: () => NOW * 1000, authorize: async () => {
+      const api = new CowSubmitApi({ fetcher, gasLimits, clock: () => NOW * 1000, authorize: async () => {
         if (mode === 'side-after-authorize') (record.intent as { side: string }).side = 'sell';
       } });
-      await expect(api.post(record)).rejects.toThrow(/wallet_partial_fill_quote_unavailable|wallet_quote_appdata_mismatch|cow_order_identity_invalid|wallet_exact_quote_unavailable/);
+      await expect(api.post(record)).rejects.toThrow(/wallet_net_limit_proof_invalid|cow_order_identity_invalid/);
       expect(fetcher).not.toHaveBeenCalled(); await f.root.release(f.lease);
     });
   it('rechecks quote age after the real sink authorization await', async () => {
     const f = await fixture(), result = await f.execution.submitOrder(f.input, { lease: f.lease, intent: f.intent });
     let now = NOW; const fetcher = vi.fn(async () => Response.json(result.record.uid, { status: 201 }));
-    const api = new CowSubmitApi({ fetcher, clock: () => now * 1000, authorize: async () => { now += 16; } });
-    await expect(api.post(result.record)).rejects.toThrow('wallet_exact_quote_unavailable');
+    const api = new CowSubmitApi({ fetcher, gasLimits, clock: () => now * 1000, authorize: async () => { now += 16; } });
+    await expect(api.post(result.record)).rejects.toThrow('wallet_net_limit_proof_invalid');
     expect(fetcher).not.toHaveBeenCalled(); await f.root.release(f.lease);
   });
   it('sends the exact persisted presign payload only after authorization and treats API acceptance as non-final', async () => {
     const f = await fixture(), result = await f.execution.submitOrder(f.input, { lease: f.lease, intent: f.intent });
     const authorize = vi.fn(async () => {}), fetcher = vi.fn(async () => Response.json(result.record.uid, { status: 201 }));
-    const api = new CowSubmitApi({ authorize, fetcher, clock: () => NOW * 1000 }); expect(await api.post(result.record)).toBe('accepted');
+    const api = new CowSubmitApi({ authorize, fetcher, gasLimits, clock: () => NOW * 1000 }); expect(await api.post(result.record)).toBe('accepted');
     expect(authorize).toHaveBeenCalledExactlyOnceWith(result.record); expect(fetcher).toHaveBeenCalledOnce();
     const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('https://api.cow.fi/mainnet/api/v1/orders');
@@ -348,7 +345,7 @@ describe('official CoW order POST without a synthetic execution grant', () => {
     for (const fetcher of [vi.fn(async () => { throw new Error('https://private.invalid/?secret=do-not-expose'); }),
       vi.fn(async () => Response.json('0x' + 'a'.repeat(112), { status: 201 })),
       vi.fn(async () => Response.json({ errorType: 'InternalServerError', description: 'isolated-private-marker' }, { status: 500 }))]) {
-      expect(await new CowSubmitApi({ authorize: async () => {}, fetcher, clock: () => NOW * 1000 }).post(result.record)).toBe('unknown'); expect(fetcher).toHaveBeenCalledOnce();
+      expect(await new CowSubmitApi({ authorize: async () => {}, fetcher, gasLimits, clock: () => NOW * 1000 }).post(result.record)).toBe('unknown'); expect(fetcher).toHaveBeenCalledOnce();
     }
     await f.root.release(f.lease);
   });

@@ -15,6 +15,8 @@ import { expectedCowEnforcerRuntime } from '../src/lib/wallet/cow-artifact';
 import { loadStrategyProfile, saveStrategyProfile } from '../src/lib/wallet/strategy-profile';
 import { cowRuntimeArchiveKey, prepareCowSetup } from '../src/lib/wallet/cow-setup';
 import { createCowPolicyDraft, cowPolicyOrderAppData } from '../src/lib/wallet/cow-policy';
+import { createCowNetLimitProof } from '../src/lib/wallet/cow-net-limit-proof';
+import { testCowStandardTokens } from './helpers/cow-net-limit-proof';
 import { ensureCowWalletSource } from '../src/lib/wallet/cow-bootstrap';
 import type { CowExecutionOptions } from '../src/lib/wallet/cow-execution';
 import type { CowOrderRecord } from '../src/lib/wallet/cow-execution-types';
@@ -188,7 +190,14 @@ describe('cold start with durable wallet configuration', () => {
  * verifier represents external chain proof; no transaction/RPC is performed. */
 async function publicationFixture(side: 'buy' | 'sell' = 'buy') {
   vi.spyOn(Date, 'now').mockReturnValue(NOW * 1000);
-  const c = await seeded(), review = reviewFor(c), signature = await ownerAccount.signTypedData(review.delegation.typed);
+  const c = await seeded();
+  // This HTTP publication fixture uses a 100-unit toy market, with positive
+  // gas valued at the same synthetic 1 EUR/ETH reference as its toy WETH price.
+  c.terms.maxQuotePerBuy = '1000000000'; c.terms.maxQuoteTotal = '10000000000';
+  c.terms.markets[0].maxBasePerSell = '1000000000000000000000';
+  c.terms.markets[0].maxBaseTotal = '1000000000000000000000';
+  await put(runtime.COW_RUNTIME_KEY, c);
+  const review = reviewFor(c), signature = await ownerAccount.signTypedData(review.delegation.typed);
   await saveAuthority({ query }, { state: 'verified', review, close: null, verifiedAt: NOW, updatedAt: NOW,
     signatureCiphertext: sealAuthoritySignature(review, signature) }, null);
   await put(signerKey, encryptSecret(executorKey, signerKey));
@@ -214,24 +223,37 @@ async function publicationFixture(side: 'buy' | 'sell' = 'buy') {
   const key = 'a'.repeat(64), appData = cowPolicyOrderAppData(options.authority.draft, ('0x' + key) as Hex);
   const order: CowOrder = { sellToken: side === 'buy' ? c.terms.quoteToken : c.terms.markets[0].baseToken,
     buyToken: side === 'buy' ? c.terms.markets[0].baseToken : c.terms.quoteToken, receiver: owner,
-    sellAmount: side === 'buy' ? '1000000' : '1000000000000000000', buyAmount: side === 'buy' ? '1000000000000000000' : '1000000',
+    sellAmount: side === 'buy' ? '100000000' : '100000000000000000000', buyAmount: side === 'buy' ? '100000000000000000000' : '100000000',
     validTo: NOW + 300, appData: appData.hash, feeAmount: '0', kind: side, partiallyFillable: true,
     sellTokenBalance: 'erc20', buyTokenBalance: 'erc20' };
   const intent: Intent = side === 'buy' ? { side, symbol: 'WETH-EUR', key, signal: signal('WETH-EUR', side, NOW), type: 'limit',
-    quantity: '1', limitPrice: '1', budgetEur: '1', allocation: CONFIG.allocation, allocationReason: 'isolated-publication',
-    estimatedCostEur: '0.001', estimatedCostFraction: '0.001', expectedEntryFeeEur: '0', expiresAt: NOW + 60,
+    quantity: '100', limitPrice: '1', budgetEur: '100.06', allocation: CONFIG.allocation, allocationReason: 'isolated-publication',
+    estimatedCostEur: '0.12', estimatedCostFraction: '0.0012', expectedEntryFeeEur: '0.06', expiresAt: NOW + 60,
     stopFraction: CONFIG.stopFraction, targetFraction: CONFIG.targetFraction,
-    // Synthetic compatible pricing evidence for publication-fence tests only.
-    // The public quote API currently returns partiallyFillable=false instead.
+    // The market reference really remains non-partial. A separate net-limit
+    // certificate proves the intended admission bounds in this toy scenario.
     quote: { symbol: 'WETH-EUR', bid: '1', ask: '1', sourceAt: NOW, readAt: NOW, source: 'isolated-publication',
       conversion: { currency: 'USDC', eurPerUnit: '1', sourceAt: NOW, sourceId: 'isolated-publication-fx' },
-      exactSize: { provider: 'cow-mainnet-v1', quantity: '1', buyQuoteId: 1, sellQuoteId: 2,
-        buySellAmount: '1000000', buyBuyAmount: '1000000000000000000', buyFeeAmount: '0',
-        sellSellAmount: '1000000000000000000', sellBuyAmount: '1000000', sellFeeAmount: '0',
-        buyExpiration: NOW + 30, sellExpiration: NOW + 30, buyPartiallyFillable: true, sellPartiallyFillable: true,
+      exactSize: { provider: 'cow-mainnet-v1', quantity: '100', buyQuoteId: 1, sellQuoteId: 2,
+        buySellAmount: '100000000', buyBuyAmount: '100000000000000000000', buyFeeAmount: '0',
+        sellSellAmount: '100000000000000000000', sellBuyAmount: '100000000', sellFeeAmount: '0',
+        buyExpiration: NOW + 30, sellExpiration: NOW + 30, buyPartiallyFillable: false, sellPartiallyFillable: false,
         buyAppDataHash: appData.hash, sellAppDataHash: appData.hash } } }
-    : { side, symbol: 'WETH-EUR', key, quantity: '1', positionId: 'isolated-managed-position', reason: 'stop',
+    : { side, symbol: 'WETH-EUR', key, quantity: '100', positionId: 'isolated-managed-position', reason: 'stop',
       signal: null, reduceOnly: true, protectionIds: [] };
+  if (intent.side === 'buy') {
+    const m = options.markets[0], reference = { owner, receiver: owner, validTo: NOW + 300,
+      signingScheme: 'presign' as const, quotedFeeAmount: '0', partiallyFillable: false, verified: true,
+      readAt: NOW * 1000, expiration: new Date((NOW + 30) * 1000).toISOString(), appDataHash: appData.hash };
+    intent.quote.exactSize!.netLimitProof = createCowNetLimitProof(intent, { policy: options.authority.draft, market: m, tokens: testCowStandardTokens(NOW),
+      costs: { buyFeeRate: '0', sellFeeRate: '0', buyFixedEur: '0.06', sellFixedEur: '0.06',
+        buySlippageRate: '0', sellSlippageRate: '0', source: 'isolated-positive-gas', observedAt: NOW },
+      gas: { limits: c.gasLimits, ethEurAsk: '1', sourceAt: NOW, readAt: NOW, sourceId: 'isolated-publication-ETH-EUR' },
+      references: { buy: { ...reference, kind: 'buy', sellToken: m.quoteToken, buyToken: m.baseToken,
+        sellAmount: '100000000', buyAmount: '100000000000000000000', quoteId: 1 },
+      sell: { ...reference, kind: 'sell', sellToken: m.baseToken, buyToken: m.quoteToken,
+        sellAmount: '100000000000000000000', buyAmount: '100000000', quoteId: 2 } } }, NOW);
+  }
   const record: CowOrderRecord = { version: 1, revision: 1, bindingId: options.authority.draft.delegationHash,
     clientOrderId: randomUUID(), decisionKey: key, owner, intent, uid: cowOrderUid(order, owner), order,
     fullAppData: appData.full, conversion: { currency: 'USDC', eurPerUnit: '1', sourceAt: NOW, sourceId: 'isolated-publication-fx' },

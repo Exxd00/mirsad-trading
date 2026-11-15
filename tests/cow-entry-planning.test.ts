@@ -8,6 +8,7 @@ import type { CowReadClient, CowQuoteRequest } from '../src/lib/wallet/cow-api';
 import { CONFIG, decimal, type RiskResult } from '../src/lib/execution/v1/model';
 import { evaluateRisk } from '../src/lib/execution/v1/risk';
 import { NOW, account, instrument, position, quote, signal } from './execution-fixtures';
+import { testCowStandardTokens } from './helpers/cow-net-limit-proof';
 const owner = '0x1111111111111111111111111111111111111111', executor = '0x2222222222222222222222222222222222222222';
 const mapping: CoinbaseMarketMapping = { version: 1, chainId: 1, tokenAddress: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', tokenDecimals: 18,
   currency: 'WETH', referenceCurrency: 'ETH', symbol: 'WETH-EUR', productId: 'ETH-EUR', provider: 'coinbase-exchange-eur-reference-v1',
@@ -30,15 +31,15 @@ function fixture(reduced = false) {
     const base = decimal(r.amount).div('1000000000000000000');
     return { ...r, buyAmount: r.kind === 'buy' ? r.amount : base.mul(bid).mul('1000000').floor().toFixed(0),
       sellAmount: r.kind === 'sell' ? r.amount : base.mul(ask).mul('1000000').ceil().toFixed(0), quotedFeeAmount: '0', quoteId: 42,
-      // Compatible partial quotes are a synthetic future-provider fixture;
-      // the current public CoW endpoint always reports false.
-      partiallyFillable: true, appDataHash: r.appDataHash ?? ('0x' + '0'.repeat(64)), verified, readAt: NOW * 1000, expiration: new Date((NOW + 30) * 1000).toISOString() };
+      // Actual public market-reference semantics. The deterministic net-limit
+      // admission certificate, not this false flag, justifies order bounds.
+      partiallyFillable: false, appDataHash: r.appDataHash ?? ('0x' + '0'.repeat(64)), verified, readAt: NOW * 1000, expiration: new Date((NOW + 30) * 1000).toISOString() };
   }) };
-  const market = { referenceBook: vi.fn(async () => ({ ask: '100', bid: '99.99' })) };
+  const market = { referenceBook: vi.fn(async () => ({ ask: '100', bid: '99.99', tradeAt: NOW, readAt: NOW, sourceId: 'isolated-eth-eur' })) };
   const client = { estimateFeesPerGas: vi.fn(async () => ({ maxFeePerGas: 1000000000n, maxPriorityFeePerGas: 100000000n })) };
   const risk: RiskResult = evaluateRisk({ reduced, dailyHaltDate: null }, [], a.equityHistory, true, NOW);
   const quotes = new CowMarketQuotes({ config, client: client as unknown as PublicClient, market: market as unknown as CoinbaseMarketClient,
-    api: api as unknown as CowReadClient, balances: async () => [], clock: () => NOW });
+    api: api as unknown as CowReadClient, balances: async () => [], clock: () => NOW, standardTokens: async () => testCowStandardTokens(NOW) });
   return { a, i, q, risk, api, config, quotes, market, prices: (buy: string, sell = '99.99') => { ask = buy; bid = sell; }, unverified: () => { verified = false; } };
 }
 function atomicFixture(reduced = false, rate = '1', ask = '150', bid = ask) {
@@ -56,7 +57,7 @@ function atomicFixture(reduced = false, rate = '1', ask = '150', bid = ask) {
     markets: [{ mapping, euroPrice: eurAsk }], eurPerQuote: rate });
   f.config.gasLimits = { maxGas: '1500000', maxFeePerGasWei: '20000000000', maxPriorityFeePerGasWei: '2000000000',
     maxTransactionCostWei: '30000000000000000' };
-  f.market.referenceBook.mockResolvedValue({ ask: '150', bid: '150' }); // Existing ceiling gives EUR9 per leg.
+  f.market.referenceBook.mockResolvedValue({ ask: '150', bid: '150', tradeAt: NOW, readAt: NOW, sourceId: 'isolated-eth-eur' }); // Existing ceiling gives EUR9 per leg.
   f.prices(ask, bid);
   return { ...f, entrySignal: { ...signal('WETH-EUR'), close: eurAsk } };
 }
@@ -71,22 +72,22 @@ describe('exact executable quantity before the durable strategy decision', () =>
     expect(requests.at(-2)?.kind).toBe('buy'); expect(requests.at(-1)?.kind).toBe('sell');
     expect(result.intent?.quote.exactSize).toMatchObject({ provider: 'cow-mainnet-v1', quantity: size, buyQuoteId: 42, sellQuoteId: 42 });
     expect(requests.every(r => typeof r.appData === 'string' && r.appData.includes('mirsad:') && !!r.appDataHash)).toBe(true);
-    expect(result.intent?.quote.exactSize).toMatchObject({ buyPartiallyFillable: true, sellPartiallyFillable: true,
+    expect(result.intent?.quote.exactSize).toMatchObject({ buyPartiallyFillable: false, sellPartiallyFillable: false,
       buyAppDataHash: requests.at(-2)!.appDataHash, sellAppDataHash: requests.at(-1)!.appDataHash });
+    expect(result.intent?.quote.exactSize?.netLimitProof?.bounds.actualExpenses).toBe('not-certified');
     expect(result.intent).toMatchObject({ stopFraction: '0.02', targetFraction: '0.04', expiresAt: NOW + 60 });
     expect(Number(result.intent?.estimatedCostFraction)).toBeLessThanOrEqual(Number(CONFIG.maximumRoundTripCost));
   });
-  it.each(['false', 'missing', 'changed-appdata'] as const)('does not turn %s quote semantics into an eligible entry', async mode => {
+  it.each(['missing', 'changed-appdata'] as const)('does not turn %s quote semantics into an eligible entry', async mode => {
     const f = fixture(), original = f.api.getQuote.getMockImplementation()!;
     f.api.getQuote.mockImplementation(async r => {
       const q = await original(r);
-      if (mode === 'false') q.partiallyFillable = false;
       if (mode === 'missing') Reflect.deleteProperty(q, 'partiallyFillable');
       if (mode === 'changed-appdata') q.appDataHash = '0x' + 'f'.repeat(64);
       return q;
     });
     expect(await f.quotes.entryPlan(f.a, signal('WETH-EUR'), f.i, f.q, f.risk, NOW)).toMatchObject({ intent: null,
-      reason: mode === 'changed-appdata' ? 'wallet_quote_appdata_mismatch' : 'wallet_partial_fill_quote_unavailable' });
+      reason: 'wallet_net_limit_proof_invalid' });
   });
   it('quotes exposure-room and explicit preclaim quantity caps instead of scaling the larger book', async () => {
     const f = fixture(); f.a.positions = [{ ...position('AAA-EUR'), marketValueEur: '280' }];

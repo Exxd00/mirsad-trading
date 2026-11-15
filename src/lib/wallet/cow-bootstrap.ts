@@ -110,7 +110,7 @@ async function build(): Promise<WalletVenueSource | null> {
       || r.cancelAt === null || at >= r.cancelAt)) || r.order.validTo < at + 60) throw new Error('cow_publication_fenced');
   };
   const execution = new CowExecution({ journal: protocolJournal, rpc,
-    api: new CowSubmitApi({ authorize: authorizePublish }), authority, markets,
+    api: new CowSubmitApi({ authorize: authorizePublish, gasLimits: config.gasLimits }), authority, markets, gasLimits: config.gasLimits,
     armCancellation: scheduleCancellation, authorizePublish });
   const readers: { journal: CowExecutionJournal; execution: CowExecution }[] = [{ journal: protocolJournal, execution }];
   const archives = await query<{ key: string; value: unknown }>("SELECT key,value FROM app_settings WHERE key LIKE 'wallet:strategy:cow-runtime-archive:v1:%' ORDER BY key LIMIT 257");
@@ -155,10 +155,9 @@ async function build(): Promise<WalletVenueSource | null> {
   client = new CowSourceClient({ owner: config.terms.owner, markets, execution: readExecution, journal: readJournal, history, quotes, market, api,
     expenses: () => expenses.getExpenses(), orderGasEur: id => expenses.orderGasEur(id) });
   const source: WalletVenueSource = { client, journal: mainJournal, binding: cowBinding(config), gasCostsIncluded: true,
-    // The reviewed fixed public quote API only prices non-partial orders.
-    // Declare its missing capability without probing in the protection path.
-    // A compatible replacement requires its own reviewed server adapter.
-    entryBlocker: async () => await client.entryBlocker() ?? 'wallet_partial_fill_quote_unavailable', entryPlan: async (...args) => {
+    // Quotes remain non-partial market references. New entries must carry the
+    // separately reviewed signed-net-limit certificate through every write.
+    entryBlocker: () => client.entryBlocker(), entryPlan: async (...args) => {
       const reason = await client.entryBlocker();
       return reason ? { intent: null, reason } : quotes.entryPlan(...args);
     },
