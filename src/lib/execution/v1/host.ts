@@ -13,6 +13,7 @@ import { walletBindingIdentity, walletExecutionSource } from '../../wallet/execu
 import { walletOrderBlock } from '../../order-connection';
 import { strategyEntrySelection } from '../../wallet/selection-service';
 import { ensureCowWalletSource } from '../../wallet/cow-bootstrap';
+import { runMarketObservation } from './market-observation';
 export const journal = new SqlJournal();
 export async function connectedVenue(): Promise<ConnectedWalletVenue | null> {
   const source = await ensureCowWalletSource();
@@ -110,6 +111,12 @@ export async function runProtection() {
   return port ? protectionCycle(port, journal) : { ...unavailable(), retryAt: Math.floor(Date.now() / 1000) + CONFIG.protectionPollSeconds };
 }
 export async function runTick() {
+  // Public reference measurement has its own bounded lease and state. It never
+  // installs a financial source or creates execution signals, and an account
+  // outage must not stop it. Start concurrently to preserve the host deadline.
+  const measurement = Promise.resolve().then(() => runMarketObservation({ trigger: 'scheduler' })).catch(() => ({
+    status: 'unavailable' as const, reason: 'market_observation_unavailable',
+  }));
   // A source/accounting failure can happen before cycle() owns its lease. A
   // failed execution pass must not prevent the independent read-only report,
   // or retry a possibly submitted financial action in this request.
@@ -119,5 +126,5 @@ export async function runTick() {
   let report: Awaited<ReturnType<typeof dailyReport>>;
   try { report = await dailyReport(await connectedVenue(), journal, Math.floor(Date.now() / 1000)); }
   catch (error) { report = { status: 'blocked', reason: executionReason(error, 'report_source_unavailable') }; }
-  return { ...execution, report };
+  return { ...execution, report, measurement: await measurement };
 }

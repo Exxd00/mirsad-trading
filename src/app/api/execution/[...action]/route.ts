@@ -5,6 +5,7 @@ import { requireMutation, requireSession, refreshSessionCookie } from '@/lib/aut
 import { json, failure, body } from '@/lib/http';
 import { executionReport, runExecution } from '@/lib/execution/service';
 import { entrySwitch, handleDeadline, runTick, runProtection, refreshReadiness } from '@/lib/execution/v1/host';
+import { marketObservationReport, runMarketObservation } from '@/lib/execution/v1/market-observation';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -19,8 +20,10 @@ function schedulerAuthorized(request: Request) {
 export async function GET(request: Request, context: Context) {
   try {
     const session = await requireSession(request);
-    if ((await context.params).action.join('/') !== 'report') return json({ error: 'المسار غير موجود.' }, 404);
-    const response = json({ ...await executionReport(), csrfToken: session.csrfToken });
+    const action = (await context.params).action.join('/');
+    if (!['report', 'measurement'].includes(action)) return json({ error: 'المسار غير موجود.' }, 404);
+    const result = action === 'measurement' ? await marketObservationReport() : await executionReport();
+    const response = json({ ...result, csrfToken: session.csrfToken });
     response.headers.append('Set-Cookie', await refreshSessionCookie(request, session));
     return response;
   } catch (error) { return failure(error); }
@@ -32,6 +35,10 @@ export async function POST(request: Request, context: Context) {
       if (!schedulerAuthorized(request)) return json({ error: 'authentication_required' }, 401);
     } else await requireMutation(request);
     const data = await body(request);
+    if (action === 'measure') {
+      z.object({}).strict().parse(data);
+      return json(await runMarketObservation());
+    }
     if (action === 'check') {
       z.object({}).strict().parse(data);
       return json(await refreshReadiness());

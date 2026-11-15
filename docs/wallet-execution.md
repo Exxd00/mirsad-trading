@@ -37,6 +37,40 @@ Verify full order/fill/transfer coverage, 10%/5% allocation, three-symbol capaci
 
 A real-money delegation must bind the approved chain, owner, executor, allowed contracts/tokens, recipient, per-order/aggregate caps, use and duration limits and revocation. The pilot's exact fixed-amount grants are not general authority for dynamic EMA orders. Presence of a signing method or function is insufficient evidence of safe execution capability.
 
+## Independent EMA market measurement (15 November 2026)
+
+The five-minute execution tick also runs a bounded reference-market observer,
+independently of the account/grant and the daily financial report. It uses the
+existing official CoW Ethereum token-list/Coinbase metadata intersection and the
+same completed 15-minute candles, 1000-candle warmup and EMA 20/50/200 strategy
+calculation. USDC is excluded from entry-market observations. This observer
+neither installs an execution source nor creates financial signals or intents.
+
+Observations have separate versioned state and a fenced lease, a 300-second
+throttle, a 20-second network budget, two concurrent market reads and at most
+ten markets per pass with fair rotation. Each scope includes the exact token,
+chain, reference product and mapping digest. A changed scope must warm up again;
+incomplete, stale or unavailable evidence retains its dates and visible errors.
+After an outage longer than the provider's 1000-bar range, only this reference
+observer starts a fresh complete warmup; it never resets financial history.
+Cached report reads do not trigger scans. Both `GET /api/execution/measurement`
+and the manual `POST /api/execution/measure` require the existing authentication;
+the latter also requires mutation/CSRF protection and accepts only an empty body.
+The stored trigger distinguishes scheduled work from a manual scan; a browser
+payload cannot label itself as a scheduler run.
+
+The automation page presents these observations separately from the financial
+cycle and performance. Its manual measurement action cannot enable trading or
+submit an order. The older discovery-paper assumptions and journal remain
+independent. A successful market observation does not certify order execution,
+funding, costs, delegation, fills or profit.
+
+The production order publisher shares the same fresh authorization guard with
+the protocol execution layer. This includes rereading the durable authority
+after asynchronous verification; a closing, changed or expired authority cannot
+be accepted from an earlier snapshot. Connecting this guard creates no grant
+and changes no execution switch.
+
 ## Acceptance evidence
 
 Use isolated transport tests for changed mapping, stale data, repeated wakeups, lost responses, partial fills, cancellation races, finality conflicts, missing FX/fees, gas exhaustion, expiry, pause and revocation. The independent testnet proof must keep test balances and source records distinct from real account state.

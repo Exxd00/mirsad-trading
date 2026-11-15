@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const storage = vi.hoisted(() => ({ query: vi.fn(), transaction: vi.fn() }));
+const observation = vi.hoisted(() => ({ runMarketObservation: vi.fn() }));
 vi.mock('../src/lib/db', () => storage);
+vi.mock('../src/lib/execution/v1/market-observation', () => observation);
 vi.mock('../src/lib/execution/v1/runner', async original => ({
   ...await original<typeof import('../src/lib/execution/v1/runner')>(), cycle: vi.fn(),
 }));
@@ -25,6 +27,7 @@ import { NOW, order, testWalletSource } from './execution-fixtures';
 // connectedVenue control flow must preserve stage independence without retries.
 const completed = () => ({ id: 'isolated-completed-cycle', at: NOW, status: 'submitted', blocks: [], sourceOrder: order() });
 const report = { id: 'isolated-daily-report', status: 'source_read' };
+const measurement = { status: 'updated', report: { mode: 'market-reference-only', marker: 'isolated-measurement' } };
 const secret = 'https://rpc.invalid/?apiKey=isolated-tick-private-marker';
 let source: WalletVenueSource;
 let actions: ReturnType<typeof vi.fn>[];
@@ -41,6 +44,7 @@ beforeEach(() => {
   vi.mocked(strategyEntrySelection).mockReset().mockResolvedValue({ mode: 'opportunities', revision: 1, symbols: ['AAA-EUR'], reason: null });
   vi.mocked(cycle).mockReset().mockResolvedValue(completed());
   vi.mocked(dailyReport).mockReset().mockResolvedValue(report);
+  observation.runMarketObservation.mockReset().mockResolvedValue(measurement);
   vi.stubGlobal('fetch', vi.fn(() => { throw new Error('No network in isolated tick continuity tests'); }));
 });
 afterEach(() => {
@@ -53,7 +57,8 @@ afterEach(() => {
 
 describe('real host tick preserves execution and reporting independence', () => {
   it('runs one execution cycle and one separately constructed report venue in order', async () => {
-    expect(await runTick()).toEqual({ ...completed(), report });
+    expect(await runTick()).toEqual({ ...completed(), report, measurement });
+    expect(observation.runMarketObservation).toHaveBeenCalledExactlyOnceWith({ trigger: 'scheduler' });
     expect(cycle).toHaveBeenCalledExactlyOnceWith(expect.any(ConnectedWalletVenue), journal, ['AAA-EUR']);
     expect(dailyReport).toHaveBeenCalledExactlyOnceWith(expect.any(ConnectedWalletVenue), journal, NOW);
     // Execution constructs its venue and checks source presence for selection;
@@ -66,7 +71,7 @@ describe('real host tick preserves execution and reporting independence', () => 
   it('still attempts the daily report once after an execution exception and sanitizes the failed execution result', async () => {
     vi.mocked(cycle).mockRejectedValueOnce(new Error(secret));
     const result = await runTick();
-    expect(result).toEqual({ status: 'blocked', reason: 'cycle_failed', report });
+    expect(result).toEqual({ status: 'blocked', reason: 'cycle_failed', report, measurement });
     expect(JSON.stringify(result)).not.toContain('isolated-tick-private-marker');
     expect(cycle).toHaveBeenCalledOnce(); expect(dailyReport).toHaveBeenCalledOnce();
     expect(walletExecutionSource).toHaveBeenCalledTimes(3);
@@ -75,7 +80,7 @@ describe('real host tick preserves execution and reporting independence', () => 
   it('returns two sanitized blocked stages when execution and report both throw without retrying either', async () => {
     vi.mocked(cycle).mockRejectedValueOnce(new Error(secret)); vi.mocked(dailyReport).mockRejectedValueOnce(new Error(secret));
     const result = await runTick();
-    expect(result).toEqual({ status: 'blocked', reason: 'cycle_failed', report: { status: 'blocked', reason: 'report_source_unavailable' } });
+    expect(result).toEqual({ status: 'blocked', reason: 'cycle_failed', report: { status: 'blocked', reason: 'report_source_unavailable' }, measurement });
     expect(JSON.stringify(result)).not.toContain(secret); expect(cycle).toHaveBeenCalledOnce(); expect(dailyReport).toHaveBeenCalledOnce();
   });
 
@@ -83,14 +88,14 @@ describe('real host tick preserves execution and reporting independence', () => 
     vi.mocked(cycle).mockRejectedValueOnce(new Error('wallet_grant_unverified'));
     vi.mocked(dailyReport).mockRejectedValueOnce(new Error('report_source_missing_or_stale'));
     expect(await runTick()).toEqual({ status: 'blocked', reason: 'wallet_grant_unverified',
-      report: { status: 'blocked', reason: 'report_source_missing_or_stale' } });
+      report: { status: 'blocked', reason: 'report_source_missing_or_stale' }, measurement });
     expect(cycle).toHaveBeenCalledOnce(); expect(dailyReport).toHaveBeenCalledOnce();
   });
 
   it('preserves the completed execution result when daily reporting fails and never repeats a submitted cycle', async () => {
     vi.mocked(dailyReport).mockRejectedValueOnce(new Error(secret));
     const result = await runTick();
-    expect(result).toEqual({ ...completed(), report: { status: 'blocked', reason: 'report_source_unavailable' } });
+    expect(result).toEqual({ ...completed(), report: { status: 'blocked', reason: 'report_source_unavailable' }, measurement });
     expect(result.status).toBe('submitted'); expect(result).toHaveProperty('sourceOrder', completed().sourceOrder);
     expect(JSON.stringify(result)).not.toContain(secret); expect(cycle).toHaveBeenCalledOnce(); expect(dailyReport).toHaveBeenCalledOnce();
   });
@@ -98,14 +103,14 @@ describe('real host tick preserves execution and reporting independence', () => 
   it('isolates a failure constructing the report venue after execution succeeds', async () => {
     vi.mocked(walletExecutionSource).mockReturnValueOnce(source).mockReturnValueOnce(source)
       .mockImplementationOnce(() => { throw new Error(secret); });
-    expect(await runTick()).toEqual({ ...completed(), report: { status: 'blocked', reason: 'report_source_unavailable' } });
+    expect(await runTick()).toEqual({ ...completed(), report: { status: 'blocked', reason: 'report_source_unavailable' }, measurement });
     expect(cycle).toHaveBeenCalledOnce(); expect(dailyReport).not.toHaveBeenCalled(); expect(walletExecutionSource).toHaveBeenCalledTimes(3);
   });
 
   it('attempts a fresh report venue after the execution venue factory fails without retrying execution', async () => {
     vi.mocked(walletExecutionSource).mockImplementationOnce(() => { throw new Error(secret); }).mockReturnValueOnce(source);
     const result = await runTick();
-    expect(result).toEqual({ status: 'blocked', reason: 'cycle_failed', report });
+    expect(result).toEqual({ status: 'blocked', reason: 'cycle_failed', report, measurement });
     expect(JSON.stringify(result)).not.toContain(secret); expect(cycle).not.toHaveBeenCalled();
     expect(dailyReport).toHaveBeenCalledExactlyOnceWith(expect.any(ConnectedWalletVenue), journal, NOW);
     expect(walletExecutionSource).toHaveBeenCalledTimes(2);
@@ -119,5 +124,19 @@ describe('real host tick preserves execution and reporting independence', () => 
       report: { status: 'blocked', reason: 'order_api_not_connected' } });
     expect(cycle).not.toHaveBeenCalled(); expect(strategyEntrySelection).not.toHaveBeenCalled();
     expect(dailyReport).toHaveBeenCalledExactlyOnceWith(null, journal, NOW); expect(walletExecutionSource).toHaveBeenCalledTimes(2);
+    expect(result.measurement).toEqual(measurement); expect(observation.runMarketObservation).toHaveBeenCalledOnce();
+  });
+  it('keeps a submitted execution and daily report unchanged when independent measurement fails', async () => {
+    observation.runMarketObservation.mockRejectedValueOnce(new Error(secret));
+    const result = await runTick();
+    expect(result).toEqual({ ...completed(), report, measurement: { status: 'unavailable', reason: 'market_observation_unavailable' } });
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(cycle).toHaveBeenCalledOnce(); expect(dailyReport).toHaveBeenCalledOnce(); expect(observation.runMarketObservation).toHaveBeenCalledOnce();
+  });
+  it('finishes measurement even when both financial stages fail', async () => {
+    vi.mocked(cycle).mockRejectedValueOnce(new Error(secret)); vi.mocked(dailyReport).mockRejectedValueOnce(new Error(secret));
+    const result = await runTick();
+    expect(result.measurement).toEqual(measurement);
+    expect(observation.runMarketObservation).toHaveBeenCalledOnce(); expect(cycle).toHaveBeenCalledOnce(); expect(dailyReport).toHaveBeenCalledOnce();
   });
 });
