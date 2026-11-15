@@ -23,7 +23,7 @@ export function ExecutionWorkspace() {
       if (!signal?.aborted) setError(failure instanceof Error ? failure.message : 'تعذر تحديث الحالة.');
     } finally { if (!signal?.aborted) setLoading(false); }
   }, []);
-  const action = async (kind: 'check' | 'settings', entriesEnabled?: boolean) => {
+  const action = async (kind: 'check' | 'settings' | 'measure', entriesEnabled?: boolean) => {
     if (!report || mutating) return;
     setMutating(true); setError('');
     try {
@@ -31,7 +31,9 @@ export function ExecutionWorkspace() {
         headers: { 'Content-Type': 'application/json', 'x-csrf-token': report.csrfToken },
         body: JSON.stringify(kind === 'settings' ? { entriesEnabled } : {}) });
       const result = await response.json();
-      if (!response.ok || result.status === 'blocked' || result.status === 'busy') throw new Error('لم يكتمل الطلب. راجع أسباب الجاهزية ثم أعد الفحص.');
+      if (!response.ok || result.status === 'blocked' || result.status === 'busy') throw new Error(kind === 'measure'
+        ? 'تعذر بدء قياس جديد أو يوجد فحص قيد التنفيذ. حدّث الحالة لمعرفة آخر قراءة.'
+        : 'لم يكتمل الطلب. راجع أسباب الجاهزية ثم أعد الفحص.');
       await refresh();
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'تعذر إكمال الطلب.'); }
     finally { setMutating(false); }
@@ -46,6 +48,7 @@ export function ExecutionWorkspace() {
 
   const percent = (value: string) => `${Number(value) * 100}%`;
   const shown = (value: string | number | null | undefined) => value == null ? 'غير متاح' : String(value);
+  const referenceNumber = (value: string | null) => value === null ? 'غير متاح' : Number(value).toLocaleString('en-US', { maximumSignificantDigits: 10 });
   return <main className={styles.page} dir="rtl">
     <nav className={styles.nav}>
       <Link href="/" className={styles.brand}>مرصاد</Link>
@@ -57,6 +60,7 @@ export function ExecutionWorkspace() {
       {report && <span className={`${styles.state} ${styles.paused}`}>{error ? 'حالة سابقة · تعذر التحديث' : report.report_status === 'partial' ? 'تقرير جزئي · يحتاج مراجعة' : report.enabled ? 'المحرك مفعّل' : report.account_connected ? 'الحساب متصل · الدخول غير جاهز أو متوقف' : 'بانتظار اتصال الحساب'}</span>}
     </header>
     <div className={styles.controls}><button className={styles.button} disabled={loading || mutating} onClick={() => void refresh()}>{loading ? 'جارٍ التحديث…' : 'تحديث الحالة'}</button>
+      {report && <button className={styles.button} disabled={loading || mutating || Boolean(error)} onClick={() => void action('measure')}>قياس السوق الآن</button>}
       {report?.adapter_configured && <button className={styles.button} disabled={mutating || loading || Boolean(error)} onClick={() => void action('check')}>{mutating ? 'جارٍ الفحص…' : 'فحص الجاهزية الآن'}</button>}
       {report?.new_order_connection === 'metamask' && report.account_connected && <button className={styles.button} disabled={mutating || loading || Boolean(error) || (!report.entries_requested && (!report.execution_ready || !report.protection.heartbeat_fresh))}
         onClick={() => void action('settings', !report.entries_requested)}>{report.entries_requested ? 'إيقاف الدخول الجديد' : 'تفعيل الشراء والبيع الآلي'}</button>}
@@ -144,7 +148,24 @@ export function ExecutionWorkspace() {
         <p className={styles.sectionNote}>الحيازات في المصدر: {report.positions?.length ?? 0} · أوامر المصدر: {report.orders?.length ?? 0}. لا تُنسب الأوامر السابقة إلى أداء هذا الإصدار.</p>
       </section>}
       <section className={styles.panel}>
-        <div className={styles.panelHeading}><h2>آخر دورة للمشغّل</h2></div>
+        <div className={styles.panelHeading}><h2>قياس السوق · EMA 20 / 50 / 200</h2></div>
+        <p className={styles.sectionNote}>شموع مرجعية مكتملة بفاصل 15 دقيقة، مع تهيئة من 1000 شمعة وفق قواعد الاستراتيجية. يستمر هذا القياس مستقلاً عن تفويض التداول. بياناته لا تثبت تنفيذ صفقة أو تحقق ربح.</p>
+        {report.market_observation ? <>
+          <p className={styles.sectionNote}>الحالة: {{ current: 'محدّث', partial: 'تغطية جزئية', stale: 'قراءة قديمة', unconfigured: 'لم يبدأ القياس', unavailable: 'تعذر القياس' }[report.market_observation.status]}
+            {' · '}آخر نجاح: {report.market_observation.lastSuccessAt === null ? 'لم يُسجل بعد' : new Date(report.market_observation.lastSuccessAt * 1000).toISOString()}
+            {report.market_observation.lastTrigger && ` · آخر تشغيل: ${report.market_observation.lastTrigger === 'scheduler' ? 'مجدول' : 'يدوي'}`}
+            {report.market_observation.lastError && ' · توجد بيانات ناقصة؛ تُعرض القراءات المحفوظة بأوقاتها.'}</p>
+          {report.market_observation.markets.length > 0 && <div className={styles.scroll}><table className={styles.table}>
+            <thead><tr><th>السوق المرجعي</th><th>حالة البيانات</th><th>آخر شمعة مكتملة</th><th>عدد الشموع</th><th>EMA 20</th><th>EMA 50</th><th>EMA 200</th></tr></thead>
+            <tbody>{report.market_observation.markets.map(market => <tr key={`${market.symbol}:${market.sourceId}`}>
+              <td>{market.symbol}<small>{market.productId}</small></td><td>{{ current: 'محدّثة', warming: 'قيد التهيئة', stale: 'قديمة', incomplete: 'ناقصة' }[market.status]}</td>
+              <td>{market.lastCloseTime === null ? 'غير متاح' : new Date(market.lastCloseTime * 1000).toISOString()}</td><td>{market.barCount}</td>
+              <td className={styles.numeric}>{referenceNumber(market.ema20)}</td><td className={styles.numeric}>{referenceNumber(market.ema50)}</td><td className={styles.numeric}>{referenceNumber(market.ema200)}</td>
+            </tr>)}</tbody></table></div>}
+        </> : <p className={styles.sectionNote}>تعذرت قراءة حالة قياس السوق في هذا التقرير.</p>}
+      </section>
+      <section className={styles.panel}>
+        <div className={styles.panelHeading}><h2>آخر دورة للمشغّل المالي</h2></div>
         <p className={styles.sectionNote}>{typeof report.last_cycle?.at === 'number' ? new Date(report.last_cycle.at * 1000).toISOString() : 'لم تُسجل دورة بعد.'}</p>
         {report.last_cycle && <p className={styles.sectionNote}>الحالة: {String(report.last_cycle.status ?? 'غير متاحة')}</p>}
       </section>

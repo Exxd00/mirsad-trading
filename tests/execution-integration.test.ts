@@ -11,10 +11,12 @@ import { ConnectedWalletVenue } from '../src/lib/execution/v1/wallet-venue';
 import { account as fixtureAccount } from './execution-fixtures';
 const auth = vi.hoisted(() => ({ requireSession: vi.fn(), requireMutation: vi.fn(), refreshSessionCookie: vi.fn() }));
 const db = vi.hoisted(() => ({ query: vi.fn() }));
+const observation = vi.hoisted(() => ({ marketObservationReport: vi.fn(), runMarketObservation: vi.fn() }));
 const host = vi.hoisted(() => ({ connectedVenue: vi.fn<() => Promise<CancellationPort | null>>(async () => null), runHost: vi.fn(), runTick: vi.fn(), runProtection: vi.fn(), entrySwitch: vi.fn(), handleDeadline: vi.fn(), refreshReadiness: vi.fn() }));
 vi.mock('../src/lib/auth', async original => ({ ...(await original<typeof import('../src/lib/auth')>()), ...auth }));
 vi.mock('../src/lib/db', async original => ({ ...(await original<typeof import('../src/lib/db')>()), ...db }));
 vi.mock('../src/lib/execution/v1/host', () => host);
+vi.mock('../src/lib/execution/v1/market-observation', () => observation);
 const storedAccount = () => ({ version: 1 as const, updatedAt: new Date().toISOString(), balances: [{ currency: 'EUR', total: '97.43', available: '87.43', reserved: '10' }], positions: [], orders: [] });
 const context = (action: string) => ({ params: Promise.resolve({ action: [action] }) });
 const request = (action: string, data: unknown = {}, token?: string) => new Request(`https://mirsad.test/api/execution/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(data) });
@@ -27,9 +29,31 @@ beforeEach(() => {
   host.runTick.mockResolvedValue({ status: 'blocked', reason: 'order_api_not_connected' });
   host.runProtection.mockResolvedValue({ status: 'idle' });
   host.handleDeadline.mockResolvedValue({ status: 'cancelled' }); host.entrySwitch.mockResolvedValue({ entriesEnabled: false, orderApiConnected: false });
+  observation.marketObservationReport.mockResolvedValue({ version: 1, mode: 'market-reference-only', status: 'unconfigured', markets: [], financialReadiness: 'not-certified' });
+  observation.runMarketObservation.mockResolvedValue({ status: 'updated', report: { mode: 'market-reference-only', financialReadiness: 'not-certified' } });
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 describe('scoped native account integration and authenticated endpoints', () => {
+  it('authenticates independent measurement reads and renews their session without loading an execution venue', async () => {
+    const response = await GET(new Request('https://mirsad.test/api/execution/measurement'), context('measurement'));
+    expect(response.status).toBe(200); expect(response.headers.get('cache-control')).toContain('no-store');
+    expect(response.headers.get('set-cookie')).toBe('test-session=renewed');
+    expect(await response.json()).toMatchObject({ mode: 'market-reference-only', csrfToken: 'test-csrf-token', financialReadiness: 'not-certified' });
+    expect(host.connectedVenue).not.toHaveBeenCalled(); expect(host.runHost).not.toHaveBeenCalled();
+    auth.requireSession.mockRejectedValueOnce(new AuthError(401, 'AUTH_REQUIRED', 'Session required'));
+    expect((await GET(new Request('https://mirsad.test/api/execution/measurement'), context('measurement'))).status).toBe(401);
+  });
+  it('runs only the reference observer from the authenticated measurement action and rejects injected trading state', async () => {
+    const response = await POST(request('measure'), context('measure'));
+    expect(response.status).toBe(200); expect(observation.runMarketObservation).toHaveBeenCalledOnce();
+    expect(host.runHost).not.toHaveBeenCalled(); expect(host.runTick).not.toHaveBeenCalled(); expect(host.entrySwitch).not.toHaveBeenCalled();
+    expect((await POST(request('measure', { entriesEnabled: true }), context('measure'))).status).toBe(400);
+    expect((await POST(request('measure', { trigger: 'scheduler' }), context('measure'))).status).toBe(400);
+    expect(observation.runMarketObservation).toHaveBeenCalledOnce();
+    auth.requireMutation.mockRejectedValueOnce(new AuthError(403, 'CSRF_REQUIRED', 'CSRF required'));
+    expect((await POST(request('measure'), context('measure'))).status).toBe(403);
+    expect(observation.runMarketObservation).toHaveBeenCalledOnce();
+  });
   it('does not seed balances or report an absent account as zero', async () => {
     const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
     expect(await executionReport()).toMatchObject({ version: '1.0.0', enabled: false, account_connected: false, available_eur: null, positions: null, orders: null, performance: null, signal_configured: true });

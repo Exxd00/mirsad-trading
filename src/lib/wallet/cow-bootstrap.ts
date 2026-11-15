@@ -20,6 +20,7 @@ import { CoinbaseMarketClient } from './coinbase-market';
 import { sqlCoinbasePriceStore } from './cow-price-store';
 import { CowExecutionJournal } from './cow-execution-journal';
 import { CowExecution } from './cow-execution';
+import type { CowOrderRecord } from './cow-execution-types';
 import { CowRpcTransport } from './cow-rpc';
 import { CowSubmitApi } from './cow-submit-api';
 import { CowMarketQuotes } from './cow-market-quotes';
@@ -76,8 +77,17 @@ async function build(): Promise<WalletVenueSource | null> {
     const [current, p, currentSigner] = await Promise.all([loadVerifiedAuthorityForRuntime(sql), loadStrategyProfile(sql), cowExecutor()]);
     if (!current || !p || !runtimeMatchesProfile(config, p) || current.review.delegation.delegationHash !== draft.delegationHash) return false;
     if (!currentSigner || currentSigner.address.toLowerCase() !== config.executorAddress.toLowerCase()) return false;
-    return verificationReady(await env.verify(current.review, Math.floor(Date.now() / 1000),
-      { transactionHashes: current.ownerTransactionHashes, mode: 'runtime' }), Math.floor(Date.now() / 1000));
+    if (!verificationReady(await env.verify(current.review, Math.floor(Date.now() / 1000),
+      { transactionHashes: current.ownerTransactionHashes, mode: 'runtime' }), Math.floor(Date.now() / 1000))) return false;
+    // RPC may be slow. Closing/profile/signer changes made while it was in
+    // flight must be observed at this authorization point, not cached away.
+    const [latest, latestProfile, latestSigner] = await Promise.all([
+      loadVerifiedAuthorityForRuntime(sql), loadStrategyProfile(sql), cowExecutor(),
+    ]);
+    return Boolean(latest && latestProfile && latestSigner && latest.revision === current.revision
+      && latest.review.digest === current.review.digest && runtimeMatchesProfile(config, latestProfile)
+      && latest.review.delegation.delegationHash === draft.delegationHash
+      && latestSigner.address.toLowerCase() === config.executorAddress.toLowerCase());
   };
   const protocolJournal = new CowExecutionJournal({ bindingId: draft.delegationHash, chainId: 1, executor: config.executorAddress,
     query, transaction, codec: { seal: encryptSecret, open: decryptSecret } });
@@ -90,14 +100,18 @@ async function build(): Promise<WalletVenueSource | null> {
     } });
   const markets = config.mappings.map(m => ({ symbol: m.symbol, baseToken: m.tokenAddress, baseDecimals: m.tokenDecimals,
     quoteToken: config.terms.quoteToken, quoteDecimals: 6, quoteCurrency: 'USDC' }));
-  const execution = new CowExecution({ journal: protocolJournal, rpc, api: new CowSubmitApi(), authority, markets,
-    armCancellation: scheduleCancellation, authorizePublish: async r => {
-      if (!await verify()) throw new Error('cow_authority_unavailable');
-      const state = await query<{ value: { executionArmed?: boolean; entriesEnabled?: boolean } }>('SELECT value FROM app_settings WHERE key=$1', [`execution:v1:${CONFIG.accountId}:state`]);
-      const at = Math.floor(Date.now() / 1000);
-      if (state.rows[0]?.value.executionArmed !== true || (r.intent.side === 'buy' && (state.rows[0].value.entriesEnabled !== true
-        || r.cancelAt === null || at >= r.cancelAt)) || r.order.validTo < at + 60) throw new Error('cow_publication_fenced');
-    } });
+  const authorizePublish = async (r: CowOrderRecord) => {
+    if (r.bindingId.toLowerCase() !== draft.delegationHash.toLowerCase()
+      || r.owner.toLowerCase() !== config.terms.owner.toLowerCase()) throw new Error('cow_order_identity_invalid');
+    if (!await verify()) throw new Error('cow_authority_unavailable');
+    const state = await query<{ value: { executionArmed?: boolean; entriesEnabled?: boolean } }>('SELECT value FROM app_settings WHERE key=$1', [`execution:v1:${CONFIG.accountId}:state`]);
+    const at = Math.floor(Date.now() / 1000);
+    if (state.rows[0]?.value.executionArmed !== true || (r.intent.side === 'buy' && (state.rows[0].value.entriesEnabled !== true
+      || r.cancelAt === null || at >= r.cancelAt)) || r.order.validTo < at + 60) throw new Error('cow_publication_fenced');
+  };
+  const execution = new CowExecution({ journal: protocolJournal, rpc,
+    api: new CowSubmitApi({ authorize: authorizePublish }), authority, markets,
+    armCancellation: scheduleCancellation, authorizePublish });
   const readers: { journal: CowExecutionJournal; execution: CowExecution }[] = [{ journal: protocolJournal, execution }];
   const archives = await query<{ key: string; value: unknown }>("SELECT key,value FROM app_settings WHERE key LIKE 'wallet:strategy:cow-runtime-archive:v1:%' ORDER BY key LIMIT 257");
   if (archives.rows.length > 256) throw new Error('wallet_cow_runtime_history_limit');

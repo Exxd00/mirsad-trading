@@ -11,6 +11,7 @@ import { buildReport } from './v1/reporting';
 import type { AccountingEvidence } from './v1/accounting';
 import { accountEntryBlockers } from './v1/readiness';
 import { strategyEntrySelection } from '../wallet/selection-service';
+import { marketObservationReport, type MarketObservationReport } from './v1/market-observation';
 
 type Venue = NonNullable<Awaited<ReturnType<typeof connectedVenue>>>;
 const reportErrorCodes = new Set(['account_mismatch', 'source_balance_missing', 'source_balance_mismatch',
@@ -81,6 +82,8 @@ export async function executionReport() {
   const ready = connected && blockers.length === 0;
   const heartbeat = heartbeatRow.rows[0]?.value ?? null;
   const heartbeatFresh = heartbeat !== null && fresh(heartbeat.at, Math.floor(Date.now() / 1000), CONFIG.protectionHeartbeatMaxAgeSeconds);
+  let observation: MarketObservationReport | null = null;
+  try { observation = await marketObservationReport(); } catch { /* Separate measurement failure remains visible below. */ }
   return {
     version: '1.0.0' as const, strategy_version: VERSION, mode: 'execution-core' as const,
     status: connected ? ready ? state?.entriesEnabled ? 'enabled' : 'entries_paused' : 'monitoring' : 'blocked',
@@ -101,6 +104,7 @@ export async function executionReport() {
     new_order_connection: orderConnection(),
     source_at: live?.sourceAt ?? null, source_timestamp_basis: 'response_observed_at',
     read_at: Math.floor(Date.now() / 1000), available_eur: live?.availableEur ?? null,
+    market_observation: observation, market_observation_error: observation ? null : 'market_observation_unavailable',
     balances: live?.balances ?? null, positions: live?.positions ?? null,
     orders: live?.orders ?? null, closed_trades: live?.trades ?? null, fills: live?.fills ?? null,
     source_reconciliation: live?.reportEvidence ?? null,

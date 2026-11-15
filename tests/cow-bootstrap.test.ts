@@ -5,8 +5,8 @@ import { getAddress, getContractAddress, keccak256, type Address, type Hex } fro
 import { closeDatabase, ensureSchema, query } from '../src/lib/db';
 import { hashPassword, issueLoginCsrf, login, sessionCookieName } from '../src/lib/auth';
 import { encryptSecret } from '../src/lib/secrets';
-import { CONFIG } from '../src/lib/execution/v1/model';
-import { COW_SETTLEMENT, COW_VAULT_RELAYER } from '../src/lib/wallet/cow-order';
+import { CONFIG, type Intent } from '../src/lib/execution/v1/model';
+import { COW_SETTLEMENT, COW_VAULT_RELAYER, cowOrderUid, type CowOrder } from '../src/lib/wallet/cow-order';
 import { COINBASE_REFERENCE_PROVIDER, type CoinbaseMarketMapping } from '../src/lib/wallet/coinbase-market';
 import { createAuthorityReview, type AuthorityReview } from '../src/lib/wallet/authority';
 import { loadAuthority, saveAuthority, sealAuthoritySignature } from '../src/lib/wallet/authority-store';
@@ -14,22 +14,38 @@ import * as authorityEnvironment from '../src/lib/wallet/authority-environment';
 import { expectedCowEnforcerRuntime } from '../src/lib/wallet/cow-artifact';
 import { loadStrategyProfile, saveStrategyProfile } from '../src/lib/wallet/strategy-profile';
 import { cowRuntimeArchiveKey, prepareCowSetup } from '../src/lib/wallet/cow-setup';
-import { createCowPolicyDraft } from '../src/lib/wallet/cow-policy';
+import { createCowPolicyDraft, cowPolicyOrderAppData } from '../src/lib/wallet/cow-policy';
 import { ensureCowWalletSource } from '../src/lib/wallet/cow-bootstrap';
+import type { CowExecutionOptions } from '../src/lib/wallet/cow-execution';
+import type { CowOrderRecord } from '../src/lib/wallet/cow-execution-types';
+import { CowSubmitApi } from '../src/lib/wallet/cow-submit-api';
 import * as runtime from '../src/lib/wallet/cow-runtime-config';
 import { installWalletExecutionSource, walletExecutionSource } from '../src/lib/wallet/execution-connection';
 import { POST as setupPOST } from '../src/app/api/wallet/strategy/setup/route';
 import manifest from '../src/lib/wallet/generated/mainnet-contracts.json';
 import { authorityVerification } from './fixtures/wallet-authority';
 import { AuthorityError } from '../src/lib/wallet/authority';
+import { signal } from './execution-fixtures';
 const feasibility = vi.hoisted(() => ({ guard: vi.fn() }));
 vi.mock('../src/lib/wallet/cow-feasibility', () => ({ assertCowSetupFeasible: feasibility.guard }));
+const constructed = vi.hoisted(() => ({ executions: [] as unknown[] }));
+vi.mock('../src/lib/wallet/cow-execution', async original => {
+  const actual = await original<typeof import('../src/lib/wallet/cow-execution')>();
+  return { ...actual, CowExecution: class extends actual.CowExecution {
+    constructor(options: CowExecutionOptions) {
+      super(options);
+      // Observation only: the production constructor and methods stay intact.
+      constructed.executions.push(options);
+    }
+  } };
+});
 
 const NOW = Math.floor(Date.now() / 1000), ownerAccount = privateKeyToAccount(generatePrivateKey()), owner = ownerAccount.address;
 const executorKey = generatePrivateKey(), executor = privateKeyToAccount(executorKey).address;
 const signerKey = 'wallet:strategy:cow-executor:v1:' + (process.env.VERCEL_ENV || 'local');
 const stateKey = `execution:v1:${CONFIG.accountId}:state`, origin = 'http://localhost:3000';
 const password = 'isolated-bootstrap-password-A8!';
+let expectedFetchCalls = 0;
 function mapping(): CoinbaseMarketMapping {
   const m = { version: 1 as const, chainId: 1 as const, tokenAddress: manifest.contracts.weth9.toLowerCase() as Address, tokenDecimals: 18,
     currency: 'WETH', referenceCurrency: 'ETH', symbol: 'WETH-EUR', productId: 'ETH-EUR', provider: COINBASE_REFERENCE_PROVIDER,
@@ -86,10 +102,11 @@ beforeAll(async () => {
 beforeEach(async () => {
   await query('TRUNCATE app_settings,app_owner,app_sessions,auth_rate_limits,audit_events,order_intents RESTART IDENTITY');
   installWalletExecutionSource(null);
+  expectedFetchCalls = 0; constructed.executions.length = 0;
   feasibility.guard.mockReset(); feasibility.guard.mockResolvedValue({ decision: 'eligible-for-setup' });
   vi.stubGlobal('fetch', vi.fn(() => { throw new Error('No financial network or RPC may run during isolated bootstrap tests'); }));
 });
-afterEach(() => { try { expect(fetch).not.toHaveBeenCalled(); } finally { installWalletExecutionSource(null); vi.restoreAllMocks(); vi.unstubAllGlobals(); } });
+afterEach(() => { try { expect(fetch).toHaveBeenCalledTimes(expectedFetchCalls); } finally { installWalletExecutionSource(null); vi.restoreAllMocks(); vi.unstubAllGlobals(); } });
 afterAll(async () => { await closeDatabase(); vi.unstubAllEnvs(); });
 describe('cold start with durable wallet configuration', () => {
   it('rejects unproven setup before creating a gas executor, profile, runtime or authority', async () => {
@@ -167,6 +184,126 @@ describe('cold start with durable wallet configuration', () => {
     expect(await source!.verifyGrant!(source!.binding!)).toBe(false);
   });
 });
+/** Real factory + persistent DAL + real submit HTTP boundary. The isolated
+ * verifier represents external chain proof; no transaction/RPC is performed. */
+async function publicationFixture(side: 'buy' | 'sell' = 'buy') {
+  vi.spyOn(Date, 'now').mockReturnValue(NOW * 1000);
+  const c = await seeded(), review = reviewFor(c), signature = await ownerAccount.signTypedData(review.delegation.typed);
+  await saveAuthority({ query }, { state: 'verified', review, close: null, verifiedAt: NOW, updatedAt: NOW,
+    signatureCiphertext: sealAuthoritySignature(review, signature) }, null);
+  await put(signerKey, encryptSecret(executorKey, signerKey));
+  await query("UPDATE app_settings SET value=value || '{\"entriesEnabled\":true,\"executionArmed\":true}'::jsonb WHERE key=$1", [stateKey]);
+  const verify = vi.fn(async (_review: AuthorityReview, at: number) => authorityVerification(at));
+  vi.spyOn(authorityEnvironment, 'createAuthorityEnvironment').mockReturnValue({
+    prepare: async () => { throw new Error('Unexpected isolated preparation'); }, verify,
+    prepareClose: async () => { throw new Error('Unexpected isolated closure'); },
+    verifyClose: async () => { throw new Error('Unexpected isolated closure'); },
+  });
+  const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    expect(String(url)).toBe('https://api.cow.fi/mainnet/api/v1/orders');
+    expect(init?.method).toBe('POST'); expect(init?.redirect).toBe('error'); expect(init?.credentials).toBe('omit');
+    const body = JSON.parse(String(init?.body));
+    expect(body).toMatchObject({ from: owner, receiver: owner, signingScheme: 'presign', signature: '0x', fullBalanceCheck: true });
+    return new Response(JSON.stringify(record.uid), { status: 201, headers: { 'content-type': 'application/json' } });
+  });
+  vi.stubGlobal('fetch', fetcher);
+  await ensureCowWalletSource();
+  expect(constructed.executions).toHaveLength(1);
+  const options = constructed.executions[0] as CowExecutionOptions;
+  expect(options.api).toBeInstanceOf(CowSubmitApi);
+  const key = 'a'.repeat(64), appData = cowPolicyOrderAppData(options.authority.draft, ('0x' + key) as Hex);
+  const order: CowOrder = { sellToken: side === 'buy' ? c.terms.quoteToken : c.terms.markets[0].baseToken,
+    buyToken: side === 'buy' ? c.terms.markets[0].baseToken : c.terms.quoteToken, receiver: owner,
+    sellAmount: side === 'buy' ? '1000000' : '1000000000000000000', buyAmount: side === 'buy' ? '1000000000000000000' : '1000000',
+    validTo: NOW + 300, appData: appData.hash, feeAmount: '0', kind: side, partiallyFillable: true,
+    sellTokenBalance: 'erc20', buyTokenBalance: 'erc20' };
+  const intent: Intent = side === 'buy' ? { side, symbol: 'WETH-EUR', key, signal: signal('WETH-EUR', side, NOW), type: 'limit',
+    quantity: '1', limitPrice: '1', budgetEur: '1', allocation: CONFIG.allocation, allocationReason: 'isolated-publication',
+    estimatedCostEur: '0.001', estimatedCostFraction: '0.001', expectedEntryFeeEur: '0', expiresAt: NOW + 60,
+    stopFraction: CONFIG.stopFraction, targetFraction: CONFIG.targetFraction,
+    quote: { symbol: 'WETH-EUR', bid: '1', ask: '1', sourceAt: NOW, readAt: NOW, source: 'isolated-publication' } }
+    : { side, symbol: 'WETH-EUR', key, quantity: '1', positionId: 'isolated-managed-position', reason: 'stop',
+      signal: null, reduceOnly: true, protectionIds: [] };
+  const record: CowOrderRecord = { version: 1, revision: 1, bindingId: options.authority.draft.delegationHash,
+    clientOrderId: randomUUID(), decisionKey: key, owner, intent, uid: cowOrderUid(order, owner), order,
+    fullAppData: appData.full, conversion: { currency: 'USDC', eurPerUnit: '1', sourceAt: NOW, sourceId: 'isolated-publication-fx' },
+    createdAt: NOW, createdBlock: '1', cancelAt: side === 'buy' ? NOW + 60 : null,
+    postState: 'not-posted', cancelRequested: false, lastError: null };
+  return { c, record, options, verify, fetcher };
+}
+
+describe('production publication guard composition at the real HTTP sink', () => {
+  it('constructs a real submit API and checks the fresh guard again before its sole POST', async () => {
+    const f = await publicationFixture();
+    const before = await settings();
+    await f.options.authorizePublish!(f.record);
+    expect(f.verify).toHaveBeenCalledOnce(); expect(f.fetcher).not.toHaveBeenCalled();
+    expectedFetchCalls = 1;
+    expect(await f.options.api.post(f.record)).toBe('accepted');
+    expect(f.verify).toHaveBeenCalledTimes(2); expect(f.fetcher).toHaveBeenCalledOnce();
+    expect(await settings()).toEqual(before);
+  });
+  it.each(['revoked', 'closing', 'paused', 'disarmed', 'deadline', 'validity', 'grant-expired', 'profile-changed', 'signer-removed'] as const)(
+    'blocks %s changed after the first checkpoint before any HTTP POST', async change => {
+      const f = await publicationFixture();
+      await f.options.authorizePublish!(f.record);
+      if (change === 'revoked') f.verify.mockImplementation(async (_review, at) => ({ ...authorityVerification(at), delegationEnabled: false }));
+      if (change === 'closing') {
+        const current = (await loadAuthority({ query }))!;
+        await saveAuthority({ query }, { ...current, state: 'closing', updatedAt: NOW }, current.revision);
+      }
+      if (change === 'paused' || change === 'disarmed') await query('UPDATE app_settings SET value=jsonb_set(value,$2,$3::jsonb) WHERE key=$1',
+        [stateKey, [change === 'paused' ? 'entriesEnabled' : 'executionArmed'], 'false']);
+      if (change === 'deadline') vi.spyOn(Date, 'now').mockReturnValue((NOW + 60) * 1000);
+      if (change === 'validity') { f.record.order.validTo = NOW + 59; f.record.uid = cowOrderUid(f.record.order, owner); }
+      if (change === 'grant-expired') vi.spyOn(Date, 'now').mockReturnValue(f.c.terms.expiresAt * 1000);
+      if (change === 'profile-changed') await saveStrategyProfile({ query }, profile(f.c), 1, NOW);
+      if (change === 'signer-removed') await query('DELETE FROM app_settings WHERE key=$1', [signerKey]);
+      await expect(f.options.api.post(f.record)).rejects.toThrow();
+      expect(f.fetcher).not.toHaveBeenCalled();
+    });
+  it('observes closing persisted while the second chain verification is still in flight', async () => {
+    const f = await publicationFixture();
+    await f.options.authorizePublish!(f.record);
+    let entered!: () => void, resume!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const pending = new Promise<void>(resolve => { resume = resolve; });
+    f.verify.mockImplementationOnce(async (_review, at) => { entered(); await pending; return authorityVerification(at); });
+    const posting = f.options.api.post(f.record);
+    await started;
+    const current = (await loadAuthority({ query }))!;
+    await saveAuthority({ query }, { ...current, state: 'closing', updatedAt: NOW }, current.revision);
+    resume();
+    await expect(posting).rejects.toThrow('cow_authority_unavailable');
+    expect(f.fetcher).not.toHaveBeenCalled(); expect((await loadAuthority({ query }))!.state).toBe('closing');
+  });
+  it('reads the deadline clock after awaited chain verification', async () => {
+    const f = await publicationFixture(); f.record.cancelAt = NOW + 1;
+    await f.options.authorizePublish!(f.record);
+    f.verify.mockImplementationOnce(async (_review, at) => {
+      vi.spyOn(Date, 'now').mockReturnValue((NOW + 1) * 1000); return authorityVerification(at);
+    });
+    await expect(f.options.api.post(f.record)).rejects.toThrow('cow_publication_fenced');
+    expect(f.fetcher).not.toHaveBeenCalled();
+  });
+  it.each(['binding', 'owner'] as const)('rejects a different record %s at the HTTP sink', async change => {
+    const f = await publicationFixture();
+    if (change === 'binding') f.record.bindingId = '0x' + 'f'.repeat(64);
+    else { f.record.owner = getAddress('0x' + '9'.repeat(40)); f.record.order.receiver = f.record.owner;
+      f.record.uid = cowOrderUid(f.record.order, f.record.owner); }
+    await expect(f.options.api.post(f.record)).rejects.toThrow('cow_order_identity_invalid');
+    expect(f.verify).not.toHaveBeenCalled(); expect(f.fetcher).not.toHaveBeenCalled();
+  });
+  it('keeps a valid managed sell publishable while new entries are paused', async () => {
+    const f = await publicationFixture('sell');
+    await query("UPDATE app_settings SET value=jsonb_set(value,'{entriesEnabled}','false'::jsonb) WHERE key=$1", [stateKey]);
+    await f.options.authorizePublish!(f.record);
+    expectedFetchCalls = 1;
+    expect(await f.options.api.post(f.record)).toBe('accepted');
+    expect(f.verify).toHaveBeenCalledTimes(2); expect(f.fetcher).toHaveBeenCalledOnce();
+  });
+});
+
 describe('explicit setup scope and owner boundary', () => {
   it('rejects anonymous, scheduler-only, foreign-origin and invalid-CSRF setup before key creation or financial reads', async () => {
     const url = origin + '/api/wallet/strategy/setup', input = JSON.stringify({ action: 'prepare', owner, chainId: 1 });
