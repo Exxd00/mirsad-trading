@@ -31,6 +31,12 @@ const active = (o: ReportedOrder) => !['filled', 'cancelled', 'rejected'].includ
   || o.finality?.status !== 'finalized';
 type PricedFill = { fill: ReportedFill };
 export const COW_FEE_API_VERSION = 'v2.386.1@c1e29b8b5135d5ca600b501a50b6cae4c203aa35';
+// Exact reviewed releases only. The newer release retains atomic attribution
+// (Trade.gasCost + order_execution total fee) and the total's token identity:
+// https://github.com/cowprotocol/services/blob/7ece6a65e4d3c8735f4043ef387f0f423e5ba1d5/crates/autopilot/src/infra/persistence/mod.rs#L699-L871
+// https://github.com/cowprotocol/services/blob/7ece6a65e4d3c8735f4043ef387f0f423e5ba1d5/crates/database/src/orders.rs#L671-L672
+export const COW_FEE_API_VERSIONS: readonly string[] = Object.freeze([COW_FEE_API_VERSION,
+  'v2.387.2@7ece6a65e4d3c8735f4043ef387f0f423e5ba1d5']);
 
 /** Joins the durable engine identity with canonical token evidence. This class
  * does not install a source, infer a grant, arm entries or submit on a read.
@@ -145,7 +151,7 @@ export class CowSourceClient implements SourceClient {
     try {
       const now = this.clock();
       if (!this.feeVersion || this.feeVersion.at > now || now - this.feeVersion.at >= 5) {
-        this.feeVersion = { at: now, known: await this.options.api.getVersion() === COW_FEE_API_VERSION };
+        this.feeVersion = { at: now, known: COW_FEE_API_VERSIONS.includes(await this.options.api.getVersion()) };
       }
       if (!this.feeVersion.known) return null;
       // Public fee-attribution coverage: services commits each trade's gasCost

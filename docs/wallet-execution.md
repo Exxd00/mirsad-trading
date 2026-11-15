@@ -186,7 +186,13 @@ The report names this order-level recognition method and its raw token amount,
 rate and timestamp. The public API does not prove total fees per historical
 fill; no proportional payment-time allocation or invented zero is supplied.
 Net cash PnL uses actual token deltas at each fill's own historical reference.
-The reviewed orderbook version is pinned for fee classification. Every indexed
+Fee classification accepts only the exact reviewed releases
+`v2.386.1@c1e29b8b5135d5ca600b501a50b6cae4c203aa35` and
+`v2.387.2@7ece6a65e4d3c8735f4043ef387f0f423e5ba1d5`. The latter was
+checked against its atomic attribution/fee save and order total/token query;
+this is compatibility with that release, not permission to accept future
+versions or an independent proof of the provider's internal fee formula.
+Every indexed
 canonical trade must have the non-null attribution coverage sentinel that its
 reviewed database transaction commits with total fees. This solver-gas field is
 coverage only and never becomes an owner expense. Missing attribution, changed
