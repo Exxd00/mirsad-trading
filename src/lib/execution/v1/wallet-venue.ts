@@ -43,6 +43,11 @@ const seconds = (value: string) => {
 };
 export function sourceOrder(order: ReportedOrder): SourceOrder {
   const baseFee = order.feeCurrency === order.symbol.split('-')[0] ? order.fee : undefined;
+  const submittedAt = seconds(order.createdAt), sourceAt = seconds(order.updatedAt);
+  const filled = decimal(order.filledQuantity).gt(0), lastFillAt = order.lastFillAt === undefined ? undefined : seconds(order.lastFillAt);
+  if ((order.finality && filled && lastFillAt === undefined)
+    || (lastFillAt !== undefined && (!filled || !Number.isSafeInteger(lastFillAt) || lastFillAt < 0
+      || lastFillAt > 253402300799 || lastFillAt < submittedAt || lastFillAt > sourceAt))) throw new Error('source_timestamp_invalid');
   let status: SourceOrder['status'] = ({ pending_new: 'open', new: 'open', partially_filled: 'partial',
     filled: 'filled', cancelled: 'cancelled', rejected: 'rejected', replaced: 'unknown' } as const)[order.status];
   if (order.finality && order.finality.status !== 'finalized') status = 'unknown';
@@ -50,7 +55,7 @@ export function sourceOrder(order: ReportedOrder): SourceOrder {
     quantity: order.quantity, filledQuantity: order.filledQuantity,
     // Unknown fees/reservations are not reconstructed as spendable balances.
     remainingBudgetEur: ['filled', 'cancelled', 'rejected'].includes(status) ? '0' : null,
-    submittedAt: seconds(order.createdAt), sourceAt: seconds(order.updatedAt), managed: false,
+    submittedAt, sourceAt, ...(lastFillAt !== undefined ? { lastFillAt } : {}), managed: false,
     purpose: order.type === 'tpsl' || order.type === 'conditional' ? 'protection' : order.side === 'buy' ? 'entry' : 'exit',
     averageFillPrice: order.averageFillPrice ?? null,
     feeEur: order.feeCurrency === 'EUR' ? order.fee ?? null : baseFee !== undefined && order.averageFillPrice
@@ -71,6 +76,10 @@ function ownedOrder(order: ReportedOrder, decision: DecisionRecord): SourceOrder
   if (decision.source && (decision.source.id !== order.id || decimal(order.filledQuantity).lt(decision.source.filledQuantity)
     || seconds(order.updatedAt) < decision.source.sourceAt)) throw new Error('source_order_regressed');
   const mapped = { ...sourceOrder(order), clientKey: decision.key, managed: true, purpose: intent.side === 'buy' ? 'entry' as const : 'exit' as const };
+  if (decision.source?.lastFillAt !== undefined && (mapped.lastFillAt === undefined || mapped.lastFillAt < decision.source.lastFillAt
+    || (decimal(mapped.filledQuantity).eq(decision.source.filledQuantity) && mapped.lastFillAt !== decision.source.lastFillAt))) {
+    throw new Error('source_order_regressed');
+  }
   if (intent.side === 'buy' && !terminal(mapped)) mapped.remainingBudgetEur = decimal(intent.budgetEur)
     .mul(decimal(intent.quantity).sub(order.filledQuantity)).div(intent.quantity).toFixed();
   return mapped;
@@ -185,8 +194,10 @@ export class ConnectedWalletVenue implements CancellationPort {
         const mapped = ownedOrder(raw, decision);
         // The detail reread and fills must describe the same source snapshot.
         if (raw.id !== order.id || raw.accountId !== this.accountId || raw.symbol !== order.symbol || raw.side !== order.side
-          || mapped.sourceAt !== order.sourceAt || !decimal(raw.filledQuantity).eq(order.filledQuantity)
+          || mapped.sourceAt < order.sourceAt || mapped.lastFillAt !== order.lastFillAt || mapped.status !== order.status
+          || !decimal(raw.filledQuantity).eq(order.filledQuantity)
           || mapped.averageFillPrice !== order.averageFillPrice || mapped.feeEur !== order.feeEur
+          || mapped.feeIncludedInPriceEur !== order.feeIncludedInPriceEur
           || mapped.baseFeeQuantity !== order.baseFeeQuantity) throw new Error('report_fills_unavailable');
         details.push(raw);
       }

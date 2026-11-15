@@ -73,7 +73,35 @@ and changes no execution switch.
 
 ## Acceptance evidence
 
+Exact-size entry planning must converge with real token and price grids. A buy
+quote rounded to physical USDC atoms can consume the whole budget while the
+generic planner rounds its EUR limit price upward; repeatedly recomputing the
+maximum quantity then loses another tick indefinitely. On a quantity mismatch,
+the CoW adapter reserves two physical quote atoms plus the current quantity's
+price-grid rounding cost, caps the next quantity downward and requests both
+exact-size quotes again. It accepts only an unchanged final quantity passing
+the original budget, cost, exposure, signal and signed-policy checks. This is
+rounding headroom within the existing budget, not a spending tolerance or an
+altered quote. A genuinely unstable quote remains blocked after three attempts.
+
 Use isolated transport tests for changed mapping, stale data, repeated wakeups, lost responses, partial fills, cancellation races, finality conflicts, missing FX/fees, gas exhaustion, expiry, pause and revocation. The independent testnet proof must keep test balances and source records distinct from real account state.
+
+The composed server test exercises the production bootstrap, runner, wallet
+adapter, CoW clients, RPC transport, journals and financial report with isolated
+SQL storage and synthetic funding. Only external HTTP/RPC/scheduler boundaries
+are simulated. Its third-party runtime bytecodes are read-only fixtures whose
+hashes match the pinned mainnet manifest; the receipts, fills and balances are
+modeled, not independently executed by an EVM or a real CoW solver. This closes
+server-wiring regressions without certifying the owner's capital, real-world
+gas/finality/fees, liquidity or a production financial cycle.
+
+Order read freshness remains separate from execution event time. Finality-aware
+filled orders carry a canonical `lastFillAt`; closed trades use the last
+positive exit fill, ignoring zero-fill cancellation reads. Missing or invalid
+event evidence cannot fall back to a polling clock. Later detail reads must
+retain the same economic fields and canonical fill time while their observation
+timestamp may advance. Re-reading a report therefore cannot move a trade into
+another period or silently turn missing cost evidence into zero results.
 
 Before any readiness claim, separately verify the deployment revision, existing scheduler, actual grant scope and network receipts. No deployment, delegation, test cycle or scheduler activation is performed by documenting this contract. See [wallet-migration.md](wallet-migration.md).
 

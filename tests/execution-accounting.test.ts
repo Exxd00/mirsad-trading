@@ -9,6 +9,7 @@ import { planBuy } from '../src/lib/execution/v1/planner';
 import { berlinBounds, evaluateRisk, neutralSeries } from '../src/lib/execution/v1/risk';
 import { CONFIG, type SourceOrder } from '../src/lib/execution/v1/model';
 import { managedPositions } from '../src/lib/execution/v1/managed-protection';
+import { tradeMetrics } from '../src/lib/execution/v1/metrics';
 import { ConnectedWalletVenue, type WalletVenueSource } from '../src/lib/execution/v1/wallet-venue';
 import { installWalletExecutionSource } from '../src/lib/wallet/execution-connection';
 import { saveOwnerManualWatchlist, saveOwnerStrategySelection } from '../src/lib/wallet/selection-service';
@@ -139,6 +140,34 @@ describe('source-confirmed v1 trade accounting', () => {
     const { decisions, orders, sell } = trade(); sell.filledQuantity = '0.5';
     expect(sourceTradeResults(decisions, orders).trades).toEqual([]);
     expect(sourceTradeResults([], orders)).toEqual({ trades: [], complete: true });
+  });
+  it('dates closure by positive canonical exit fills across rereads and retains missing-cost metrics', () => {
+    const { decisions, orders, buy, sell } = trade();
+    buy.lastFillAt = NOW - 90; sell.lastFillAt = NOW - 20;
+    buy.finality = sell.finality = { status: 'finalized', unconfirmedFilledQuantity: '0', transactionHashes: [] };
+    const empty: SourceOrder = { ...sell, id: 'empty-exit', clientKey: 'empty-exit', status: 'cancelled', filledQuantity: '0',
+      lastFillAt: undefined, averageFillPrice: null, feeEur: '0', sourceAt: NOW + 100 };
+    orders.push(empty); decisions.push({ ...decisions[1], key: empty.clientKey,
+      intent: { ...decisions[1].intent, key: empty.clientKey }, source: empty });
+    const first = sourceTradeResults(decisions, orders).trades;
+    expect(first[0]).toMatchObject({ closedAt: NOW - 20, netPnlEur: '3.8164', feesEur: '0.1836' });
+    expect(tradeMetrics(first, NOW - 60, NOW, NOW - 86400)).toMatchObject({ confirmedClosedTrades: 1, realizedNetPnlEur: '3.8164', feesEur: '0.1836' });
+    buy.sourceAt = sell.sourceAt = NOW + 120;
+    expect(sourceTradeResults(decisions, orders).trades[0].closedAt).toBe(NOW - 20);
+    sell.feeEur = null;
+    const missing = tradeMetrics(sourceTradeResults(decisions, orders).trades, NOW - 60, NOW + 120, NOW - 86400);
+    expect(missing).toMatchObject({ confirmedClosedTrades: 1, realizedNetPnlEur: null, feesEur: null });
+    expect(missing.unavailableReasons).toContain('trade_costs_missing');
+  });
+  it.each([undefined, NOW + 1, NOW - 101, NaN, Number.MAX_SAFE_INTEGER])('rejects missing or invalid canonical closure time %s', at => {
+    const { decisions, orders, buy, sell } = trade();
+    buy.lastFillAt = NOW - 90; sell.lastFillAt = at;
+    buy.finality = sell.finality = { status: 'finalized', unconfirmedFilledQuantity: '0', transactionHashes: [] };
+    expect(() => sourceTradeResults(decisions, orders)).toThrow('source_timestamp_invalid');
+  });
+  it('does not create a date-unsafe closed trade without any positive exit fill', () => {
+    const { decisions, orders, buy, sell } = trade(); buy.baseFeeQuantity = buy.filledQuantity; sell.filledQuantity = '0';
+    expect(sourceTradeResults(decisions, orders)).toEqual({ trades: [], complete: false });
   });
   it('reports embedded protocol fees but subtracts only additional gas from net token prices', () => {
     const { decisions, orders, buy, sell } = trade();

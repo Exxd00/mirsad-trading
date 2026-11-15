@@ -187,6 +187,27 @@ describe('source identity attached to the durable execution intent', () => {
     expect(client.getOrders).toHaveBeenCalledTimes(1);
     expect(client.submitOrder).not.toHaveBeenCalled(); await j.release(lease);
   });
+  it('upgrades legacy checkpoints to canonical fill times and rejects changed finalized event evidence', async () => {
+    const j = new SqlJournal(), lease = (await j.acquire(CONFIG.accountId))!, { client, venue } = setup(j), i = intent();
+    await j.begin(lease, i, NOW);
+    const raw: ReportedOrder = { ...sourceOrder(i, (await j.decision(lease, i.key))!.sourceIdentity!.clientOrderId),
+      createdAt: new Date((NOW - 60) * 1000).toISOString(), status: 'partially_filled', filledQuantity: decimal(i.quantity).div(2).toFixed() };
+    client.getOrders.mockResolvedValue([raw]); client.getOrder.mockImplementation(async () => ({ ...raw }));
+    const legacy = await venue.lookup(i.key, lease); await j.result(lease, i.key, 'acknowledged', legacy.order);
+    raw.lastFillAt = new Date((NOW - 20) * 1000).toISOString();
+    const upgraded = await venue.lookup(i.key, lease);
+    expect(upgraded.order).toMatchObject({ lastFillAt: NOW - 20, sourceAt: NOW });
+    await j.result(lease, i.key, 'acknowledged', upgraded.order);
+    for (const at of [undefined, NOW - 21, NOW - 19]) {
+      raw.lastFillAt = at === undefined ? undefined : new Date(at * 1000).toISOString();
+      await expect(venue.lookup(i.key, lease)).rejects.toThrow('source_order_regressed');
+    }
+    raw.lastFillAt = new Date((NOW - 10) * 1000).toISOString(); raw.filledQuantity = i.quantity; raw.status = 'filled';
+    expect((await venue.lookup(i.key, lease)).order).toMatchObject({ lastFillAt: NOW - 10, filledQuantity: i.quantity });
+    raw.updatedAt = new Date((NOW - 1) * 1000).toISOString();
+    await expect(venue.lookup(i.key, lease)).rejects.toThrow('source_order_regressed');
+    expect(client.submitOrder).not.toHaveBeenCalled(); expect(client.cancelOrder).not.toHaveBeenCalled(); await j.release(lease);
+  });
 
   it.each(['symbol', 'side', 'quantity', 'price'])('refuses a source order that does not match the durable intent: %s', async field => {
     const j = new SqlJournal(), lease = (await j.acquire(CONFIG.accountId))!, { client, venue } = setup(j), i = intent();
@@ -281,6 +302,37 @@ describe('source identity attached to the durable execution intent', () => {
       .toMatchObject({ intent: null, reason: 'report_fill_price_mismatch' });
     expect(await j.accountDecisions(CONFIG.accountId)).toEqual(before);
     expect(await j.protections(CONFIG.accountId)).toEqual(protection);
+    expect(client.submitOrder).not.toHaveBeenCalled(); expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+  it('accepts a later poll only for the same canonical economic snapshot and rejects changed rereads', async () => {
+    const j = new SqlJournal(), lease = (await j.acquire(CONFIG.accountId))!, { client, source } = setup(j), i = intent();
+    await j.begin(lease, i, NOW);
+    const raw: ReportedOrder = { ...sourceOrder(i, (await j.decision(lease, i.key))!.sourceIdentity!.clientOrderId),
+      status: 'filled', filledQuantity: i.quantity, averageFillPrice: '100', fee: '0.09', feeCurrency: 'EUR', feeIncludedInPriceEur: '0.02',
+      createdAt: new Date((NOW - 60) * 1000).toISOString(), lastFillAt: new Date((NOW - 20) * 1000).toISOString(),
+      finality: { status: 'finalized', unconfirmedFilledQuantity: '0', transactionHashes: [] } };
+    client.getOrders.mockResolvedValue([raw]);
+    client.getFillsForOrders.mockResolvedValue({ truncated: false, fills: [{ id: 'canonical-fill', orderId: raw.id,
+      accountId: CONFIG.accountId, symbol: raw.symbol, side: raw.side, quantity: raw.filledQuantity, price: '100',
+      baseCurrency: 'AAA', quoteCurrency: 'EUR', createdAt: raw.lastFillAt!, maker: false }] });
+    await j.release(lease);
+    const before = await j.accountDecisions(CONFIG.accountId), venue = new ConnectedWalletVenue(source, () => NOW + 1);
+    for (const scenario of ['same', 'quantity', 'fee', 'event', 'status', 'embedded-fee', 'regressed-read'] as const) {
+      const later: ReportedOrder = { ...raw, updatedAt: new Date((NOW + 1) * 1000).toISOString() };
+      if (scenario === 'quantity') later.filledQuantity = decimal(i.quantity).div(2).toFixed();
+      if (scenario === 'fee') later.fee = '0.1';
+      if (scenario === 'event') later.lastFillAt = new Date((NOW - 19) * 1000).toISOString();
+      if (scenario === 'status') later.status = 'cancelled';
+      if (scenario === 'embedded-fee') later.feeIncludedInPriceEur = '0.03';
+      if (scenario === 'regressed-read') later.updatedAt = new Date((NOW - 1) * 1000).toISOString();
+      client.getOrder.mockResolvedValueOnce(raw).mockResolvedValueOnce(later);
+      const report = await venue.reportAccount();
+      if (scenario === 'same') {
+        expect(report.reportEvidence?.status).toBe('matched'); expect(report.fills).toHaveLength(1);
+        expect(report.orders[0]).toMatchObject({ sourceAt: NOW, lastFillAt: NOW - 20 });
+      } else expect(report).toMatchObject({ fills: null, reportEvidence: { status: 'unavailable', issues: ['report_fills_unavailable'] } });
+    }
+    expect(await j.accountDecisions(CONFIG.accountId)).toEqual(before);
     expect(client.submitOrder).not.toHaveBeenCalled(); expect(client.cancelOrder).not.toHaveBeenCalled();
   });
 });

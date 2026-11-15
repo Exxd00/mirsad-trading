@@ -194,7 +194,19 @@ export function sourceTradeResults(decisions: DecisionRecord[], orders: SourceOr
     const sold = confirmed.reduce((v, s) => v.add(s.filledQuantity).add(s.baseFeeQuantity ?? '0'), decimal(buy.baseFeeQuantity ?? '0'));
     if (sold.gt(buy.filledQuantity)) throw new Error('accounting_exit_quantity_mismatch');
     if (!terminal(buy) || !sold.eq(buy.filledQuantity) || confirmed.some(s => !terminal(s))) continue;
-    const all = [buy, ...confirmed.filter(s => decimal(s.filledQuantity).gt(0))];
+    const positiveExits = confirmed.filter(s => decimal(s.filledQuantity).gt(0));
+    if (!positiveExits.length) { complete = false; continue; }
+    const all = [buy, ...positiveExits];
+    // Canonical event time must not follow the polling clock. Finality-aware
+    // sources cannot fall back to a read timestamp when their event is absent.
+    for (const order of all) {
+      if ((order.finality && order.lastFillAt === undefined)
+        || (order.lastFillAt !== undefined && (!Number.isSafeInteger(order.lastFillAt) || order.lastFillAt < 0
+          || order.lastFillAt > 253402300799 || order.lastFillAt < order.submittedAt || order.lastFillAt > order.sourceAt))) {
+        throw new Error('source_timestamp_invalid');
+      }
+    }
+    const closedAt = Math.max(...positiveExits.map(s => s.lastFillAt ?? s.sourceAt));
     const costsKnown = all.every(s => s.feeEur !== null && decimal(s.feeEur).gte(0) && s.averageFillPrice !== null
       && decimal(s.feeIncludedInPriceEur ?? '0').gte(0) && decimal(s.feeIncludedInPriceEur ?? '0').lte(s.feeEur));
     const fees = costsKnown ? all.reduce((v, s) => v.add(s.feeEur!), new D(0)) : null;
@@ -209,7 +221,7 @@ export function sourceTradeResults(decisions: DecisionRecord[], orders: SourceOr
       slippage = slippage?.add(decimal(s.filledQuantity).mul(decimal(exit.intent.triggerQuote.bid).sub(s.averageFillPrice))) ?? null;
     }
     trades.push({ id: `trade:${entry.key}`, symbol: buy.symbol, version: VERSION, sourceConfirmed: true,
-      closedAt: Math.max(...confirmed.map(s => s.sourceAt)), quantity: buy.filledQuantity,
+      closedAt, quantity: buy.filledQuantity,
       averageEntryPrice: buy.averageFillPrice, originalStop: protections.find(p => p.entryKey === entry.key)?.originalStop ?? null,
       netPnlEur: proceeds && buyCash ? proceeds.sub(buyCash).toFixed() : null,
       feesEur: fees?.toFixed() ?? null, slippageEur: slippage?.toFixed() ?? null, sourceOrderIds: all.map(o => o.id) });
