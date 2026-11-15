@@ -49,7 +49,7 @@ export interface CowExecutionRpc {
   prepare(uid: Hex, phase: CowTxPhase, order: CowOrder, intentKey: Hex, nonce: number,
     previous?: CowPreparedTx): Promise<CowPreparedTx>;
   validatePrepared(tx: CowPreparedTx, phase: CowTxPhase, order: CowOrder, intentKey: Hex): Promise<void>;
-  broadcast(tx: CowPreparedTx): Promise<Hex>;
+  broadcast(tx: CowPreparedTx, beforeSend?: () => void): Promise<Hex>;
   transactionState(tx: CowPreparedTx): Promise<CowTxState>;
   orderProof(record: CowOrderRecord): Promise<{ trades: CowFinalizedTrade[]; unconfirmedSellAmount: string;
     unconfirmedBuyAmount: string; presigned: boolean; invalidated: boolean; expired: boolean; finalizedHead: CowBlock;

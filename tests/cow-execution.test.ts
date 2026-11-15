@@ -10,7 +10,7 @@ import { CONFIG, decimal, type BuyIntent, type SellIntent } from '../src/lib/exe
 import { SqlJournal, initialState } from '../src/lib/execution/v1/journal';
 import { planBuy } from '../src/lib/execution/v1/planner';
 import { berlinBounds, evaluateRisk } from '../src/lib/execution/v1/risk';
-import { createCowPolicyDraft } from '../src/lib/wallet/cow-policy';
+import { cowPolicyOrderAppData, createCowPolicyDraft } from '../src/lib/wallet/cow-policy';
 import { CowExecution } from '../src/lib/wallet/cow-execution';
 import { CowExecutionJournal } from '../src/lib/wallet/cow-execution-journal';
 import { CowSubmitApi } from '../src/lib/wallet/cow-submit-api';
@@ -40,6 +40,9 @@ function buy(): BuyIntent {
   if (!result.intent) throw new Error('Invalid isolated financial evidence: ' + result.reason);
   const intent = result.intent, raw = decimal(intent.quantity).mul('1000000000000000000').toFixed(0);
   intent.quote.exactSize = { provider: 'cow-mainnet-v1', quantity: intent.quantity, buyQuoteId: 1, sellQuoteId: 2,
+    buyPartiallyFillable: true, sellPartiallyFillable: true,
+    buyAppDataHash: cowPolicyOrderAppData(authority().draft, ('0x' + intent.key) as Hex).hash,
+    sellAppDataHash: cowPolicyOrderAppData(authority().draft, ('0x' + intent.key) as Hex).hash,
     buySellAmount: decimal(intent.quantity).mul(intent.quote.ask).div(conversion.eurPerUnit).mul('1000000').floor().toFixed(0),
     buyBuyAmount: raw, buyFeeAmount: '0', sellSellAmount: raw,
     sellBuyAmount: decimal(intent.quantity).mul(intent.quote.bid).div(conversion.eurPerUnit).mul('1000000').floor().toFixed(0),
@@ -95,6 +98,44 @@ async function fixture(intent: BuyIntent | SellIntent = buy(), expiresAt = NOW +
 }
 
 describe('persistent CoW order lifecycle under the existing financial lease', () => {
+  it.each(['false', 'missing', 'appdata'] as const)('blocks new buy preparation for %s pricing proof without creating a protocol order', async mode => {
+    const intent = buy(), exact = intent.quote.exactSize!;
+    if (mode === 'false') exact.buyPartiallyFillable = false;
+    if (mode === 'missing') delete exact.sellPartiallyFillable;
+    if (mode === 'appdata') exact.buyAppDataHash = hash('f');
+    const f = await fixture(intent);
+    await expect(f.execution.submitOrder(f.input, { lease: f.lease, intent })).rejects.toThrow(mode === 'appdata'
+      ? 'wallet_quote_appdata_mismatch' : 'wallet_partial_fill_quote_unavailable');
+    expect(await f.journal.records()).toEqual([]); expect(f.rpc.prepare).not.toHaveBeenCalled();
+    expect(f.rpc.broadcast).not.toHaveBeenCalled(); expect(f.api.post).not.toHaveBeenCalled();
+    await f.root.release(f.lease);
+  });
+  it.each(['pending', 'mined'] as const)('keeps legacy %s presign inspection/cancellation available without rebroadcasting or publishing a buy', async phase => {
+    const f = await fixture(); f.publish.mockRejectedValueOnce(new Error('isolated pre-publication stop'));
+    await expect(f.execution.submitOrder(f.input, { lease: f.lease, intent: f.intent })).rejects.toThrow();
+    const record = (await f.journal.records())[0]; f.phases.presign = phase;
+    // Model an actual pre-migration journal AND its durable decision: no new
+    // proof booleans are synthesized while replaying the old financial record.
+    await query("UPDATE app_settings SET value = value #- '{intent,quote,exactSize,buyPartiallyFillable}' #- '{intent,quote,exactSize,sellPartiallyFillable}' WHERE value->'intent'->>'key'=$1", [f.intent.key]);
+    vi.mocked(f.rpc.broadcast).mockClear(); f.api.post.mockClear();
+    await expect(f.execution.resumeExecution(f.lease, { entriesEnabled: true })).rejects.toThrow('wallet_partial_fill_quote_unavailable');
+    expect(f.rpc.broadcast).not.toHaveBeenCalled(); expect(f.api.post).not.toHaveBeenCalled();
+    expect((await f.execution.inspectOrder(record.uid)).record.uid).toBe(record.uid);
+    f.setNow(NOW + 60); f.proof.presigned = true;
+    await f.execution.resumeExecution(f.lease, { entriesEnabled: true });
+    expect(vi.mocked(f.rpc.prepare).mock.calls.at(-1)?.[1]).toBe(phase === 'pending' ? 'clear-presign' : 'cancel');
+    expect(f.rpc.broadcast).toHaveBeenCalledOnce(); expect(f.api.post).not.toHaveBeenCalled();
+    await f.root.release(f.lease);
+  });
+  it.each([16, 31])('does not publish an already-mined presign after authorization ages its frozen quote by %ss', async elapsed => {
+    const f = await fixture(); f.publish.mockRejectedValueOnce(new Error('isolated pre-publication stop'));
+    await expect(f.execution.submitOrder(f.input, { lease: f.lease, intent: f.intent })).rejects.toThrow();
+    f.phases.presign = 'mined'; f.publish.mockImplementationOnce(async () => { f.setNow(NOW + elapsed); });
+    vi.mocked(f.rpc.broadcast).mockClear();
+    await expect(f.execution.resumeExecution(f.lease, { entriesEnabled: true })).rejects.toThrow('cow_conversion_evidence_missing');
+    expect(f.rpc.broadcast).not.toHaveBeenCalled(); expect(f.api.post).not.toHaveBeenCalled();
+    await f.root.release(f.lease);
+  });
   it('requires grant renewal before allocating a new buy when the cancellation/finality buffer is unavailable', async () => {
     const f = await fixture(buy(), NOW + 1500);
     await expect(f.execution.submitOrder(f.input, { lease: f.lease, intent: f.intent })).rejects.toThrow('cow_grant_renewal_required');
@@ -265,10 +306,34 @@ describe('persistent CoW order lifecycle under the existing financial lease', ()
 });
 
 describe('official CoW order POST without a synthetic execution grant', () => {
+  it.each(['false', 'missing', 'appdata', 'side', 'side-after-authorize', 'missing-expiry', 'nan-expiry'] as const)(
+    'rejects %s evidence at the real POST sink after authorization without HTTP', async mode => {
+      const f = await fixture(), result = await f.execution.submitOrder(f.input, { lease: f.lease, intent: f.intent });
+      const record = structuredClone(result.record), exact = record.intent.side === 'buy' ? record.intent.quote.exactSize! : null!;
+      if (mode === 'false') exact.buyPartiallyFillable = false;
+      if (mode === 'missing') delete exact.sellPartiallyFillable;
+      if (mode === 'appdata') exact.sellAppDataHash = hash('f');
+      if (mode === 'side') (record.intent as { side: string }).side = 'sell';
+      if (mode === 'missing-expiry') Reflect.deleteProperty(exact, 'buyExpiration');
+      if (mode === 'nan-expiry') exact.sellExpiration = Number.NaN;
+      const fetcher = vi.fn(async () => Response.json(record.uid, { status: 201 }));
+      const api = new CowSubmitApi({ fetcher, clock: () => NOW * 1000, authorize: async () => {
+        if (mode === 'side-after-authorize') (record.intent as { side: string }).side = 'sell';
+      } });
+      await expect(api.post(record)).rejects.toThrow(/wallet_partial_fill_quote_unavailable|wallet_quote_appdata_mismatch|cow_order_identity_invalid|wallet_exact_quote_unavailable/);
+      expect(fetcher).not.toHaveBeenCalled(); await f.root.release(f.lease);
+    });
+  it('rechecks quote age after the real sink authorization await', async () => {
+    const f = await fixture(), result = await f.execution.submitOrder(f.input, { lease: f.lease, intent: f.intent });
+    let now = NOW; const fetcher = vi.fn(async () => Response.json(result.record.uid, { status: 201 }));
+    const api = new CowSubmitApi({ fetcher, clock: () => now * 1000, authorize: async () => { now += 16; } });
+    await expect(api.post(result.record)).rejects.toThrow('wallet_exact_quote_unavailable');
+    expect(fetcher).not.toHaveBeenCalled(); await f.root.release(f.lease);
+  });
   it('sends the exact persisted presign payload only after authorization and treats API acceptance as non-final', async () => {
     const f = await fixture(), result = await f.execution.submitOrder(f.input, { lease: f.lease, intent: f.intent });
     const authorize = vi.fn(async () => {}), fetcher = vi.fn(async () => Response.json(result.record.uid, { status: 201 }));
-    const api = new CowSubmitApi({ authorize, fetcher }); expect(await api.post(result.record)).toBe('accepted');
+    const api = new CowSubmitApi({ authorize, fetcher, clock: () => NOW * 1000 }); expect(await api.post(result.record)).toBe('accepted');
     expect(authorize).toHaveBeenCalledExactlyOnceWith(result.record); expect(fetcher).toHaveBeenCalledOnce();
     const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('https://api.cow.fi/mainnet/api/v1/orders');
@@ -283,7 +348,7 @@ describe('official CoW order POST without a synthetic execution grant', () => {
     for (const fetcher of [vi.fn(async () => { throw new Error('https://private.invalid/?secret=do-not-expose'); }),
       vi.fn(async () => Response.json('0x' + 'a'.repeat(112), { status: 201 })),
       vi.fn(async () => Response.json({ errorType: 'InternalServerError', description: 'isolated-private-marker' }, { status: 500 }))]) {
-      expect(await new CowSubmitApi({ authorize: async () => {}, fetcher }).post(result.record)).toBe('unknown'); expect(fetcher).toHaveBeenCalledOnce();
+      expect(await new CowSubmitApi({ authorize: async () => {}, fetcher, clock: () => NOW * 1000 }).post(result.record)).toBe('unknown'); expect(fetcher).toHaveBeenCalledOnce();
     }
     await f.root.release(f.lease);
   });

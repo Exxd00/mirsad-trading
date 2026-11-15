@@ -1,4 +1,5 @@
 import 'server-only';
+import { assertCowEntryQuote } from './cow-entry-quote';
 import { keccak256, stringToHex } from 'viem';
 import { CowReadClient, COW_API_ORIGIN } from './cow-api';
 import { assertCowOrderUid, normalizeCowOrder, normalizeCowUid } from './cow-order';
@@ -38,10 +39,12 @@ export class CowSubmitApi implements CowExecutionApi {
   async post(record: CowOrderRecord): Promise<'accepted' | 'rejected' | 'unknown'> {
     const order = normalizeCowOrder(record.order);
     assertCowOrderUid(record.uid, order, record.owner);
-    if (!order.partiallyFillable || order.receiver.toLowerCase() !== record.owner.toLowerCase()
+    if (record.intent.side !== order.kind || !order.partiallyFillable || order.receiver.toLowerCase() !== record.owner.toLowerCase()
       || keccak256(stringToHex(record.fullAppData)) !== order.appData || new TextEncoder().encode(record.fullAppData).length > 1000) return cowFail('cow_order_identity_invalid');
     if (!this.options.authorize) return cowFail('cow_authority_unavailable');
     await this.options.authorize(record);
+    if (record.intent.side !== order.kind) return cowFail('cow_order_identity_invalid');
+    assertCowEntryQuote(record.intent, order.appData, Math.floor((this.options.clock ?? Date.now)() / 1000));
     const controller = new AbortController(); let timeout: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<never>((_, reject) => { timeout = setTimeout(() => { controller.abort(); reject(new Error('timeout')); }, 5000); });
     try {

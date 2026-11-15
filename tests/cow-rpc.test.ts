@@ -4,7 +4,7 @@ import { domainSeparator, encodeAbiParameters, encodeEventTopics, erc20Abi, getA
   parseTransaction, type Address, type Hex, type PublicClient, type TransactionSerialized } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { CowRpcTransport } from '../src/lib/wallet/cow-rpc';
-import type { CowAuthority, CowOrderRecord, CowPreparedTx } from '../src/lib/wallet/cow-execution-types';
+import { CowExecutionError, type CowAuthority, type CowOrderRecord, type CowPreparedTx } from '../src/lib/wallet/cow-execution-types';
 import { createCowPolicyDraft, cowPolicyOrderAppData } from '../src/lib/wallet/cow-policy';
 import { COW_DOMAIN, COW_SETTLEMENT, COW_VAULT_RELAYER, cowOrderUid, type CowOrder } from '../src/lib/wallet/cow-order';
 
@@ -125,7 +125,7 @@ describe('actual RPC transaction construction with isolated signer and injected 
     expect(parseTransaction(prepared.raw as TransactionSerialized)).toMatchObject({ chainId: 1, nonce: 7, to: manager });
     expect(parseTransaction(prepared.raw as TransactionSerialized).value ?? 0n).toBe(0n);
     expect(f.client.sendRawTransaction).not.toHaveBeenCalled();
-    expect(await f.rpc.broadcast(prepared)).toBe(prepared.hash); expect(f.client.sendRawTransaction).toHaveBeenCalledOnce();
+    expect(await f.rpc.broadcast(prepared, () => {})).toBe(prepared.hash); expect(f.client.sendRawTransaction).toHaveBeenCalledOnce();
   });
   it('cannot prepare an undeployed candidate, absent signer, wrong chain or changed policy code', async () => {
     const f = await fixture(); f.client.getCode.mockResolvedValue(undefined);
@@ -151,6 +151,36 @@ describe('actual RPC transaction construction with isolated signer and injected 
     f.options.authorizeWrite.mockRejectedValueOnce(new Error('isolated-private-closing-state'));
     await expect(f.rpc.broadcast(prepared)).rejects.toThrow('cow_rpc_unavailable');
     expect(f.client.sendRawTransaction).not.toHaveBeenCalled();
+  });
+  it('requires an explicit synchronous last-send guard for a presign, including resumed prepared bytes', async () => {
+    const f = await fixture(), prepared = await f.rpc.prepare(f.uid, 'presign', f.order, intentKey, 0);
+    await expect(f.rpc.broadcast(prepared)).rejects.toThrow('cow_transaction_not_verified');
+    await expect(f.rpc.broadcast(prepared, async () => { throw new CowExecutionError('wallet_exact_quote_unavailable'); }))
+      .rejects.toThrow('cow_transaction_not_verified');
+    expect(f.client.sendRawTransaction).not.toHaveBeenCalled();
+    const check = vi.fn(() => {});
+    expect(await f.rpc.broadcast(prepared, check)).toBe(prepared.hash);
+    expect(check).toHaveBeenCalledOnce(); expect(f.client.sendRawTransaction).toHaveBeenCalledOnce();
+  });
+  it('rechecks quote freshness after awaited authorization, at the actual send sink', async () => {
+    const f = await fixture(), prepared = await f.rpc.prepare(f.uid, 'presign', f.order, intentKey, 0);
+    let clock = NOW, authorized = false;
+    f.options.authorizeWrite.mockImplementationOnce(async () => { await Promise.resolve(); clock += 16; authorized = true; });
+    const guard = vi.fn(() => {
+      expect(authorized).toBe(true);
+      if (clock - NOW > 15) throw new CowExecutionError('wallet_exact_quote_unavailable');
+    });
+    await expect(f.rpc.broadcast(prepared, guard)).rejects.toThrow('wallet_exact_quote_unavailable');
+    expect(guard).toHaveBeenCalledOnce(); expect(f.client.sendRawTransaction).not.toHaveBeenCalled();
+  });
+  it('keeps cancellation and same-nonce clearance available without an entry quote callback', async () => {
+    const f = await fixture(), original = await f.rpc.prepare(f.uid, 'presign', f.order, intentKey, 3);
+    const cancel = await f.rpc.prepare(f.uid, 'cancel', f.order, intentKey, 4);
+    expect(await f.rpc.broadcast(cancel)).toBe(cancel.hash);
+    f.setRevoked(true);
+    const clear = await f.rpc.prepare(f.uid, 'clear-presign', f.order, intentKey, 3, original);
+    expect(await f.rpc.broadcast(clear)).toBe(clear.hash);
+    expect(f.client.sendRawTransaction).toHaveBeenCalledTimes(2);
   });
   it('clears only the executor own nonce with zero value and ceil-bumped fees, without an owner transfer', async () => {
     const f = await fixture(), original = await f.rpc.prepare(f.uid, 'presign', f.order, intentKey, 3);

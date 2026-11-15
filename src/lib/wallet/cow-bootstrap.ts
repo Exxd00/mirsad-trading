@@ -155,7 +155,10 @@ async function build(): Promise<WalletVenueSource | null> {
   client = new CowSourceClient({ owner: config.terms.owner, markets, execution: readExecution, journal: readJournal, history, quotes, market, api,
     expenses: () => expenses.getExpenses(), orderGasEur: id => expenses.orderGasEur(id) });
   const source: WalletVenueSource = { client, journal: mainJournal, binding: cowBinding(config), gasCostsIncluded: true,
-    entryBlocker: () => client.entryBlocker(), entryPlan: async (...args) => {
+    // The reviewed fixed public quote API only prices non-partial orders.
+    // Declare its missing capability without probing in the protection path.
+    // A compatible replacement requires its own reviewed server adapter.
+    entryBlocker: async () => await client.entryBlocker() ?? 'wallet_partial_fill_quote_unavailable', entryPlan: async (...args) => {
       const reason = await client.entryBlocker();
       return reason ? { intent: null, reason } : quotes.entryPlan(...args);
     },

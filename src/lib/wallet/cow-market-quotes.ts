@@ -8,6 +8,9 @@ import type { SourceBalance, SourceInstrument, SourceOrderBook } from '../execut
 import { CoinbaseMarketClient } from './coinbase-market';
 import { CowReadClient } from './cow-api';
 import type { CowRuntimeConfig } from './cow-runtime-config';
+import { cowPolicyOrderAppData, createCowPolicyDraft } from './cow-policy';
+import { assertCowEntryQuote } from './cow-entry-quote';
+import { CowExecutionError } from './cow-execution-types';
 
 export type CowMarketQuoteOptions = { config: CowRuntimeConfig; client: PublicClient; market: CoinbaseMarketClient;
   api: CowReadClient; balances(): Promise<SourceBalance[]>; clock?: () => number };
@@ -51,13 +54,17 @@ export class CowMarketQuotes {
     const wei = perGasCeiling < transactionCeiling ? perGasCeiling : transactionCeiling;
     return decimal(wei.toString()).mul(2).div('1000000000000000000').mul(eth.ask).toFixed();
   }
-  private async exactQuote(symbol: string, quantity: string, conversion: QuoteConversion): Promise<Quote> {
+  private async exactQuote(symbol: string, quantity: string, conversion: QuoteConversion, intentKey?: string): Promise<Quote> {
     const m = this.options.config.mappings.find(m => m.symbol === symbol);
     if (!m) throw new Error('wallet_market_mapping_missing');
     const scale = decimal('10').pow(m.tokenDecimals), atomic = decimal(quantity).mul(scale);
     if (!atomic.gt(0) || !atomic.eq(atomic.floor())) throw new Error('cow_quantity_precision_invalid');
-    const now = this.clock(), input = { owner: this.options.config.terms.owner, receiver: this.options.config.terms.owner,
-      validTo: now + 300, signingScheme: 'presign' as const, amount: atomic.toFixed(0) };
+    const config = this.options.config;
+    const data = intentKey === undefined ? undefined : cowPolicyOrderAppData(createCowPolicyDraft(config.terms,
+      { manager: config.manager, enforcer: config.enforcer }), ('0x' + intentKey) as `0x${string}`);
+    const now = this.clock(), input = { owner: config.terms.owner, receiver: config.terms.owner,
+      validTo: now + 300, signingScheme: 'presign' as const, amount: atomic.toFixed(0),
+      ...(data ? { appData: data.full, appDataHash: data.hash } : {}) };
     const [buy, sell] = await Promise.all([
       this.options.api.getQuote({ ...input, sellToken: this.options.config.terms.quoteToken, buyToken: m.tokenAddress, kind: 'buy' }),
       this.options.api.getQuote({ ...input, sellToken: m.tokenAddress, buyToken: this.options.config.terms.quoteToken, kind: 'sell' }),
@@ -75,7 +82,9 @@ export class CowMarketQuotes {
       exactSize: { provider: 'cow-mainnet-v1', quantity, buyQuoteId: buy.quoteId, sellQuoteId: sell.quoteId,
         buySellAmount: buy.sellAmount, buyBuyAmount: buy.buyAmount, buyFeeAmount: buy.quotedFeeAmount,
         sellSellAmount: sell.sellAmount, sellBuyAmount: sell.buyAmount, sellFeeAmount: sell.quotedFeeAmount,
-        buyExpiration: Math.floor(Date.parse(buy.expiration) / 1000), sellExpiration: Math.floor(Date.parse(sell.expiration) / 1000) } };
+        buyExpiration: Math.floor(Date.parse(buy.expiration) / 1000), sellExpiration: Math.floor(Date.parse(sell.expiration) / 1000),
+        buyPartiallyFillable: buy.partiallyFillable, sellPartiallyFillable: sell.partiallyFillable,
+        buyAppDataHash: buy.appDataHash, sellAppDataHash: sell.appDataHash } };
   }
   entryPlan: EntryPlanner = async (account, signal, instrument, referenceQuote, risk, now, quantityCap) => {
     const blocked = (reason: string) => ({ intent: null, reason });
@@ -91,7 +100,10 @@ export class CowMarketQuotes {
       let requestedQuantity = candidate.intent?.quantity ?? '0';
       for (let attempt = 0; candidate.intent && attempt < 3; attempt++) {
         const size = requestedQuantity;
-        const [quote, gas] = await Promise.all([this.exactQuote(signal.symbol, size, conversion), this.gasReserveEur()]);
+        const [quote, gas] = await Promise.all([this.exactQuote(signal.symbol, size, conversion, candidate.intent.key), this.gasReserveEur()]);
+        const expected = cowPolicyOrderAppData(createCowPolicyDraft(terms, { manager: this.options.config.manager,
+          enforcer: this.options.config.enforcer }), ('0x' + candidate.intent.key) as `0x${string}`);
+        assertCowEntryQuote({ ...candidate.intent, quote }, expected.hash);
         const current = Math.max(now, this.clock());
         const exactInstrument = { ...instrument, maximumQuantity: size, costs: { buyFeeRate: '0', sellFeeRate: '0',
           buyFixedEur: gas, sellFixedEur: gas, buySlippageRate: '0', sellSlippageRate: '0', depthRequired: true,
@@ -119,7 +131,7 @@ export class CowMarketQuotes {
         return refined;
       }
       return candidate.intent ? blocked('wallet_exact_quote_unstable') : candidate;
-    } catch { return blocked('wallet_exact_quote_unavailable'); }
+    } catch (error) { return blocked(error instanceof CowExecutionError ? error.code : 'wallet_exact_quote_unavailable'); }
   };
   private async build(symbol: string) {
     const cached = this.books.get(symbol);

@@ -48,6 +48,8 @@ export async function auditCowFeasibility(ownerInput: string, chainId: number,
     || usdcDecimals !== 6 || musdDecimals !== 6) throw new AuthorityError('wallet_authority_verification_unavailable');
   const readAt = clock(), quoteSymbol = usdc > 0n ? 'USDC' : 'mUSD';
   const quoteRaw = usdc > 0n ? usdc : musd, quoteToken = usdc > 0n ? COINBASE_USDC : METAMASK_MUSD;
+  let partialQuoteUnavailable = false;
+  const partialCompatible = new Set<number>();
   // A frozen, independently dated EUR price is required for USDC/gas. There is
   // no mUSD=USDC peg substitution. mUSD fee ratios need no FX assumption.
   const gas = quoteSymbol === 'USDC' ? await Promise.all([market.referenceBook('ETH'), market.fundingConversion(Math.floor(clock() / 1000))])
@@ -74,6 +76,7 @@ export async function auditCowFeasibility(ownerInput: string, chainId: number,
       const seedBudget = budget > entryGas ? budget - entryGas : budget;
       const seed = await api.getQuote({ ...input, sellToken: quoteToken, buyToken: COINBASE_WETH9, kind: 'sell', amount: seedBudget.toString() });
       if (!quoteFresh(seed, clock())) throw new Error('unverified_quote');
+      if (seed.partiallyFillable !== true) partialQuoteUnavailable = true;
       value.status = 'partial'; value.entryFeeRaw = seed.quotedFeeAmount;
       value.entryFeeFraction = decimal(seed.quotedFeeAmount).div(seedBudget.toString()).toFixed();
       value.sourceAt = seed.readAt; value.expiresAt = Math.min(seed.readAt + 15000, Date.parse(seed.expiration));
@@ -84,6 +87,8 @@ export async function auditCowFeasibility(ownerInput: string, chainId: number,
         api.getQuote({ ...input, sellToken: COINBASE_WETH9, buyToken: quoteToken, kind: 'sell', amount: seed.buyAmount }),
       ]);
       if (![buy, sell].every(q => quoteFresh(q, clock()))) throw new Error('unverified_quote');
+      const compatible = [seed, buy, sell].every(q => q.partiallyFillable === true);
+      if (!compatible) partialQuoteUnavailable = true;
       const paid = decimal(buy.sellAmount).add(buy.quotedFeeAmount);
       if (paid.gt(budget.toString()) || buy.buyAmount !== seed.buyAmount
         || decimal(sell.sellAmount).add(sell.quotedFeeAmount).toFixed(0) !== seed.buyAmount) throw new Error('size_mismatch');
@@ -100,12 +105,13 @@ export async function auditCowFeasibility(ownerInput: string, chainId: number,
         value.sourceAt = Math.min(value.sourceAt, gas.sourceAt);
         value.expiresAt = Math.min(value.expiresAt, gas.expiresAt);
       }
-      value.reason = !gas ? 'wallet_sample_gas_cost_unproven'
+      value.reason = !compatible ? 'wallet_partial_fill_quote_unavailable' : !gas ? 'wallet_sample_gas_cost_unproven'
         : decimal(value.totalCostUpperFraction!).gt(CONFIG.maximumRoundTripCost) ? 'wallet_sample_cost_ceiling_exceeded'
         : paid.add(gas.quoteRaw.div(2)).gt(budget.toString()) ? 'wallet_sample_entry_budget_exceeded' : null;
       if (value.expiresAt <= clock()) {
         value.reason = 'wallet_sample_cost_stale'; value.gasCostUpperFraction = null; value.totalCostUpperFraction = null;
       }
+      if (compatible) partialCompatible.add(allocationPercent);
       return value;
     } catch {
       // Even partial evidence must remain labelled partial, never free/zero.
@@ -117,15 +123,16 @@ export async function auditCowFeasibility(ownerInput: string, chainId: number,
   if (finalBlock.hash !== block.hash || !fresh(startedAt, now, 45000)
     || !fresh(Number(block.timestamp) * 1000, now, 180000)) throw new AuthorityError('wallet_authority_verification_unavailable');
   const freshSamples = samples.filter(s => s.expiresAt !== null && s.expiresAt > now);
-  const eligible = eth > 0n && quoteSymbol === 'USDC' && freshSamples.some(s => s.status === 'complete' && s.reason === null
+  const eligible = eth > 0n && quoteSymbol === 'USDC' && freshSamples.some(s => partialCompatible.has(s.allocationPercent) && s.status === 'complete' && s.reason === null
     && s.totalCostUpperFraction !== null && !decimal(s.totalCostUpperFraction).gt(CONFIG.maximumRoundTripCost));
-  const blockers = [
+  const blockers = [...new Set([
     ...(usdc === 0n ? ['wallet_configured_quote_balance_missing'] : []),
     ...(usdc === 0n && musd > 0n ? ['wallet_musd_execution_unconfigured'] : []),
     ...(eth === 0n ? ['wallet_owner_gas_unavailable'] : []),
+    ...(partialQuoteUnavailable ? ['wallet_partial_fill_quote_unavailable'] : []),
     ...(!eligible ? ['wallet_sample_feasibility_unproven'] : []),
-    ...new Set(samples.flatMap(s => s.reason ? [s.reason] : [])),
-  ];
+    ...samples.flatMap(s => s.reason ? [s.reason] : []),
+  ])];
   // Only the compiled quote asset can make a setup candidate. This says
   // nothing about signals, available/reserved funds, or live trade readiness.
   const decision = eligible ? 'eligible-for-setup' : usdc === 0n

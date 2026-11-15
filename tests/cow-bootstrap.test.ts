@@ -221,7 +221,15 @@ async function publicationFixture(side: 'buy' | 'sell' = 'buy') {
     quantity: '1', limitPrice: '1', budgetEur: '1', allocation: CONFIG.allocation, allocationReason: 'isolated-publication',
     estimatedCostEur: '0.001', estimatedCostFraction: '0.001', expectedEntryFeeEur: '0', expiresAt: NOW + 60,
     stopFraction: CONFIG.stopFraction, targetFraction: CONFIG.targetFraction,
-    quote: { symbol: 'WETH-EUR', bid: '1', ask: '1', sourceAt: NOW, readAt: NOW, source: 'isolated-publication' } }
+    // Synthetic compatible pricing evidence for publication-fence tests only.
+    // The public quote API currently returns partiallyFillable=false instead.
+    quote: { symbol: 'WETH-EUR', bid: '1', ask: '1', sourceAt: NOW, readAt: NOW, source: 'isolated-publication',
+      conversion: { currency: 'USDC', eurPerUnit: '1', sourceAt: NOW, sourceId: 'isolated-publication-fx' },
+      exactSize: { provider: 'cow-mainnet-v1', quantity: '1', buyQuoteId: 1, sellQuoteId: 2,
+        buySellAmount: '1000000', buyBuyAmount: '1000000000000000000', buyFeeAmount: '0',
+        sellSellAmount: '1000000000000000000', sellBuyAmount: '1000000', sellFeeAmount: '0',
+        buyExpiration: NOW + 30, sellExpiration: NOW + 30, buyPartiallyFillable: true, sellPartiallyFillable: true,
+        buyAppDataHash: appData.hash, sellAppDataHash: appData.hash } } }
     : { side, symbol: 'WETH-EUR', key, quantity: '1', positionId: 'isolated-managed-position', reason: 'stop',
       signal: null, reduceOnly: true, protectionIds: [] };
   const record: CowOrderRecord = { version: 1, revision: 1, bindingId: options.authority.draft.delegationHash,

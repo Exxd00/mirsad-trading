@@ -198,13 +198,24 @@ export class CowRpcTransport implements CowExecutionRpc {
       this.approved.set(tx.hash, phase);
     });
   }
-  async broadcast(tx: CowPreparedTx): Promise<Hex> {
+  async broadcast(tx: CowPreparedTx, beforeSend?: () => void): Promise<Hex> {
     return this.guarded(async () => {
       const phase = this.approved.get(tx.hash);
       if (!phase || keccak256(tx.raw) !== tx.hash) return cowFail('cow_transaction_not_verified');
       if (phase !== 'clear-presign') await this.assertAuthority(); else await this.chain();
       if (!this.options.authorizeWrite) return cowFail('cow_authority_unavailable');
       await this.options.authorizeWrite(phase);
+      // Authority reads may outlive the entry quote/deadline. The trusted
+      // caller rechecks its immutable intent only after all awaited work.
+      // An async callback cannot guard the immediately following send.
+      if (phase === 'presign') {
+        if (typeof beforeSend !== 'function') return cowFail('cow_transaction_not_verified');
+        const result: unknown = beforeSend();
+        if (result !== undefined) {
+          void Promise.resolve(result).catch(() => {});
+          return cowFail('cow_transaction_not_verified');
+        }
+      }
       const actual = await this.options.client.sendRawTransaction({ serializedTransaction: tx.raw });
       if (actual !== tx.hash) return cowFail('cow_broadcast_identity_mismatch'); return actual;
     });
