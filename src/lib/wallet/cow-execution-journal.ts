@@ -57,18 +57,23 @@ export class CowExecutionJournal {
     const encrypted = this.options.codec.seal(JSON.stringify(record), key);
     await tx.query('INSERT INTO app_settings(key,value) VALUES($1,$2::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=NOW()', [key, JSON.stringify(encrypted)]);
   }
+  private decodeOrder(value: unknown, key?: string): CowOrderRecord {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return cowFail('cow_journal_corrupt');
+    const record = value as CowOrderRecord;
+    if (record.version !== 1 || record.bindingId !== this.bindingId || !uuid.test(record.clientOrderId) || !uid.test(record.uid)
+      || (key !== undefined && key !== this.orderKey(record.clientOrderId))) return cowFail('cow_journal_corrupt');
+    return record;
+  }
   async getRecord(identity: string): Promise<CowOrderRecord | null> {
     const result = uuid.test(identity)
       ? await this.options.query<{ value: CowOrderRecord }>('SELECT value FROM app_settings WHERE key=$1', [this.orderKey(identity)])
       : uid.test(identity) ? await this.options.query<{ value: CowOrderRecord }>('SELECT value FROM app_settings WHERE key LIKE $1 AND value->>\'uid\'=$2', [this.prefix + 'order:%', identity.toLowerCase()]) : cowFail('cow_order_identity_invalid');
     if (result.rows.length > 1) cowFail('cow_order_identity_conflict');
-    const value = result.rows[0]?.value;
-    if (value && (value.version !== 1 || value.bindingId !== this.bindingId || !uuid.test(value.clientOrderId) || !uid.test(value.uid))) cowFail('cow_journal_corrupt');
-    return value ?? null;
+    return result.rows.length ? this.decodeOrder(result.rows[0].value) : null;
   }
   async records(): Promise<CowOrderRecord[]> {
-    const rows = await this.options.query<{ value: CowOrderRecord }>('SELECT value FROM app_settings WHERE key LIKE $1 ORDER BY key', [this.prefix + 'order:%']);
-    return Promise.all(rows.rows.map(row => this.getRecord(row.value.clientOrderId).then(record => record ?? cowFail('cow_journal_corrupt'))));
+    const rows = await this.options.query<{ key: string; value: unknown }>('SELECT key,value FROM app_settings WHERE key LIKE $1 ORDER BY key', [this.prefix + 'order:%']);
+    return rows.rows.map(row => this.decodeOrder(row.value, row.key));
   }
   async createOrder(lease: Lease, record: Omit<CowOrderRecord, 'version' | 'revision' | 'bindingId'>): Promise<CowOrderRecord> {
     return this.options.transaction(async tx => {

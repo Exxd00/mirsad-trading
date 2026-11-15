@@ -94,6 +94,37 @@ Primary integration references:
 
 ## Mainnet adapter and owner handoff (9 November 2026)
 
+### Hosting restoration check (14 November 2026)
+
+Before trusting a restored host, run the anonymous check against its exact
+HTTPS origin and intended release commit:
+
+```sh
+node scripts/check-host-readiness.mjs --origin https://mirsad-trading.vercel.app --commit COMMIT_SHA
+```
+
+The check only reads `/api/release`, refuses redirects, bounds response size
+and duration, and reports `402 / DEPLOYMENT_DISABLED` without trying to parse
+the provider's plain-text error as a release. A matching release is hosting
+evidence only: `financialReadiness` remains `not-certified`. It does not log in,
+dispatch a scheduler tick, create a profile, sign or submit anything.
+
+Restoring or moving the host also requires the original Postgres database and
+encryption key, correct HTTPS `APP_ORIGIN`, scheduler credentials and report
+identity. Outside Vercel, leave `VERCEL` unset so untrusted requests cannot
+select Vercel-specific proxy trust. Preserve the production key namespace
+(`VERCEL_ENV=production`) until it is migrated explicitly. A hostname change
+requires reviewing every scheduler/report destination: changing `APP_ORIGIN`
+alone does not retarget the existing Cloudflare Workers. Keep the existing
+Durable Objects, account lease, 60-second cancellation, 10-second protection
+and 300-second scan; a web-hosting cron is not an equivalent replacement.
+
+The journal history list now validates the returned SQL snapshot directly
+instead of re-reading every row. This removes N additional SQL reads for N
+historical records; it does not omit history, change financial write fences
+or prove that this path caused a hosting quota overrun. Active CPU must be
+attributed by project and route before claiming the team-wide cause.
+
 ### Asset and cost feasibility gate (10 November 2026)
 
 `/wallet` first offers an authenticated read-only feasibility audit. It reads

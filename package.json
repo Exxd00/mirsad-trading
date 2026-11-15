@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
     "typecheck": "tsc --noEmit",
+    "check:host": "node scripts/check-host-readiness.mjs",
     "test": "vitest run",
     "db:init": "node --env-file=.env.local --import tsx scripts/init-db.ts",
     "connection:retire": "node --import tsx scripts/purge-legacy-connection.ts"
