@@ -7,6 +7,7 @@ import { COW_SETTLEMENT, assertCowOrderUid, normalizeCowAddress, normalizeCowOrd
  * API state is indexed evidence, never proof of canonical chain finality. */
 export const COW_API_ORIGIN = 'https://api.cow.fi';
 const MAX_BYTES = 512 * 1024, MAX_UINT256 = (1n << 256n) - 1n;
+const MAX_VERSION_BYTES = 128, VERSION_PATH = '/mainnet/api/v1/version';
 const NOT_FOUND = Symbol('cow_order_not_found');
 type Value = Record<string, unknown>;
 type ErrorCode = 'cow_request_invalid' | 'cow_response_invalid' | 'cow_identity_mismatch' | 'cow_read_timeout' | 'cow_read_unavailable';
@@ -148,10 +149,10 @@ function quoteEvidence(raw: unknown, request: ReturnType<typeof quoteRequest>, r
     quotedFeeAmount: fee, partiallyFillable: q.partiallyFillable, signingScheme: request.signingScheme, expiration,
     quoteId: value.id === undefined || value.id === null ? null : integer(value.id), verified: value.verified, readAt };
 }
-async function json(response: Response, signal: AbortSignal): Promise<unknown> {
+async function bodyText(response: Response, signal: AbortSignal, maximumBytes: number): Promise<string> {
   const declared = response.headers.get('content-length');
-  if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > MAX_BYTES)) return fail('cow_response_invalid');
-  if (!response.headers.get('content-type')?.toLowerCase().includes('application/json') || !response.body) return fail('cow_response_invalid');
+  if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > maximumBytes)) return fail('cow_response_invalid');
+  if (!response.body) return fail('cow_response_invalid');
   const reader = response.body.getReader(), chunks: Uint8Array[] = []; let size = 0;
   const cancel = () => { void reader.cancel().catch(() => undefined); };
   signal.addEventListener('abort', cancel, { once: true });
@@ -159,13 +160,24 @@ async function json(response: Response, signal: AbortSignal): Promise<unknown> {
     while (true) {
       const chunk = await reader.read(); if (chunk.done) break;
       size += chunk.value.byteLength;
-      if (size > MAX_BYTES) { void reader.cancel().catch(() => undefined); return fail('cow_response_invalid'); }
+      if (size > maximumBytes) { void reader.cancel().catch(() => undefined); return fail('cow_response_invalid'); }
       chunks.push(chunk.value);
     }
     const bytes = new Uint8Array(size); let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-    try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); } catch { return fail('cow_response_invalid'); }
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { return fail('cow_response_invalid'); }
   } finally { signal.removeEventListener('abort', cancel); reader.releaseLock(); }
+}
+async function json(response: Response, signal: AbortSignal): Promise<unknown> {
+  if (!response.headers.get('content-type')?.toLowerCase().includes('application/json')) return fail('cow_response_invalid');
+  const text = await bodyText(response, signal, MAX_BYTES);
+  try { return JSON.parse(text); } catch { return fail('cow_response_invalid'); }
+}
+async function versionText(response: Response, signal: AbortSignal): Promise<string> {
+  // The official version endpoint returns an unquoted UTF-8 text/plain body,
+  // even with Accept: application/json. This exception applies to no other URL.
+  if (!/^text\/plain(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?\s*$/i.test(response.headers.get('content-type') ?? '')) return fail('cow_response_invalid');
+  return bodyText(response, signal, MAX_VERSION_BYTES);
 }
 /** Fixed official mainnet endpoint; fetch injection is for isolated tests only.
  * No URL, RPC, credentials, signed payload or order mutation is accepted. */
@@ -184,25 +196,25 @@ export class CowReadClient {
     const readable = /^\/mainnet\/api\/v1\/orders\/0x[0-9a-f]{112}$/.test(path)
       || /^\/mainnet\/api\/v1\/account\/0x[0-9a-f]{40}\/orders\?offset=\d{1,7}&limit=\d{1,3}$/.test(path)
       || /^\/mainnet\/api\/v2\/trades\?orderUid=0x[0-9a-f]{112}&offset=\d{1,7}&limit=\d{1,3}$/.test(path)
-      || path === '/mainnet/api/v1/version';
+      || path === VERSION_PATH;
     if (payload === undefined ? !readable : path !== '/mainnet/api/v1/quote') return fail('cow_request_invalid');
     const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new CowReadError('cow_read_timeout')); }, this.timeoutMs); });
     const work = async () => {
       const response = await this.fetcher(COW_API_ORIGIN + path, { method: payload === undefined ? 'GET' : 'POST',
-        headers: { Accept: 'application/json', ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }) },
+        headers: { Accept: path === VERSION_PATH ? 'text/plain' : 'application/json', ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }) },
         ...(payload === undefined ? {} : { body: JSON.stringify(payload) }), signal: controller.signal,
         cache: 'no-store', redirect: 'error', credentials: 'omit' });
       if (allowMissing && response.status === 404) { void response.body?.cancel().catch(() => undefined); return NOT_FOUND; }
       if (!response.ok) { void response.body?.cancel().catch(() => undefined); return fail('cow_read_unavailable'); }
-      return json(response, controller.signal);
+      return path === VERSION_PATH ? versionText(response, controller.signal) : json(response, controller.signal);
     };
     try { return await Promise.race([work(), deadline]); }
     catch (error) { throw error instanceof CowReadError ? error : new CowReadError('cow_read_unavailable'); }
     finally { if (timer !== undefined) clearTimeout(timer); controller.abort(); }
   }
   async getVersion(): Promise<string> {
-    const value = await this.read('/mainnet/api/v1/version');
+    const value = await this.read(VERSION_PATH);
     if (typeof value !== 'string' || !/^v\d+\.\d+\.\d+@[0-9a-f]{40}$/.test(value)) return fail('cow_response_invalid');
     return value;
   }

@@ -143,11 +143,51 @@ describe('CoW read-only mainnet evidence', () => {
     const f = client([]); await expect(f.client.getTrades(identity(), page)).rejects.toMatchObject({ code: 'cow_request_invalid' });
     expect(f.fetcher).not.toHaveBeenCalled();
   });
-  it('reads the deployment version without exposing response metadata', async () => {
-    const version = 'v2.386.1@c1e29b8b5135d5ca600b501a50b6cae4c203aa35', f = client(version);
-    expect(await f.client.getVersion()).toBe(version);
-    expect(f.fetcher.mock.calls[0][0]).toBe('https://api.cow.fi/mainnet/api/v1/version');
-    await expect(client({ version }).client.getVersion()).rejects.toMatchObject({ code: 'cow_response_invalid' });
+});
+
+describe('bounded plain-text CoW deployment version', () => {
+  const version = 'v2.387.2@7ece6a65e4d3c8735f4043ef387f0f423e5ba1d5';
+  function versionClient(body: BodyInit | null, contentType = 'text/plain; charset=utf-8', headers: Record<string, string> = {}) {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { headers: { 'content-type': contentType, ...headers } }));
+    return { api: new CowReadClient({ fetcher }), fetcher };
+  }
+  it.each(['text/plain; charset=utf-8', 'text/plain', 'Text/Plain; Charset="UTF-8"'])(
+    'reads the actual unquoted version response with %s and keeps the request read-only', async contentType => {
+      const f = versionClient(version, contentType); expect(await f.api.getVersion()).toBe(version);
+      expect(f.fetcher).toHaveBeenCalledExactlyOnceWith('https://api.cow.fi/mainnet/api/v1/version', expect.objectContaining({
+        method: 'GET', headers: { Accept: 'text/plain' }, cache: 'no-store', redirect: 'error', credentials: 'omit' }));
+      expect(f.fetcher.mock.calls[0][1]?.body).toBeUndefined();
+    });
+  it.each(['application/json', 'text/html', 'application/octet-stream', 'text/plain; charset=iso-8859-1', 'text/plain-bogus'])(
+    'rejects the wrong version content type %s without a JSON or text fallback', async contentType => {
+      await expect(versionClient(version, contentType).api.getVersion()).rejects.toMatchObject({ code: 'cow_response_invalid' });
+    });
+  it.each(['', 'secret', JSON.stringify(version), JSON.stringify({ version }), version + '\n', ' ' + version,
+    version + ' private-provider-metadata', 'v2.387.2@' + 'f'.repeat(39)])('rejects a malformed version body %# without exposing it', async body => {
+      await expect(versionClient(body).api.getVersion()).rejects.toMatchObject({ code: 'cow_response_invalid', message: 'cow_response_invalid' });
+    });
+  it('rejects invalid declared lengths, streamed overflow and malformed UTF-8', async () => {
+    for (const length of ['129', '99999999999999999999999', '-1', 'not-a-length']) {
+      await expect(versionClient(version, undefined, { 'content-length': length }).api.getVersion()).rejects.toMatchObject({ code: 'cow_response_invalid' });
+    }
+    const cancelled = vi.fn(), stream = new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(new TextEncoder().encode(version)); controller.enqueue(new Uint8Array(129));
+    }, cancel: cancelled });
+    await expect(versionClient(stream).api.getVersion()).rejects.toMatchObject({ code: 'cow_response_invalid' });
+    expect(cancelled).toHaveBeenCalledOnce();
+    await expect(versionClient(new Uint8Array([0xc3, 0x28])).api.getVersion()).rejects.toMatchObject({ code: 'cow_response_invalid' });
+  });
+  it('bounds and cancels a stalled plain-text body under the existing read deadline', async () => {
+    vi.useFakeTimers(); const cancelled = vi.fn(), stream = new ReadableStream<Uint8Array>({ cancel: cancelled });
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(stream, { headers: { 'content-type': 'text/plain' } }));
+    const read = new CowReadClient({ fetcher, timeoutMs: 100 }).getVersion();
+    const rejected = expect(read).rejects.toMatchObject({ code: 'cow_read_timeout' });
+    await vi.advanceTimersByTimeAsync(100); await rejected;
+    expect(cancelled).toHaveBeenCalledOnce(); expect(fetcher.mock.calls[0][1]?.signal?.aborted).toBe(true); expect(vi.getTimerCount()).toBe(0);
+  });
+  it('does not allow plain text on the JSON order endpoint', async () => {
+    const f = versionClient(version);
+    await expect(f.api.getOrder(identity())).rejects.toMatchObject({ code: 'cow_response_invalid' });
   });
 });
 

@@ -4,16 +4,17 @@ import { CONFIG } from '../src/lib/execution/v1/model';
 import { SourceApiError, SourceUnknownOutcomeError } from '../src/lib/execution/v1/source-model';
 import { COW_FEE_API_VERSION, CowSourceClient, type CowSourceClientOptions } from '../src/lib/wallet/cow-source-client';
 import { sourceOrder } from '../src/lib/execution/v1/wallet-venue';
-import type { CowOrderEvidence, CowTradeEvidence } from '../src/lib/wallet/cow-api';
+import { CowReadClient, type CowOrderEvidence, type CowTradeEvidence } from '../src/lib/wallet/cow-api';
 import type { CowHistorySnapshot } from '../src/lib/wallet/cow-history';
 import type { CowOrderInspection, CowFinalizedTrade } from '../src/lib/wallet/cow-execution-types';
-import { cowOrderUid, type CowOrder } from '../src/lib/wallet/cow-order';
+import { COW_SETTLEMENT, cowOrderUid, type CowOrder } from '../src/lib/wallet/cow-order';
 
 const NOW = 1794225600, a = (n: string) => ('0x' + n.repeat(40)) as Address, h = (n: string) => ('0x' + n.repeat(64)) as Hex;
 const owner = a('1'), base = a('2'), quote = a('3'), txHash = h('4'), clientId = '00000000-0000-4000-8000-000000000001';
 const order: CowOrder = { sellToken: quote, buyToken: base, receiver: owner, sellAmount: '100000000', buyAmount: '2000000000000000000',
   validTo: NOW + 600, appData: h('5'), feeAmount: '0', kind: 'buy', partiallyFillable: true, sellTokenBalance: 'erc20', buyTokenBalance: 'erc20' };
 const uid = cowOrderUid(order, owner), block = { number: '100', hash: h('a'), parentHash: h('b'), timestamp: NOW - 20 };
+const currentFeeVersion = 'v2.387.2@7ece6a65e4d3c8735f4043ef387f0f423e5ba1d5';
 function fixture() {
   const inspection: CowOrderInspection = { record: { version: 1, revision: 1, bindingId: h('c'), clientOrderId: clientId,
     decisionKey: 'd'.repeat(64), owner, uid, order: structuredClone(order), fullAppData: '{}',
@@ -63,10 +64,74 @@ function fixture() {
   }
   return { options, inspection, snapshot, fill, client: new CowSourceClient(options) };
 }
+function indexedFeeFixture(version = currentFeeVersion) {
+  const f = fixture(), { api } = f.fill(); f.inspection.cancellation = 'finalized';
+  // Official JSON field names pass through the real HTTP DTO parser before
+  // they are joined to the independent canonical inspection above.
+  const orderJson: Record<string, unknown> = { ...order, owner, uid, settlementContract: COW_SETTLEMENT,
+    creationDate: new Date((NOW - 60) * 1000).toISOString(), status: 'cancelled', invalidated: true,
+    executedSellAmount: api.sellAmount, executedBuyAmount: api.buyAmount,
+    executedSellAmountBeforeFees: api.sellAmountBeforeFees, executedFeeAmount: '0',
+    executedFee: '200000', executedFeeToken: quote, gasCost: null };
+  const tradeJson: Record<string, unknown> = { ...api, gasCost: api.gasCostEstimateWei, executedProtocolFees: null };
+  delete tradeJson.gasCostEstimateWei; delete tradeJson.chainFinality;
+  const fetcher = vi.fn<typeof fetch>(async url => {
+    const path = new URL(String(url)).pathname;
+    if (path.endsWith('/version')) return new Response(version, { headers: { 'content-type': 'text/plain; charset=utf-8' } });
+    const value = path.includes('/orders/') ? orderJson
+      : path.endsWith('/trades') ? [tradeJson] : (() => { throw new Error('Unexpected isolated read'); })();
+    return new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
+  });
+  const apiClient = new CowReadClient({ fetcher, clock: () => NOW * 1000 });
+  f.options.api.getVersion = apiClient.getVersion.bind(apiClient);
+  f.options.api.getOrder = apiClient.getOrder.bind(apiClient);
+  f.options.api.getTrades = apiClient.getTrades.bind(apiClient);
+  return { ...f, orderJson, tradeJson, fetcher };
+}
 beforeEach(() => { vi.stubGlobal('fetch', vi.fn(() => { throw new Error('No network in source composition tests'); })); });
 afterEach(() => { expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('CoW SourceClient canonical evidence composition', () => {
+  it.each([
+    { version: COW_FEE_API_VERSION, raw: '200000', token: quote, embedded: '0.24', total: '0.34', currency: 'USDC', rate: '1.2' },
+    { version: currentFeeVersion, raw: '200000', token: quote, embedded: '0.24', total: '0.34', currency: 'USDC', rate: '1.2' },
+    { version: currentFeeVersion, raw: '0', token: quote, embedded: '0', total: '0.1', currency: 'USDC', rate: '1.2' },
+    { version: currentFeeVersion, raw: '1000000000000000', token: base, embedded: '0.06', total: '0.16', currency: 'AAA', rate: '60' },
+  ])('recognizes reviewed $version total $raw in its actual fee token after the canonical trade join', async expected => {
+    const f = indexedFeeFixture(expected.version);
+    f.orderJson.executedFee = expected.raw; f.orderJson.executedFeeToken = expected.token;
+    const actual = await f.client.getOrder(uid), fills = (await f.client.getFillsForOrders([actual])).fills;
+    expect(actual).toMatchObject({ filledQuantity: '1', filledAmount: '60', averageFillPrice: '60',
+      fee: expected.total, feeCurrency: 'EUR', feeIncludedInPriceEur: expected.embedded,
+      feeRecognition: { method: 'cow-api-total-at-finalized-last-fill-v1', token: expected.token,
+        rawAmount: expected.raw, recognitionAt: block.timestamp, eurPerToken: expected.rate } });
+    expect(f.options.quotes.conversionAt).toHaveBeenCalledWith(expected.currency, block.timestamp);
+    expect(fills).toHaveLength(1);
+    expect(fills.every(fill => fill.fee === undefined && fill.feeCurrency === undefined && fill.feeIncludedInPriceEur === undefined)).toBe(true);
+    expect(f.fetcher.mock.calls.every(([, init]) => init?.method === 'GET' && init.body === undefined)).toBe(true);
+    expect(f.options.execution.submitOrder).not.toHaveBeenCalled(); expect(f.options.execution.cancelOrder).not.toHaveBeenCalled();
+    expect(f.options.execution.resumeExecution).not.toHaveBeenCalled();
+  });
+  it.each(['future-version', 'unreviewed-commit', 'missing-total', 'missing-fee-token', 'unscoped-fee-token',
+    'missing-attribution', 'wrong-trade-transaction', 'wrong-trade-block', 'wrong-trade-log', 'wrong-trade-amount'] as const)(
+    'preserves canonical quantity but rejects current API fee breakdown for %s', async scenario => {
+      const version = scenario === 'future-version' ? currentFeeVersion.replace('v2.387.2', 'v2.387.3')
+        : scenario === 'unreviewed-commit' ? 'v2.387.2@' + 'f'.repeat(40) : currentFeeVersion;
+      const f = indexedFeeFixture(version);
+      if (scenario === 'missing-total') delete f.orderJson.executedFee;
+      if (scenario === 'missing-fee-token') delete f.orderJson.executedFeeToken;
+      if (scenario === 'unscoped-fee-token') f.orderJson.executedFeeToken = a('9');
+      if (scenario === 'missing-attribution') f.tradeJson.gasCost = null;
+      if (scenario === 'wrong-trade-transaction') f.tradeJson.txHash = h('9');
+      if (scenario === 'wrong-trade-block') f.tradeJson.blockNumber = 101;
+      if (scenario === 'wrong-trade-log') f.tradeJson.logIndex = 8;
+      if (scenario === 'wrong-trade-amount') f.tradeJson.buyAmount = '999999999999999999';
+      const actual = await f.client.getOrder(uid), fills = (await f.client.getFillsForOrders([actual])).fills;
+      expect(actual).toMatchObject({ filledQuantity: '1', filledAmount: '60', averageFillPrice: '60', finality: { status: 'finalized' } });
+      expect(actual.fee).toBeUndefined(); expect(actual.feeIncludedInPriceEur).toBeUndefined(); expect(actual.feeRecognition).toBeUndefined();
+      expect(fills).toHaveLength(1); expect(fills[0].fee).toBeUndefined();
+      expect(f.options.execution.submitOrder).not.toHaveBeenCalled(); expect(f.options.execution.resumeExecution).not.toHaveBeenCalled();
+    });
   it('reserves exact physical quote capacity and never labels USDC as EUR', async () => {
     const f = fixture(), balances = await f.client.getBalances();
     expect(balances).toEqual(expect.arrayContaining([expect.objectContaining({ currency: 'USDC', total: '1000', available: '900', reserved: '100' }),
