@@ -2,6 +2,7 @@ import { vi } from 'vitest';
 import { decodeFunctionData, encodeFunctionResult, parseAbi, toHex, zeroHash, type Hex } from 'viem';
 import legacyQuote from '../fixtures/lifi-gnosis-funding-quote.json';
 import preparedStep from '../fixtures/lifi-gnosis-reviewed-step-20261116.json';
+import nativeQuote from '../fixtures/lifi-gnosis-native-intermediate-20261116.json';
 import runtime from '../fixtures/gnosis-funding-contract-runtime.json';
 import musdRuntime from '../fixtures/musd-reference-runtime.json';
 import gnosisRuntime from '../fixtures/cow-gnosis-runtime.json';
@@ -15,6 +16,8 @@ export const FUNDING_OWNER = preparedStep.response.action.fromAddress;
 export const FUNDING_QUOTE = preparedStep.response;
 export const LEGACY_FUNDING_QUOTE=legacyQuote.quote;
 export const LEGACY_FUNDING_NOW=Math.floor(Date.parse(legacyQuote.observedAt)/1000);
+export const NATIVE_FUNDING_QUOTE=nativeQuote.response;
+export const NATIVE_FUNDING_NOW=Math.floor(Date.parse(nativeQuote.receivedAt)/1000);
 /** Synthetic route metadata wrapper around recorded unmodified calldata.
  * Actual route-provider response coverage uses its own captured fixture. */
 export function fundingRouteWrapper(rawQuote:unknown){
@@ -90,6 +93,7 @@ export function fundingReads(options: { quote?: unknown; now?: number;routes?:un
         ?? (state.used ? ('0x' + '0'.repeat(63) + '1') : zeroHash);
       else if (c.method === 'eth_call') {
         const request = c.params[0] as { to: string; data: Hex }, d = decodeFunctionData({ abi: fundingReadAbi, data: request.data });
+        if (/^0x(?:0{40}|e{40})$/i.test(request.to)) throw new Error('Native ETH must never be read as an ERC20');
         const name = d.functionName; let answer: unknown;
         if (name === 'decimals') answer = 6;
         else if (name === 'balanceOf') answer = chain === 1 ? state.balance : state.destinationBalance;

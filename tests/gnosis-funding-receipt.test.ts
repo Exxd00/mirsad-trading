@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { decodeFunctionData, encodeAbiParameters, encodeEventTopics, getAbiItem, keccak256, parseAbi, stringToHex, toHex, type Abi, type AbiEvent, type Address, type Hex } from 'viem';
+import { decodeFunctionData, encodeAbiParameters, encodeEventTopics, getAbiItem, keccak256, parseAbi, stringToHex, toHex, zeroAddress, type Abi, type AbiEvent, type Address, type Hex } from 'viem';
 import { verifyGnosisFundingReview, resolveGnosisFundingReceipt } from '../src/lib/wallet/gnosis-funding-service';
 import type { GnosisFundingQuoteReview } from '../src/lib/wallet/gnosis-funding-quote';
 import { parseGnosisFundingAttemptResultUI } from '../src/lib/wallet/gnosis-funding-ui';
-import { fundingReads,FUNDING_OWNER,LEGACY_FUNDING_NOW,LEGACY_FUNDING_QUOTE } from './helpers/gnosis-funding';
+import { fundingReads,FUNDING_OWNER,LEGACY_FUNDING_NOW,LEGACY_FUNDING_QUOTE,NATIVE_FUNDING_NOW,NATIVE_FUNDING_QUOTE } from './helpers/gnosis-funding';
 import policy from '../src/lib/wallet/generated/gnosis-funding-contracts.json';
 import capturedSwap from './fixtures/lifi-gnosis-swap-funding-quote.json';
 const TX = ('0x' + '11'.repeat(32)) as Hex, OTHER = '0x1111111111111111111111111111111111111111' as Address;
@@ -11,15 +11,17 @@ const EVENTS = parseAbi(['event Approval(address indexed owner,address indexed s
   'event Transfer(address indexed from,address indexed to,uint256 value)',
   'event Deposited(bytes32 indexed id,address indexed token,address indexed receiver,uint256 amount)',
   'event LiFiTransferStarted((bytes32 transactionId,string bridge,string integrator,address referrer,address sendingAssetId,address receiver,uint256 minAmount,uint256 destinationChainId,bool hasSourceSwaps,bool hasDestinationCall) bridgeData)']);
-async function fixture(phase: 'approve' | 'fund') {
+async function fixture(phase: 'approve' | 'fund',variant:'legacy'|'native'='legacy') {
   // Existing direct-route snapshots remain recoverable after new preparations
   // require USDC selection. No new direct-route preparation is simulated here.
-  const f = fundingReads({now:LEGACY_FUNDING_NOW});
+  const native=variant==='native',now=native?NATIVE_FUNDING_NOW:LEGACY_FUNDING_NOW;
+  const f = fundingReads({now,quote:native?NATIVE_FUNDING_QUOTE:LEGACY_FUNDING_QUOTE});
   f.state.mutate=(call,_url,value)=>call.method==='eth_getTransactionCount'?'0x5':value;
-  const {review,freshProof}=await verifyGnosisFundingReview(LEGACY_FUNDING_QUOTE,FUNDING_OWNER,LEGACY_FUNDING_NOW,f.dependencies);
-  f.setNow(LEGACY_FUNDING_NOW+10);f.state.finalizedNumber++;
+  const {review,freshProof}=await verifyGnosisFundingReview(native?NATIVE_FUNDING_QUOTE:LEGACY_FUNDING_QUOTE,FUNDING_OWNER,now,f.dependencies);
+  f.setNow(now+10);f.state.finalizedNumber++;
   const block = f.header(f.state.finalizedNumber), args = decodeFunctionData({ abi: policy.abi.facet as Abi, data: review.transaction.data }).args!;
   const bridge = structuredClone(args[0]) as Record<string, unknown>;
+  if(native)bridge.minAmount=(bridge.minAmount as bigint)+123n;
   const log = (name: 'Approval' | 'Transfer' | 'LiFiTransferStarted' | 'Deposited', address: Address, values: Record<string, unknown>, index: number) => {
     const abi = getAbiItem({ abi: EVENTS as Abi, name }) as AbiEvent;
     const data = encodeAbiParameters(abi.inputs.filter(v => !v.indexed), name === 'LiFiTransferStarted' ? [values.bridgeData] as never : [name === 'Deposited' ? values.amount : values.value] as never);
@@ -29,11 +31,14 @@ async function fixture(phase: 'approve' | 'fund') {
   const approval = () => log('Approval', review.input.token, { owner: review.owner, spender: review.approval.spender, value: 10000000n }, 0);
   const transfer = () => log('Transfer', review.input.token, { from: review.owner, to: review.transaction.to, value: 10000000n }, 0);
   const started = () => log('LiFiTransferStarted', review.transaction.to, { bridgeData: bridge }, 1);
+  const deposited = () => log('Deposited',policy.freshChecks.contracts.depository.address as Address,
+    {id:review.bridge.requestId,token:zeroAddress,receiver:review.bridge.depositoryReceiver,amount:bridge.minAmount},2);
+  const fundLogs=()=>[transfer(),started(),...(native?[deposited()]:[])];
   f.state.allowance = phase === 'approve' ? 10000000n : 0n; f.state.used = phase === 'fund';
   f.state.receipt = { transactionHash: TX, blockNumber: block.number, blockHash: block.hash, status: '0x1',
     // A real gas-included wrapper can have an unrelated outer relayer/target.
-    from: OTHER, to: OTHER, logs: phase === 'approve' ? [approval()] : [transfer(), started()] };
-  return { ...f, review, freshProof, bridge, log, approval, transfer, started,
+    from: OTHER, to: OTHER, logs: phase === 'approve' ? [approval()] : fundLogs() };
+  return { ...f, review, freshProof, bridge, log, approval, transfer, started,deposited,fundLogs,
     input: { phase, owner: review.owner, transactionHash: TX, review, freshProof } };
 }
 /** Receipt-only replay of captured calldata with a synthetic stored review.
@@ -63,6 +68,65 @@ async function swapReceiptFixture() {
   return { ...f, review, freshProof, actual, logs, input };
 }
 describe('actual two-reader canonical receipt resolver and public DTO', () => {
+  it.each([0n,123n])('recognizes captured native calldata with a synthetic canonical wrapped receipt and actual native output increase %s, not a token-transfer or arrival claim',async increase=>{
+    const f=await fixture('fund','native');f.bridge.minAmount=BigInt(f.review.sourceSwap!.minimumOutRaw)+increase;f.state.receipt!.logs=f.fundLogs();
+    const before=f.seen.length;
+    const result=await resolveGnosisFundingReceipt(f.input,f.dependencies);
+    expect(result).toMatchObject({outcome:'confirmed',sourceTokenOutflowRaw:'10000000',destinationArrival:'not-certified'});
+    expect(f.seen.slice(before).some(({call})=>['eth_getTransactionByHash','eth_getBalance'].includes(call.method))).toBe(false);
+    expect(f.seen.some(({call})=>call.method==='eth_getStorageAt'&&call.params[1]===policy.sourceSwap.usdc.implementationSlot)).toBe(false);
+    expect(f.state.receipt!.logs).toHaveLength(3); // mUSD Transfer, LiFiStarted, native Deposited only.
+    expect(f.review.transaction.value).toBe('0x0');
+  });
+  it.each(['minimum','bridge-asset','deposit-missing','deposit-duplicate','deposit-request','deposit-token','deposit-receiver','deposit-amount','deposit-address','zero-token-transfer','owner-transfer','depository-code','facet-code','used-id']as const)(
+    'keeps a native bridge unresolved for mismatched %s evidence',async fault=>{
+      const f=await fixture('fund','native');
+      if(fault==='minimum')f.bridge.minAmount=BigInt(f.review.sourceSwap!.minimumOutRaw)-1n;
+      if(fault==='bridge-asset')f.bridge.sendingAssetId=policy.sourceSwap.contracts.usdc.address;
+      let logs=f.fundLogs();
+      if(fault.startsWith('deposit-')&&fault!=='deposit-missing'&&fault!=='deposit-duplicate'){
+        const values={id:f.review.bridge.requestId,token:zeroAddress as Address,receiver:f.review.bridge.depositoryReceiver,amount:f.bridge.minAmount as bigint};
+        if(fault==='deposit-request')values.id=TX;
+        if(fault==='deposit-token')values.token='0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
+        if(fault==='deposit-receiver')values.receiver=OTHER;
+        if(fault==='deposit-amount')values.amount--;
+        logs[2]=f.log('Deposited',fault==='deposit-address'?OTHER:policy.freshChecks.contracts.depository.address as Address,values,2);
+      }
+      if(fault==='deposit-missing')logs=logs.slice(0,2);
+      if(fault==='deposit-duplicate')logs.push({...f.deposited(),logIndex:toHex(3)});
+      if(fault==='zero-token-transfer')logs[2]=f.log('Transfer',zeroAddress,{from:f.review.transaction.to,to:f.review.bridge.depositoryReceiver,value:f.bridge.minAmount},2);
+      if(fault==='owner-transfer')logs[0]=f.log('Transfer',f.review.input.token,{from:f.review.owner,to:f.review.transaction.to,value:9999999n},0);
+      f.state.receipt!.logs=logs;
+      if(fault==='used-id')f.state.used=false;
+      if(fault==='depository-code'||fault==='facet-code'){
+        const target=fault==='facet-code'?policy.contracts.facet.address:policy.freshChecks.contracts.depository.address;
+        f.state.mutate=(call,_url,value)=>call.method==='eth_getCode'&&String(call.params[0]).toLowerCase()===target.toLowerCase()?'0x6000':value;
+      }
+      expect(await resolveGnosisFundingReceipt(f.input,f.dependencies)).toBeNull();
+    });
+  it('rechecks canonical native receipt identity after the deposit runtime read and keeps unfinalized evidence unresolved',async()=>{
+    const f=await fixture('fund','native'),height=f.state.finalizedNumber;f.state.finalizedNumber--;
+    expect(await resolveGnosisFundingReceipt(f.input,f.dependencies)).toBeNull();
+    f.state.finalizedNumber=height;let checkedDeposit=false;
+    f.state.mutate=(call,_url,value)=>{
+      if(call.method==='eth_getCode'&&String(call.params[0]).toLowerCase()===policy.freshChecks.contracts.depository.address.toLowerCase())checkedDeposit=true;
+      return checkedDeposit&&call.method==='eth_getBlockByNumber'?{...(value as object),hash:'0x'+'77'.repeat(32)}:value;
+    };
+    await expect(resolveGnosisFundingReceipt(f.input,f.dependencies)).rejects.toThrow('wallet_gnosis_funding_reorganized');
+  });
+  it('resolves only the finite mUSD approval for a native route and preserves the direct-revert nonce fence without adopting a wrapped revert',async()=>{
+    const approval=await fixture('approve','native');
+    expect(approval.review.approval.token).toBe(approval.review.input.token);
+    expect(await resolveGnosisFundingReceipt(approval.input,approval.dependencies)).toMatchObject({outcome:'confirmed',sourceTokenOutflowRaw:'0'});
+    const f=await fixture('fund','native');Object.assign(f.state.receipt!,{status:'0x0',logs:[]});
+    f.state.tx={hash:TX,from:OTHER,to:OTHER,input:'0x1234',value:'0x0',chainId:'0x1',nonce:'0x5',
+      blockHash:f.state.receipt!.blockHash,blockNumber:f.state.receipt!.blockNumber};
+    expect(await resolveGnosisFundingReceipt(f.input,f.dependencies)).toBeNull();
+    Object.assign(f.state.tx,{from:f.review.owner,to:f.review.transaction.to,input:f.review.transaction.data,nonce:'0x4'});
+    expect(await resolveGnosisFundingReceipt(f.input,f.dependencies)).toBeNull();
+    f.state.tx.nonce='0x6';
+    expect(await resolveGnosisFundingReceipt(f.input,f.dependencies)).toMatchObject({outcome:'reverted',sourceTokenOutflowRaw:'0'});
+  });
   it('recognizes a greater actual source-USDC bridge output only with matching canonical token and Depository request events', async () => {
     const f = await swapReceiptFixture(), result = await resolveGnosisFundingReceipt(f.input, f.dependencies);
     expect(result).toMatchObject({ outcome: 'confirmed', sourceTokenOutflowRaw: '10000000', destinationArrival: 'not-certified' });

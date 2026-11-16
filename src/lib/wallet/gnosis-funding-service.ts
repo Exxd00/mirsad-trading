@@ -1,6 +1,6 @@
 import 'server-only';
 import { decodeEventLog, decodeFunctionData, decodeFunctionResult, encodeAbiParameters, encodeFunctionData, getAddress, hashTypedData,
-  keccak256, parseAbi, recoverAddress, stringToHex, toHex, zeroHash, type Abi, type Address, type Hex } from 'viem';
+  keccak256, parseAbi, recoverAddress, stringToHex, toHex, zeroAddress, zeroHash, type Abi, type Address, type Hex } from 'viem';
 import { parseGnosisFundingQuote, type GnosisFundingQuoteReview } from './gnosis-funding-quote';
 import policy from './generated/gnosis-funding-contracts.json';
 import musd from './generated/musd-reference.json';
@@ -51,7 +51,7 @@ type Call = { method: string; params: unknown[] };
 const UNVERIFIED = ['wallet-source-gas-included-eligibility-and-fee', 'destination-minimum-not-enforced-by-source-calldata',
   'destination-gas-arrival', 'prior-owner-prompt-attempt-state'] as const;
 const unverified = (r: GnosisFundingQuoteReview | null) => [...UNVERIFIED,
-  ...(r?.route === 'swap-usdc' ? ['source-swap-inner-executor-source-unverified-runtime-and-net-wrapper-only'] : [])];
+  ...(r?.route === 'swap-usdc' || r?.route === 'swap-eth' ? ['source-swap-inner-executor-source-unverified-runtime-and-net-wrapper-only'] : [])];
 const same = (a: unknown, b: string) => typeof a === 'string' && a.toLowerCase() === b.toLowerCase();
 const canonical = (v: unknown): string => JSON.stringify(v, (_, x) => typeof x === 'bigint' ? x.toString()
   : x !== null && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => a.localeCompare(b))) : x);
@@ -179,9 +179,11 @@ async function historyProof(c: Context, deps: FundingReadDependencies): Promise<
 async function prove(c: Context, review: GnosisFundingQuoteReview, deps: FundingReadDependencies): Promise<GnosisFundingFreshProof> {
   const history = await historyProof(c, deps), pins = trust(), sourceBlock = await head(c, SOURCE, 1, 60);
   const at = toHex(BigInt(sourceBlock.number));
-  const sourceSwap = review.route === 'swap-usdc' ? policy.sourceSwap : null;
+  const sourceUsdc = review.route === 'swap-usdc';
+  const sourceSwap = sourceUsdc || review.route === 'swap-eth' ? policy.sourceSwap : null;
   const contracts = [...Object.values(policy.contracts), pins.gasZipRouter, pins.gasDexCore, pins.weth, pins.whitelistFacet, pins.loupeFacet, pins.layerSwap.depository,
-    ...(sourceSwap ? Object.values(sourceSwap.contracts) : [])];
+    ...(sourceSwap ? (sourceUsdc ? Object.values(sourceSwap.contracts)
+      : [sourceSwap.contracts.router, sourceSwap.contracts.safeExecutor, sourceSwap.contracts.executor]) : [])];
   const code = await pair(c, SOURCE, contracts.map(p => ({ method: 'eth_getCode', params: [p.address, at] })));
   if (code.some((v, i) => keccak256(hex(v)) !== contracts[i].runtimeHash.toLowerCase())) return fail('wallet_gnosis_funding_contract_changed');
   const [bridge, , layer] = decodeFunctionData({ abi: policy.abi.facet as Abi, data: review.transaction.data }).args as unknown as [Record<string, unknown>, unknown, Record<string, unknown>];
@@ -226,12 +228,15 @@ async function prove(c: Context, review: GnosisFundingQuoteReview, deps: Funding
   const swapChecks = sourceSwap ? await pair(c, SOURCE, [
     call(sourceSwap.contracts.router.address, 'safeExecutor', sourceBlock),
     call(review.transaction.to, 'isContractSelectorWhitelisted', sourceBlock, [sourceSwap.contracts.router.address, sourceSwap.selector]),
-    { method: 'eth_getStorageAt', params: [sourceSwap.contracts.usdc.address, sourceSwap.usdc.implementationSlot, at] },
-    call(sourceSwap.contracts.usdc.address, 'decimals', sourceBlock), call(sourceSwap.contracts.usdc.address, 'paused', sourceBlock),
+    ...(sourceUsdc ? [
+      { method: 'eth_getStorageAt', params: [sourceSwap.contracts.usdc.address, sourceSwap.usdc.implementationSlot, at] },
+      call(sourceSwap.contracts.usdc.address, 'decimals', sourceBlock), call(sourceSwap.contracts.usdc.address, 'paused', sourceBlock),
+    ] : []),
   ]) : [];
   if (sourceSwap && (!same(decode(swapChecks[0], 'safeExecutor'), sourceSwap.contracts.safeExecutor.address)
-    || decode(swapChecks[1], 'isContractSelectorWhitelisted') !== true || !same(facet(swapChecks[2]), sourceSwap.contracts.usdcImplementation.address)
-    || decode(swapChecks[3], 'decimals') !== 6 || decode(swapChecks[4], 'paused') !== false)) return fail('wallet_gnosis_funding_mutable_state_changed');
+    || decode(swapChecks[1], 'isContractSelectorWhitelisted') !== true
+    || sourceUsdc && (!same(facet(swapChecks[2]), sourceSwap.contracts.usdcImplementation.address)
+      || decode(swapChecks[3], 'decimals') !== 6 || decode(swapChecks[4], 'paused') !== false))) return fail('wallet_gnosis_funding_mutable_state_changed');
   // Read the short-lived destination inventory after the longer source checks.
   const destinationBlock = await head(c, DESTINATION, 100, 15), dst = toHex(BigInt(destinationBlock.number));
   const d = await pair(c, DESTINATION, [call(review.destination.token, 'decimals', destinationBlock), call(review.destination.token, 'balanceOf', destinationBlock, [review.owner]),
@@ -319,7 +324,9 @@ const EVENTS = parseAbi(['event Approval(address indexed owner,address indexed s
 export async function resolveGnosisFundingReceipt(input: FundingResolutionInput, deps: FundingReadDependencies = {}): Promise<GnosisFundingResolution | null> {
   const c = context(deps), owner = ownerAddress(input.owner), r = input.review;
   try {
-    if (owner !== r.owner || input.freshProof.owner !== owner || input.freshProof.reviewDigest !== r.digest || (r.route === 'swap-usdc' && !r.sourceSwap)
+    const nativeSwap = r.route === 'swap-eth', sourceUsdc = r.route === 'swap-usdc';
+    if (owner !== r.owner || input.freshProof.owner !== owner || input.freshProof.reviewDigest !== r.digest || ((sourceUsdc || nativeSwap) && !r.sourceSwap)
+      || nativeSwap && (!same(r.sourceSwap?.outputToken, zeroAddress) || !same(r.bridge.token, zeroAddress) || r.bridge.assetSymbol !== 'ETH')
       || !/^0x[0-9a-f]{64}$/.test(input.transactionHash)) return fail('wallet_gnosis_funding_attempt_invalid');
     const [chain] = await pair(c, SOURCE, [{ method: 'eth_chainId', params: [] }]);
     if (uint(chain) !== 1n) return fail('wallet_gnosis_funding_chain_mismatch');
@@ -361,7 +368,8 @@ export async function resolveGnosisFundingReceipt(input: FundingResolutionInput,
       return await checkedResult('0', 'reverted', tx);
     }
     const approvals: bigint[] = [], outgoing: { to: Address; value: bigint }[] = [], bridges: Record<string, unknown>[] = [];
-    const swap = r.route === 'swap-usdc' ? r.sourceSwap : null;
+    const swap = sourceUsdc || nativeSwap ? r.sourceSwap : null;
+    const bridgeAsset = nativeSwap ? zeroAddress : policy.sourceSwap.contracts.usdc.address;
     const sourceTransfers: { to: Address; value: bigint }[] = [], deposits: Record<string, unknown>[] = [];
     const logIndexes = new Set<string>();
     for (const rawLog of receipt.logs) {
@@ -372,7 +380,7 @@ export async function resolveGnosisFundingReceipt(input: FundingResolutionInput,
       logIndexes.add(index);
       const topics = log.topics.map(t => hex(t, 32)), data = hex(log.data); if (data.length > 65538) return fail('wallet_gnosis_funding_receipt_invalid');
       if (!same(log.address, r.input.token) && !same(log.address, r.transaction.to)
-        && !(swap && (same(log.address, policy.sourceSwap.contracts.usdc.address) || same(log.address, policy.freshChecks.contracts.depository.address)))) continue;
+        && !(swap && ((sourceUsdc && same(log.address, policy.sourceSwap.contracts.usdc.address)) || same(log.address, policy.freshChecks.contracts.depository.address)))) continue;
       let decoded: ReturnType<typeof decodeEventLog>;
       try { decoded = decodeEventLog({ abi: EVENTS, topics: topics as [Hex, ...Hex[]], data, strict: true }); }
       catch { continue; }
@@ -380,7 +388,7 @@ export async function resolveGnosisFundingReceipt(input: FundingResolutionInput,
       if (same(log.address, r.input.token) && decoded.eventName === 'Approval' && same(a.owner, owner) && same(a.spender, r.approval.spender)) approvals.push(a.value as bigint);
       if (same(log.address, r.input.token) && decoded.eventName === 'Transfer' && same(a.from, owner)) outgoing.push({ to: a.to as Address, value: a.value as bigint });
       if (same(log.address, r.transaction.to) && decoded.eventName === 'LiFiTransferStarted') bridges.push(a.bridgeData as Record<string, unknown>);
-      if (swap && same(log.address, policy.sourceSwap.contracts.usdc.address) && decoded.eventName === 'Transfer'
+      if (sourceUsdc && same(log.address, policy.sourceSwap.contracts.usdc.address) && decoded.eventName === 'Transfer'
         && same(a.from, r.transaction.to)) sourceTransfers.push({ to: a.to as Address, value: a.value as bigint });
       if (swap && same(log.address, policy.freshChecks.contracts.depository.address) && decoded.eventName === 'Deposited') deposits.push(a);
     }
@@ -397,28 +405,38 @@ export async function resolveGnosisFundingReceipt(input: FundingResolutionInput,
       const args = decodeFunctionData({ abi: policy.abi.facet as Abi, data: r.transaction.data }).args!;
       const expectedBridge = args[0] as unknown as Record<string, unknown>;
       // The source DEX is bounded by its signed minimum. LayerSwap's verified
-      // _depositAndSwap replaces that minimum with the actual positive USDC
+      // _depositAndSwap replaces that minimum with the actual positive asset
       // balance delta before emitting the bridge event. All other identities
       // remain exact; old records without route retain the direct-mUSD rule.
       const actualBridge = bridges[0];
       const matches = swap && actualBridge && typeof actualBridge.minAmount === 'bigint'
-        ? actualBridge.minAmount >= BigInt(swap.minimumOutRaw) && same(actualBridge.sendingAssetId, policy.sourceSwap.contracts.usdc.address)
+        ? actualBridge.minAmount >= BigInt(swap.minimumOutRaw) && same(actualBridge.sendingAssetId, bridgeAsset)
           && canonical({ ...actualBridge, minAmount: expectedBridge.minAmount }) === canonical(expectedBridge)
         : canonical(actualBridge) === canonical(expectedBridge);
       if (bridges.length !== 1 || !matches
         || outgoing.filter(t => same(t.to, r.transaction.to) && t.value === BigInt(r.input.amountRaw)).length !== 1) return null;
       if (swap) {
         const amount = actualBridge.minAmount as bigint, p = policy.sourceSwap;
-        if (sourceTransfers.filter(t => same(t.to, r.bridge.depositoryReceiver) && t.value === amount).length !== 1
-          || deposits.length !== 1 || !same(deposits[0].id, r.bridge.requestId) || !same(deposits[0].token, p.contracts.usdc.address)
+        if ((sourceUsdc && sourceTransfers.filter(t => same(t.to, r.bridge.depositoryReceiver) && t.value === amount).length !== 1)
+          || deposits.length !== 1 || !same(deposits[0].id, r.bridge.requestId) || !same(deposits[0].token, bridgeAsset)
           || !same(deposits[0].receiver, r.bridge.depositoryReceiver) || deposits[0].amount !== amount) return null;
-        const [proxyCode, implementationSlot, implementationCode] = await pair(c, SOURCE, [
-          { method: 'eth_getCode', params: [p.contracts.usdc.address, at] },
-          { method: 'eth_getStorageAt', params: [p.contracts.usdc.address, p.usdc.implementationSlot, at] },
-          { method: 'eth_getCode', params: [p.contracts.usdcImplementation.address, at] },
-        ]);
-        if (keccak256(hex(proxyCode)) !== p.contracts.usdc.runtimeHash || !same('0x' + hex(implementationSlot, 32).slice(-40), p.contracts.usdcImplementation.address)
-          || keccak256(hex(implementationCode)) !== p.contracts.usdcImplementation.runtimeHash) return null;
+        if (nativeSwap) {
+          // The verified native Deposited event is emitted before forwarding
+          // exactly msg.value; a failed forward reverts the whole receipt.
+          // Native ETH has no ERC20 Transfer log or token implementation.
+          const pins = [policy.contracts.facet, policy.freshChecks.contracts.depository];
+          const codes = await pair(c, SOURCE, pins.map(p => ({ method: 'eth_getCode', params: [p.address, at] })));
+          if (codes.some((code, i) => keccak256(hex(code)) !== pins[i].runtimeHash)) return null;
+        }
+        if (sourceUsdc) {
+          const [proxyCode, implementationSlot, implementationCode] = await pair(c, SOURCE, [
+            { method: 'eth_getCode', params: [p.contracts.usdc.address, at] },
+            { method: 'eth_getStorageAt', params: [p.contracts.usdc.address, p.usdc.implementationSlot, at] },
+            { method: 'eth_getCode', params: [p.contracts.usdcImplementation.address, at] },
+          ]);
+          if (keccak256(hex(proxyCode)) !== p.contracts.usdc.runtimeHash || !same('0x' + hex(implementationSlot, 32).slice(-40), p.contracts.usdcImplementation.address)
+            || keccak256(hex(implementationCode)) !== p.contracts.usdcImplementation.runtimeHash) return null;
+        }
       }
       const [used] = await pair(c, SOURCE, [{ method: 'eth_getStorageAt', params: [r.transaction.to, fundingRequestUsedSlot(r.bridge.requestId), at] }]);
       if (BigInt(hex(used, 32)) !== 1n) return null;

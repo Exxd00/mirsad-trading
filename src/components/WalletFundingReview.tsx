@@ -4,20 +4,33 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { isUnsentFundingActionError, type Snapshot } from '@/lib/wallet/metamask';
 import type { GnosisFundingAudit } from '@/lib/wallet/gnosis-funding-service';
 import type { GnosisFundingAttemptView, GnosisFundingFence, GnosisFundingPhase, GnosisFundingReservation } from '@/lib/wallet/gnosis-funding-attempts';
-import { parseGnosisFundingAuditUI, parseGnosisFundingReservationUI, parseGnosisFundingAttemptResultUI } from '@/lib/wallet/gnosis-funding-ui';
+import type { GnosisFundingQuoteReview } from '@/lib/wallet/gnosis-funding-quote';
+import { formatGnosisFundingAmount, parseGnosisFundingAuditUI, parseGnosisFundingReservationUI, parseGnosisFundingAttemptResultUI } from '@/lib/wallet/gnosis-funding-ui';
 import styles from '@/app/automation/page.module.css';
 
 export type FundingAttemptResult = { attempt: GnosisFundingAttemptView | null; fence: GnosisFundingFence };
 type Audit = GnosisFundingAudit & { fence: GnosisFundingFence };
 export type FundingOwnerAction = (reservation: GnosisFundingReservation, action: GnosisFundingPhase) => Promise<{ kind: 'transaction'; value: `0x${string}` }>;
 const endpoint = '/api/wallet/strategy/funding';
-const units = (raw: string) => { const p = raw.padStart(7, '0'), f = p.slice(-6).replace(/0+$/, ''); return p.slice(0, -6) + (f ? '.' + f : ''); };
+const units = (raw: string) => formatGnosisFundingAmount(raw, 'mUSD');
 const stamp = (n: number) => new Date(n * 1000).toISOString();
 const phases = { approve: 'الموافقة المحدودة', fund: 'تحويل التمويل' };
 const statuses = { reserved: 'حُفظ الطلب؛ قد تكون نافذة المحفظة مفتوحة', 'hash-recorded': 'حُفظ معرّف المعاملة؛ بانتظار تحقق السلسلة',
   unknown: 'نتيجة طلب المحفظة غير محسومة؛ إعادة الإرسال محجوبة', 'owner-rejected': 'رفض صاحب المحفظة الطلب',
   'owner-cancelled-unsent': 'أُغلق الطلب قبل إرساله إلى المحفظة بعد التحقق من حالة المصدر',
   confirmed: 'تأكدت عملية المصدر', reverted: 'أثبتت السلسلة فشل العملية' };
+
+export function FundingRouteAmounts({ review }: { review: GnosisFundingQuoteReview }) {
+  const symbol = review.route === 'swap-eth' ? 'ETH' : 'USDC';
+  return <>
+    {review.sourceSwap && <p>يتضمن المسار تحويلًا على Ethereum من <bdi>{units(review.sourceSwap.amountInRaw)} mUSD</bdi> إلى {symbol}، بحد أدنى <bdi>{formatGnosisFundingAmount(review.sourceSwap.minimumOutRaw, symbol)} {symbol}</bdi> قبل الجسر. تحقّقنا من أن عقد التحويل يفرض هذا الحد على الناتج؛ لم يُتحقق من مصدر المنفّذ الداخلي للمبادلة.</p>}
+    {review.route === 'swap-eth' && <p>مبلغ ETH هنا وسيط للجسر. تكلفة شبكة Ethereum منفصلة، وتُراجع في MetaMask؛ لم يثبت التطبيق عملة دفعها أو قيمتها الفعلية.</p>}
+    <details><summary>رسوم العرض والعقود</summary><ul>{review.quotedFees.map((f, i) => <li key={`${f.name}:${i}`}>{f.name}: <bdi>{formatGnosisFundingAmount(f.amountRaw, f.assetSymbol)} {f.assetSymbol}</bdi>، مدرجة في العرض.</li>)}</ul>
+      <p>مستلم الموافقة المحدودة: <bdi dir="ltr">{review.approval.spender}</bdi>؛ الحد <bdi>{units(review.approval.amountRaw)} mUSD</bdi>.</p>
+      <p>تظل الموافقة حتى استهلاكها أو إلغائها؛ مهلة المراجعة تخص العرض.</p>
+      <p>بصمة المراجعة: <bdi dir="ltr">{review.digest}</bdi>.</p></details>
+  </>;
+}
 
 export function WalletFundingReview({ wallet, csrfToken, ownerAction, syncResult, disabled = false }: {
   wallet: Snapshot | null; csrfToken: string | null; ownerAction: FundingOwnerAction;
@@ -180,11 +193,7 @@ export function WalletFundingReview({ wallet, csrfToken, ownerAction, syncResult
         </dl>
         <p>مبالغ الجسر تقديرية؛ يُتحقق من الوصول على Gnosis. الرسوم المدرجة في العرض محسوبة ضمن الناتج المتوقع.</p>
         <p>تعرض MetaMask تكلفة شبكة Ethereum وعملة دفعها. عند توفر <a href="https://support.metamask.io/manage-crypto/transactions/metamask-gas-station/" target="_blank" rel="noreferrer">Gas Included</a> يمكن اختيار mUSD؛ لم يثبت التطبيق إتاحة الخدمة أو رسومها لهذا الطلب.</p>
-        {review.sourceSwap && <p>يتضمن المسار تحويلًا على Ethereum من <bdi>{units(review.sourceSwap.amountInRaw)} mUSD</bdi> إلى USDC، بحد أدنى <bdi>{units(review.sourceSwap.minimumOutRaw)} USDC</bdi> قبل الجسر. تحقّقنا من أن عقد التحويل يفرض هذا الحد على الناتج؛ لم يُتحقق من مصدر المنفّذ الداخلي للمبادلة.</p>}
-        <details><summary>رسوم العرض والعقود</summary><ul>{review.quotedFees.map((f, i) => <li key={`${f.name}:${i}`}>{f.name}: <bdi>{units(f.amountRaw)} {f.assetSymbol}</bdi>، مدرجة في العرض.</li>)}</ul>
-          <p>مستلم الموافقة المحدودة: <bdi dir="ltr">{review.approval.spender}</bdi>؛ الحد <bdi>{units(review.approval.amountRaw)} mUSD</bdi>.</p>
-          <p>تظل الموافقة حتى استهلاكها أو إلغائها؛ مهلة المراجعة تخص العرض.</p>
-          <p>بصمة المراجعة: <bdi dir="ltr">{review.digest}</bdi>.</p></details>
+        <FundingRouteAmounts review={review} />
         <label><input type="checkbox" checked={reviewed} disabled={pending || !fresh || !audit.ownerReviewAllowed || !!fence?.blocked}
           onChange={e => setReviewed(e.target.checked)} /> راجعت إجمالي المبلغ والرسوم والشبكتين وحساب الوصول وحد الموافقة.</label>
         <div className={styles.controls}>
