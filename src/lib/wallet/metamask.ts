@@ -118,7 +118,10 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
     }
     queued = false; clearTimer(); lastReadAt = Date.now();
     const ticket = ++revision;
-    send({ status: 'pending' });
+    // A passive read is not a disconnect. Keep the last verified identity while
+    // refreshing so owner reviews are not unmounted on focus/pageshow. Explicit
+    // provider events and read failures still clear it immediately below.
+    if (!requested || !snapshot) send({ status: 'pending' });
     const pending = (async () => {
       let readTimer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<never>((_, reject) => {
@@ -130,6 +133,10 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
         if (!alive || current !== provider || ticket !== revision) return;
         if (!wallet || (snapshot && (snapshot.address.toLowerCase() !== wallet.address.toLowerCase()
           || snapshot.chainId !== wallet.chainId))) session++;
+        // Address casing carries no new identity; avoid remounting the owner
+        // flow when the same provider returns a different checksum format.
+        if (wallet && snapshot && wallet.address.toLowerCase() === snapshot.address.toLowerCase()
+          && wallet.chainId === snapshot.chainId) wallet.address = snapshot.address;
         requested = wallet !== null; snapshot = wallet ?? undefined;
         send(wallet ? { status: 'connected', wallet } : { status: 'ready' });
       } catch {
