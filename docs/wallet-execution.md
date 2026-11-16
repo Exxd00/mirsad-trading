@@ -456,7 +456,12 @@ handled separately. No passive effect connects, switches or sends a transaction.
 
 Finalized source receipts and exact token/protocol events resolve the stored
 attempt, including relayed wallet transactions. Receipt status alone is not
-success. A confirmed source transfer does not certify bridge arrival; extra
+success. A receipt must be mined strictly after the review's already closed
+canonical source anchor. A reverted direct owner transaction must also match
+the exact call and have a valid nonce at least as high as the reserved pending
+nonce; missing, malformed or older nonce evidence leaves the attempt fenced.
+The wallet's nonce is not forced. A reverted wrapper without matching action
+evidence remains unresolved. A confirmed source transfer does not certify bridge arrival; extra
 owner token outflow is recorded without inventing gas attribution. Successful
 funding closes this one-off path rather than permitting another transfer.
 Trading still requires current feasibility, bounded authority, cancellation

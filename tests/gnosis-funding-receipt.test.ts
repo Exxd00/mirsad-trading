@@ -12,7 +12,9 @@ const EVENTS = parseAbi(['event Approval(address indexed owner,address indexed s
   'event Deposited(bytes32 indexed id,address indexed token,address indexed receiver,uint256 amount)',
   'event LiFiTransferStarted((bytes32 transactionId,string bridge,string integrator,address referrer,address sendingAssetId,address receiver,uint256 minAmount,uint256 destinationChainId,bool hasSourceSwaps,bool hasDestinationCall) bridgeData)']);
 async function fixture(phase: 'approve' | 'fund') {
-  const f = fundingReads(), { audit } = await prepareGnosisFundingReview(FUNDING_OWNER, f.dependencies), review = audit.review!, freshProof = audit.freshProof!;
+  const f = fundingReads();
+  f.state.mutate=(call,_url,value)=>call.method==='eth_getTransactionCount'?'0x5':value;
+  const { audit } = await prepareGnosisFundingReview(FUNDING_OWNER, f.dependencies), review = audit.review!, freshProof = audit.freshProof!;
   expect(audit.status).toBe('reviewable'); f.setNow(FUNDING_NOW + 10); f.state.finalizedNumber++;
   const block = f.header(f.state.finalizedNumber), args = decodeFunctionData({ abi: policy.abi.facet as Abi, data: review.transaction.data }).args!;
   const bridge = structuredClone(args[0]) as Record<string, unknown>;
@@ -93,6 +95,7 @@ describe('actual two-reader canonical receipt resolver and public DTO', () => {
     const parsed = parseGnosisFundingAttemptResultUI({ attempt, fence: { blocked: phase === 'fund', active: null, fundCompleted: phase === 'fund',
       lastApproval: phase === 'approve' ? attempt : null } }, FUNDING_OWNER);
     expect(parsed).not.toBeNull();
+    expect(f.seen.some(({call})=>call.method==='eth_getTransactionByHash')).toBe(false); // No outer relayer nonce assumption.
   });
   it.each(['owner', 'spender', 'token', 'amount', 'extra-approval', 'consumed-approval'] as const)('keeps %s approval evidence uncertain', async fault => {
     const f = await fixture('approve');
@@ -132,7 +135,7 @@ describe('actual two-reader canonical receipt resolver and public DTO', () => {
   });
   it('never treats an unrelated reverted wrapper as proof of the selected failed action; exact direct reverts are rechecked', async () => {
     const f = await fixture('approve'); f.state.receipt!.status = '0x0'; f.state.receipt!.logs = [];
-    f.state.tx = { hash: TX, from: OTHER, to: OTHER, input: '0x1234', value: '0x0', chainId: '0x1',
+    f.state.tx = { hash: TX, from: OTHER, to: OTHER, input: '0x1234', value: '0x0', chainId: '0x1',nonce:'0x5',
       blockHash: f.state.receipt!.blockHash, blockNumber: f.state.receipt!.blockNumber };
     expect(await resolveGnosisFundingReceipt(f.input, f.dependencies)).toBeNull();
     f.state.tx = { ...f.state.tx, from: f.review.owner, to: f.review.approval.token, input: f.review.approval.data };
@@ -143,6 +146,40 @@ describe('actual two-reader canonical receipt resolver and public DTO', () => {
       return late && call.method === 'eth_getBlockByNumber' ? { ...(value as object), hash: ('0x' + '77'.repeat(32)) } : value;
     };
     await expect(resolveGnosisFundingReceipt(f.input, f.dependencies)).rejects.toThrow('wallet_gnosis_funding_reorganized');
+  });
+  it('rejects an identical direct revert already inside the closed review anchor block',async()=>{
+    const f=await fixture('approve'),anchor=f.freshProof.sourceBlock;
+    Object.assign(f.state.receipt!,{status:'0x0',logs:[],blockNumber:toHex(BigInt(anchor.number)),blockHash:anchor.hash});
+    f.state.tx={hash:TX,from:f.review.owner,to:f.review.approval.token,input:f.review.approval.data,value:'0x0',chainId:'0x1',nonce:'0x5',
+      blockHash:anchor.hash,blockNumber:toHex(BigInt(anchor.number))};
+    await expect(resolveGnosisFundingReceipt(f.input,f.dependencies)).rejects.toThrow('wallet_gnosis_funding_receipt_invalid');
+  });
+  it.each(['approve','fund'] as const)('does not adopt a matching wrapped %s success from the already closed review anchor',async phase=>{
+    const f=await fixture(phase),anchor=f.freshProof.sourceBlock,number=toHex(BigInt(anchor.number));
+    Object.assign(f.state.receipt!,{blockNumber:number,blockHash:anchor.hash});
+    for(const log of f.state.receipt!.logs as Record<string,unknown>[])Object.assign(log,{blockNumber:number,blockHash:anchor.hash});
+    await expect(resolveGnosisFundingReceipt(f.input,f.dependencies)).rejects.toThrow('wallet_gnosis_funding_receipt_invalid');
+  });
+  it.each(['0x4',undefined,'0x00','5','0xzz',5])('keeps a later direct revert unresolved for old/missing/malformed nonce %s',async nonce=>{
+    const f=await fixture('approve');Object.assign(f.state.receipt!,{status:'0x0',logs:[]});
+    f.state.tx={hash:TX,from:f.review.owner,to:f.review.approval.token,input:f.review.approval.data,value:'0x0',chainId:'0x1',nonce,
+      blockHash:f.state.receipt!.blockHash,blockNumber:f.state.receipt!.blockNumber};
+    expect(await resolveGnosisFundingReceipt(f.input,f.dependencies)).toBeNull();
+  });
+  it.each(['0x5','0x6'])('accepts a finalized exact direct revert at the reserved nonce or a later owner nonce %s',async nonce=>{
+    const f=await fixture('fund');Object.assign(f.state.receipt!,{status:'0x0',logs:[]});
+    f.state.tx={hash:TX,from:f.review.owner,to:f.review.transaction.to,input:f.review.transaction.data,value:'0x0',chainId:'0x1',nonce,
+      blockHash:f.state.receipt!.blockHash,blockNumber:f.state.receipt!.blockNumber};
+    expect(await resolveGnosisFundingReceipt(f.input,f.dependencies)).toMatchObject({outcome:'reverted',sourceTokenOutflowRaw:'0'});
+  });
+  it.each(['missing','fractional','pending-before-confirmed'] as const)('does not release a direct revert with %s reserved nonce metadata',async fault=>{
+    const f=await fixture('approve');Object.assign(f.state.receipt!,{status:'0x0',logs:[]});
+    f.state.tx={hash:TX,from:f.review.owner,to:f.review.approval.token,input:f.review.approval.data,value:'0x0',chainId:'0x1',nonce:'0x5',
+      blockHash:f.state.receipt!.blockHash,blockNumber:f.state.receipt!.blockNumber};
+    if(fault==='missing')delete (f.freshProof as Partial<typeof f.freshProof>).sourcePendingNonce;
+    if(fault==='fractional')f.freshProof.sourcePendingNonce=5.5;
+    if(fault==='pending-before-confirmed')f.freshProof.sourcePendingNonce=4;
+    expect(await resolveGnosisFundingReceipt(f.input,f.dependencies)).toBeNull();
   });
   it('requires chain1 and rejects duplicated or noncanonical receipt log identities', async () => {
     const f = await fixture('fund'); f.state.receipt!.logs = [f.transfer(), f.transfer(), f.started()];

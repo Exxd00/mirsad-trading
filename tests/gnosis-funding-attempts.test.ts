@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { closeDatabase, query, transaction } from '../src/lib/db';
 import { createSqlGnosisEurStateStore } from '../src/lib/wallet/gnosis-eur-state-store';
 import { GNOSIS_EMA_CACHE_PREFIX } from '../src/lib/wallet/gnosis-market';
-import { prepareGnosisFundingReview, proveGnosisFundingNoSourceEffect, verifyGnosisFundingReview, type GnosisFundingPrepared } from '../src/lib/wallet/gnosis-funding-service';
+import { prepareGnosisFundingReview, proveGnosisFundingNoSourceEffect, resolveGnosisFundingReceipt,verifyGnosisFundingReview, type GnosisFundingPrepared } from '../src/lib/wallet/gnosis-funding-service';
 import { attestGnosisFundingRejection, cancelGnosisFundingUnsent, markGnosisFundingUnknown, readGnosisFundingFence, recordGnosisFundingHash,
   reserveGnosisFundingAttempt, resolveGnosisFundingAttempt, saveGnosisFundingArtifact, type GnosisFundingResolution } from '../src/lib/wallet/gnosis-funding-attempts';
 import { fundingReads, FUNDING_OWNER, FUNDING_NOW } from './helpers/gnosis-funding';
@@ -15,8 +15,9 @@ const fenceKey = GNOSIS_EMA_CACHE_PREFIX+'quarantine';
 beforeEach(async () => { await closeDatabase(); vi.stubEnv('NODE_ENV', 'test'); vi.stubEnv('VERCEL', ''); vi.stubEnv('DATABASE_URL', '');
   vi.stubEnv('LOCAL_DATABASE_PATH', 'memory://'); vi.stubEnv('MIRSAD_RETIRE_LEGACY_CONNECTION', undefined); });
 afterEach(async () => { await closeDatabase(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
-async function fixture() {
+async function fixture(nonce=0) {
   const f = fundingReads(), store = createSqlGnosisEurStateStore({ clock: f.clock });
+  if(nonce)f.state.mutate=(call,_url,value)=>call.method==='eth_getTransactionCount'?'0x'+nonce.toString(16):value;
   for (const chunk of f.state.history) await store.save(chunk);
   const dependencies = { ...f.dependencies, historyStore: store };
   let prepared: GnosisFundingPrepared = await prepareGnosisFundingReview(FUNDING_OWNER, dependencies);
@@ -29,6 +30,20 @@ async function fixture() {
 }
 const attempts = () => query<{ key: string; value: { status: string } }>("SELECT key,value FROM app_settings WHERE key LIKE 'wallet:gnosis:owner-funding:v1:%:attempt:%'");
 describe('durable owner prompt fence with real PGlite and actual read-only verification', () => {
+  it('keeps an actual SQL attempt fenced when the real receipt resolver rejects a wrong hash or an old direct nonce',async()=>{
+    const f=await fixture(5),r=await reserveGnosisFundingAttempt(f.input(),f.deps);await recordGnosisFundingHash(FUNDING_OWNER,r.attempt.id,hash);
+    f.setNow(FUNDING_NOW+10);f.state.finalizedNumber++;const block=f.header(f.state.finalizedNumber);
+    f.state.receipt={transactionHash:otherHash,blockNumber:block.number,blockHash:block.hash,status:'0x0',logs:[]};
+    f.state.tx={hash,from:r.review.owner,to:r.review.approval.token,input:r.review.approval.data,value:'0x0',chainId:'0x1',nonce:'0x4',
+      blockHash:block.hash,blockNumber:block.number};
+    const deps={resolve:(input:Parameters<typeof resolveGnosisFundingReceipt>[0])=>resolveGnosisFundingReceipt(input,f.dependencies)};
+    await expect(resolveGnosisFundingAttempt(FUNDING_OWNER,r.attempt.id,deps)).rejects.toThrow('wallet_gnosis_funding_receipt_invalid');
+    expect(await readGnosisFundingFence(FUNDING_OWNER)).toMatchObject({blocked:true,active:{id:r.attempt.id,transactionHash:hash}});
+    f.state.receipt.transactionHash=hash;
+    expect(await resolveGnosisFundingAttempt(FUNDING_OWNER,r.attempt.id,deps)).toMatchObject({attempt:{status:'hash-recorded'},fence:{blocked:true}});
+    f.state.tx.nonce='0x6';
+    expect(await resolveGnosisFundingAttempt(FUNDING_OWNER,r.attempt.id,deps)).toMatchObject({attempt:{status:'reverted'},fence:{blocked:false}});
+  });
   it('serializes concurrent reserves, persists exact immutable review/bytes/baselines and never mutates financial state', async () => {
     const f = await fixture(), history = (await query("SELECT key,value,updated_at FROM app_settings WHERE key LIKE 'wallet:gnosis:eur-state:%' ORDER BY key")).rows;
     const results = await Promise.allSettled([reserveGnosisFundingAttempt(f.input(), f.deps), reserveGnosisFundingAttempt(f.input(), f.deps)]);
