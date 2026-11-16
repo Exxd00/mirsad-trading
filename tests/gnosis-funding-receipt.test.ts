@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { decodeFunctionData, encodeAbiParameters, encodeEventTopics, getAbiItem, keccak256, parseAbi, stringToHex, toHex, type Abi, type AbiEvent, type Address, type Hex } from 'viem';
-import { prepareGnosisFundingReview, resolveGnosisFundingReceipt } from '../src/lib/wallet/gnosis-funding-service';
+import { verifyGnosisFundingReview, resolveGnosisFundingReceipt } from '../src/lib/wallet/gnosis-funding-service';
 import type { GnosisFundingQuoteReview } from '../src/lib/wallet/gnosis-funding-quote';
 import { parseGnosisFundingAttemptResultUI } from '../src/lib/wallet/gnosis-funding-ui';
-import { fundingReads, FUNDING_OWNER, FUNDING_NOW } from './helpers/gnosis-funding';
+import { fundingReads,FUNDING_OWNER,LEGACY_FUNDING_NOW,LEGACY_FUNDING_QUOTE } from './helpers/gnosis-funding';
 import policy from '../src/lib/wallet/generated/gnosis-funding-contracts.json';
 import capturedSwap from './fixtures/lifi-gnosis-swap-funding-quote.json';
 const TX = ('0x' + '11'.repeat(32)) as Hex, OTHER = '0x1111111111111111111111111111111111111111' as Address;
@@ -12,10 +12,12 @@ const EVENTS = parseAbi(['event Approval(address indexed owner,address indexed s
   'event Deposited(bytes32 indexed id,address indexed token,address indexed receiver,uint256 amount)',
   'event LiFiTransferStarted((bytes32 transactionId,string bridge,string integrator,address referrer,address sendingAssetId,address receiver,uint256 minAmount,uint256 destinationChainId,bool hasSourceSwaps,bool hasDestinationCall) bridgeData)']);
 async function fixture(phase: 'approve' | 'fund') {
-  const f = fundingReads();
+  // Existing direct-route snapshots remain recoverable after new preparations
+  // require USDC selection. No new direct-route preparation is simulated here.
+  const f = fundingReads({now:LEGACY_FUNDING_NOW});
   f.state.mutate=(call,_url,value)=>call.method==='eth_getTransactionCount'?'0x5':value;
-  const { audit } = await prepareGnosisFundingReview(FUNDING_OWNER, f.dependencies), review = audit.review!, freshProof = audit.freshProof!;
-  expect(audit.status).toBe('reviewable'); f.setNow(FUNDING_NOW + 10); f.state.finalizedNumber++;
+  const {review,freshProof}=await verifyGnosisFundingReview(LEGACY_FUNDING_QUOTE,FUNDING_OWNER,LEGACY_FUNDING_NOW,f.dependencies);
+  f.setNow(LEGACY_FUNDING_NOW+10);f.state.finalizedNumber++;
   const block = f.header(f.state.finalizedNumber), args = decodeFunctionData({ abi: policy.abi.facet as Abi, data: review.transaction.data }).args!;
   const bridge = structuredClone(args[0]) as Record<string, unknown>;
   const log = (name: 'Approval' | 'Transfer' | 'LiFiTransferStarted' | 'Deposited', address: Address, values: Record<string, unknown>, index: number) => {

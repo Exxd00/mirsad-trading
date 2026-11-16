@@ -427,14 +427,33 @@ quote amounts and must not be added a second time. Quote gas estimates are not
 owner-executor receipts. Lower-priced actual unrelated transactions establish
 historical inclusion only, not a future timeliness or cost guarantee.
 
+Read-only CoW quote requests share a production process gate across networks and
+client instances: one request in flight, at most eight queued requests and a
+250-ms gap. Queue time counts against the existing five-second read deadline.
+HTTP 429 records a retry time before releasing the gate, honors a valid
+`Retry-After` and uses an explicit local 300-second cooldown when it is absent
+or malformed. Valid future holds are not shortened; an unrepresentable numeric
+or recognized-date hold uses a terminal, date-safe hold for that process. Waiting
+requests fail instead of being replayed after the hold; there is no automatic
+retry. Order/fill reads and transaction submission/cancellation are outside this
+quote gate. The 15-second evidence limits and bounded quote calculations remain
+unchanged. This coordinates one process, not different Vercel instances or cold
+starts, and the local pacing policy is not a provider availability guarantee.
+
 ### Owner funding review (16 November 2026)
 
 The authenticated funding route proposes one fixed source-chain input of
 10 mUSD on Ethereum for USDC.e on Gnosis. Its 0.05-mUSD GasZip allocation is
 included in that input. Approval is exactly 10 mUSD to the pinned LI.FI Diamond;
 provider gas/nonce fields and arbitrary targets are not forwarded to MetaMask.
-The fixed quote request selects LayerSwap and the reviewed SushiSwap source
-exchange explicitly. For the source-USDC route, the bridge action names the
+The fixed routes request selects LayerSwap and the reviewed SushiSwap source
+exchange explicitly. Among at most three returned routes, the server selects
+only a single-step route with the fixed owner, chains, input, GasZip allocation
+and reviewed USDC bridge asset. One unsigned step-transaction request uses that
+exact step. Its returned identity and full calldata must pass the existing
+parser before any fresh-chain proof or owner reservation. No matching route or
+asset drift fails closed; there is no retry or native-asset fallback.
+For the source-USDC route, the bridge action names the
 quoted source output; its estimate may name only that exact output or the exact
 calldata-enforced source minimum. Other step amounts remain exact. This metadata
 compatibility does not relax router pins or the strict final aggregate slippage
