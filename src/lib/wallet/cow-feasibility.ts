@@ -99,7 +99,10 @@ export async function auditCowFeasibility(ownerInput: string, chainId: number,
     try {
       const input = { owner, receiver: owner, validTo: Math.floor(clock() / 1000) + 300, signingScheme: 'presign' as const };
       const entryGas = gas ? BigInt(gas.quoteRaw.div(2).ceil().toFixed(0)) : 0n;
-      const seedBudget = budget > entryGas ? budget - entryGas : budget;
+      // Keep one quote-token atom as conservative headroom between independent
+      // SELL and exact BUY references. The final budget and cost gates remain strict.
+      const seedBudget = budget - entryGas - 1n;
+      if (seedBudget <= 0n) return { ...value, reason: 'wallet_sample_entry_budget_exceeded' };
       const seed = await api.getQuote({ ...input, sellToken: quoteToken, buyToken: network.contracts.baseToken, kind: 'sell', amount: seedBudget.toString() });
       if (!quoteFresh(seed, clock(), network.chainId)) throw new Error('unverified_quote');
       value.status = 'partial'; value.entryFeeRaw = seed.quotedFeeAmount;

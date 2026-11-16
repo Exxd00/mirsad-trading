@@ -84,4 +84,42 @@ describe('explicit Gnosis setup-only review evidence', () => {
     expect(audit).toMatchObject({ decision: 'blocked', samples: [] }); expect(audit.blockers).toContain('wallet_configured_quote_balance_missing');
     expect(f.api.getQuote).not.toHaveBeenCalled();
   });
+  it.each([1n, 2n])('reserves one raw quote atom without tolerating an independent BUY increase of %s atoms', async increase => {
+    const f = fixture(); f.balances.quote = 9805893n;
+    const native = f.market.nativeGasReference.getMockImplementation()!;
+    // Explicit synthetic FX equality makes the compiled roundtrip gas upper
+    // exactly112 quote atoms, separate from any assertion of a currency peg.
+    f.market.nativeGasReference.mockImplementation(async () => ({ ...await native(), ask: '0.91' }));
+    const original = f.api.getQuote.getMockImplementation()!;
+    f.api.getQuote.mockImplementation(async request => {
+      const quote = await original(request);
+      return request.kind === 'buy' ? { ...quote, sellAmount: (BigInt(quote.sellAmount) + increase).toString() } : quote;
+    });
+    const audit = await auditCowFeasibility(owner, 100, f.deps);
+    expect(audit.decision).toBe(increase === 1n ? 'eligible-for-setup' : 'unproven');
+    expect(f.api.getQuote).toHaveBeenCalledTimes(6); // No retries or fixed-point changes.
+    for (const sample of audit.samples) {
+      const budget = BigInt(sample.budgetRaw), seedBudget = budget - 56n - 1n;
+      const seed = f.api.getQuote.mock.calls.find(([q]) => q.kind === 'sell' && same(q.sellToken, pins.contracts.quoteToken) && q.amount === seedBudget.toString())?.[0];
+      expect(seed).toBeDefined();
+      const quantity = ((seedBudget - 1n) * 1000000000n).toString();
+      expect(f.api.getQuote.mock.calls.some(([q]) => q.kind === 'buy' && q.amount === quantity)).toBe(true);
+      expect(f.api.getQuote.mock.calls.some(([q]) => same(q.sellToken, pins.contracts.wethBridged) && q.amount === quantity)).toBe(true);
+      const paid = seedBudget + increase;
+      expect(paid + 56n <= budget).toBe(increase === 1n);
+      expect(sample.status).toBe('complete');
+      expect(Number(sample.totalCostUpperFraction)).toBeLessThan(.004);
+      expect(sample.reason).toBe(increase === 1n ? null : 'wallet_sample_entry_budget_exceeded');
+    }
+    expect(audit.createdExecutionState).toBe(false);
+  });
+  it.each([20n, 560n, 570n])('never requests an empty or negative post-gas seed for a tiny capital of %s raw atoms', async capital => {
+    const f = fixture(); f.balances.quote = capital;
+    const native = f.market.nativeGasReference.getMockImplementation()!;
+    f.market.nativeGasReference.mockImplementation(async () => ({ ...await native(), ask: '0.91' }));
+    const audit = await auditCowFeasibility(owner, 100, f.deps);
+    expect(audit.decision).toBe('unproven');
+    expect(audit.samples.every(s => s.status === 'unavailable' && s.reason === 'wallet_sample_entry_budget_exceeded')).toBe(true);
+    expect(f.api.getQuote).not.toHaveBeenCalled();
+  });
 });

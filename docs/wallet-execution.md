@@ -439,6 +439,11 @@ retry. Order/fill reads and transaction submission/cancellation are outside this
 quote gate. The 15-second evidence limits and bounded quote calculations remain
 unchanged. This coordinates one process, not different Vercel instances or cold
 starts, and the local pacing policy is not a provider availability guarantee.
+Setup reference sampling reserves one quote-token atom before the preliminary
+SELL quote as conservative headroom between independent SELL and exact BUY
+references. A nonpositive post-gas seed makes no quote request. Final paid-plus-
+entry-gas, round-trip cost, exact quantity and freshness checks remain strict;
+this is neither a budget tolerance nor a guarantee that later quotes will fit.
 
 ### Owner funding review (16 November 2026)
 
