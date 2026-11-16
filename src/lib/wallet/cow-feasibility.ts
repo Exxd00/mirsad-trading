@@ -110,21 +110,38 @@ export async function auditCowFeasibility(ownerInput: string, chainId: number,
       value.sourceAt = seed.readAt; value.expiresAt = Math.min(seed.readAt + 15000, Date.parse(seed.expiration));
       // A lower-bound rejection requires no invented sell quote or gas value.
       if (decimal(value.entryFeeFraction).gt(CONFIG.maximumRoundTripCost)) return { ...value, reason: 'wallet_sample_entry_fee_exceeds_roundtrip_cap' };
-      const [buy, sell] = await Promise.all([
-        api.getQuote({ ...input, sellToken: quoteToken, buyToken: network.contracts.baseToken, kind: 'buy', amount: seed.buyAmount }),
-        api.getQuote({ ...input, sellToken: network.contracts.baseToken, buyToken: quoteToken, kind: 'sell', amount: seed.buyAmount }),
-      ]);
+      // Match the runtime planner's three-attempt bound without creating a
+      // runtime intent/grant. Only decrease atomic base quantity; B and gas stay
+      // frozen. Earlier references never gain a new freshness window.
+      const sampleExpiresAt = Math.min(value.expiresAt, gas?.expiresAt ?? Infinity);
+      value.expiresAt = sampleExpiresAt;
+      const expired = () => sampleExpiresAt <= clock();
+      let quantity = BigInt(seed.buyAmount), buy: CowQuoteEvidence | null = null, paidRaw = 0n;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (expired()) return { ...value, reason: 'wallet_sample_cost_stale' };
+        if (quantity <= 0n) throw new Error('size_mismatch');
+        const candidate = await api.getQuote({ ...input, sellToken: quoteToken, buyToken: network.contracts.baseToken, kind: 'buy', amount: quantity.toString() });
+        if (!quoteFresh(candidate, clock(), network.chainId) || candidate.buyAmount !== quantity.toString()) throw new Error('size_mismatch');
+        paidRaw = BigInt(candidate.sellAmount) + BigInt(candidate.quotedFeeAmount);
+        if (paidRaw <= 0n) throw new Error('size_mismatch');
+        if (expired()) return { ...value, reason: 'wallet_sample_cost_stale' };
+        if (paidRaw + entryGas <= budget) { buy = candidate; break; }
+        const smaller = quantity * (budget - entryGas) / paidRaw;
+        if (smaller <= 0n || smaller >= quantity) return { ...value, reason: 'wallet_sample_entry_budget_exceeded' };
+        quantity = smaller;
+      }
+      if (!buy) return { ...value, reason: 'wallet_sample_entry_budget_exceeded' };
+      const sell = await api.getQuote({ ...input, sellToken: network.contracts.baseToken, buyToken: quoteToken, kind: 'sell', amount: quantity.toString() });
       if (![buy, sell].every(q => quoteFresh(q, clock(), network.chainId))) throw new Error('unverified_quote');
-      const paid = decimal(buy.sellAmount).add(buy.quotedFeeAmount);
-      if (paid.gt(budget.toString()) || buy.buyAmount !== seed.buyAmount
-        || decimal(sell.sellAmount).add(sell.quotedFeeAmount).toFixed(0) !== seed.buyAmount) throw new Error('size_mismatch');
+      const paid = decimal(paidRaw.toString());
+      if (paidRaw + entryGas > budget || decimal(sell.sellAmount).add(sell.quotedFeeAmount).toFixed(0) !== quantity.toString()) throw new Error('size_mismatch');
       const loss = paid.sub(sell.buyAmount);
       if (loss.lt(0)) throw new Error('crossed_quote');
       value.status = 'complete'; value.entryFeeRaw = buy.quotedFeeAmount;
       value.entryFeeFraction = decimal(buy.quotedFeeAmount).div(paid).toFixed();
       value.roundTripCostFraction = loss.div(paid).toFixed();
-      value.sourceAt = Math.min(buy.readAt, sell.readAt);
-      value.expiresAt = Math.min(value.sourceAt + 15000, Date.parse(buy.expiration), Date.parse(sell.expiration));
+      value.sourceAt = Math.min(seed.readAt, buy.readAt, sell.readAt);
+      value.expiresAt = Math.min(sampleExpiresAt, value.sourceAt + 15000, Date.parse(buy.expiration), Date.parse(sell.expiration));
       if (gas) {
         value.gasCostUpperFraction = gas.quoteRaw.div(paid).toFixed();
         value.totalCostUpperFraction = loss.add(gas.quoteRaw).div(paid).toFixed();
@@ -133,7 +150,7 @@ export async function auditCowFeasibility(ownerInput: string, chainId: number,
       }
       value.reason = !gas ? 'wallet_sample_gas_cost_unproven'
         : decimal(value.totalCostUpperFraction!).gt(CONFIG.maximumRoundTripCost) ? 'wallet_sample_cost_ceiling_exceeded'
-        : paid.add(gas.quoteRaw.div(2)).gt(budget.toString()) ? 'wallet_sample_entry_budget_exceeded' : null;
+        : paidRaw + entryGas > budget ? 'wallet_sample_entry_budget_exceeded' : null;
       if (value.expiresAt <= clock()) {
         value.reason = 'wallet_sample_cost_stale'; value.gasCostUpperFraction = null; value.totalCostUpperFraction = null;
       }
