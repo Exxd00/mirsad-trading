@@ -30,7 +30,7 @@ export function gnosisFundingRoutesRequest(owner:string){
 
 /** Estimate-level selection only. Actual calldata, signatures, fee/minimum
  * arithmetic and fresh authority are still checked by the existing parser/DAL. */
-function matchesStep(step:unknown,owner:string):step is Record<string,any>{
+function matchesConvertedStep(step:unknown,owner:string):step is Record<string,any>{
   if(!object(step)||typeof step.id!=='string'||!step.id.length||step.id.length>128||step.type!=='lifi'||step.tool!=='layerswap'
     ||!object(step.action)||!object(step.estimate)||!Array.isArray(step.includedSteps)||step.includedSteps.length!==4)return false;
   const a=step.action,s=step.includedSteps;
@@ -57,6 +57,38 @@ function matchesStep(step:unknown,owner:string):step is Record<string,any>{
     &&[sourceOut,sourceMin].includes(amount(s[3].estimate.fromAmount)??-1n);
 }
 
+/** The original reviewed mUSD bridge has no source asset conversion. Its
+ * protocol outputs are exact; only the destination amount is an estimate. */
+function matchesDirectStep(step:unknown,owner:string):step is Record<string,any>{
+  if(!object(step)||typeof step.id!=='string'||!step.id.length||step.id.length>128||step.type!=='lifi'||step.tool!=='layerswap'
+    ||!object(step.action)||!object(step.estimate)||!Array.isArray(step.includedSteps)||step.includedSteps.length!==3)return false;
+  const a=step.action,s=step.includedSteps;
+  if(a.fromChainId!==1||a.toChainId!==100||a.fromAmount!==policy.fromAmount||a.slippage!==0.0025
+    ||!same(a.fromAddress,owner)||!same(a.toAddress,owner)||!token(a.fromToken,'input')||!token(a.toToken,'destination'))return false;
+  const tools=['feeCollection','gasZip','layerswap'],types=['protocol','protocol','cross'];
+  for(let i=0;i<3;i++){
+    const v=s[i];if(!object(v)||v.tool!==tools[i]||v.type!==types[i]||!object(v.action)||!object(v.estimate))return false;
+    const c=v.action;
+    if(c.fromChainId!==1||c.toChainId!==(i===2?100:1)||c.slippage!==0.0025
+      ||!same(c.fromAddress,policy.contracts.diamond.address)||!same(c.toAddress,i===2?owner:policy.contracts.diamond.address)
+      ||!token(c.fromToken,'input')||!token(c.toToken,i===2?'destination':'input'))return false;
+  }
+  const input=BigInt(policy.fromAmount),gas=BigInt(policy.fromAmountForGas),feeOut=amount(s[0].estimate.toAmount);
+  const destinationOut=amount(step.estimate.toAmount),destinationMin=amount(step.estimate.toAmountMin);
+  if(feeOut===null||input-feeOut<=0n||input-feeOut>BigInt(policy.maximumFeeAmount)
+    ||destinationOut===null||destinationMin===null||destinationMin<=0n||destinationMin>destinationOut)return false;
+  const bridgeInput=feeOut-gas;
+  return bridgeInput>0n&&step.estimate.fromAmount===policy.fromAmount
+    &&s[0].action.fromAmount===policy.fromAmount&&s[0].estimate.fromAmount===policy.fromAmount&&amount(s[0].estimate.toAmountMin)===feeOut
+    &&amount(s[1].action.fromAmount)===feeOut&&amount(s[1].estimate.fromAmount)===feeOut
+    &&amount(s[1].estimate.toAmount)===bridgeInput&&amount(s[1].estimate.toAmountMin)===bridgeInput
+    &&amount(s[2].action.fromAmount)===bridgeInput&&amount(s[2].estimate.fromAmount)===bridgeInput
+    &&amount(s[2].estimate.toAmount)===destinationOut&&amount(s[2].estimate.toAmountMin)===destinationMin;
+}
+function matchesStep(step:unknown,owner:string):step is Record<string,any>{
+  return matchesDirectStep(step,owner)||matchesConvertedStep(step,owner);
+}
+
 export type SelectedGnosisFundingStep={readonly id:string;readonly owner:string;readonly body:string};
 export function selectGnosisFundingStep(raw:unknown,owner:string):SelectedGnosisFundingStep{
   if(!object(raw)||!Array.isArray(raw.routes)||raw.routes.length>3)return fail('selection_shape');
@@ -73,6 +105,7 @@ export function selectGnosisFundingStep(raw:unknown,owner:string):SelectedGnosis
 export function assertGnosisFundingStepResult(selected:SelectedGnosisFundingStep,raw:unknown):void{
   const original=JSON.parse(selected.body);
   if(!matchesStep(original,selected.owner)||!matchesStep(raw,selected.owner))return fail('step_profile_mismatch');
+  if(raw.includedSteps.length!==original.includedSteps.length)return fail('step_profile_mismatch');
   if(raw.id!==selected.id)return fail('step_id_mismatch');
-  if(!same(raw.includedSteps[2].action.toToken.address,original.includedSteps[2].action.toToken.address))return fail('step_source_asset_mismatch');
+  if(original.includedSteps.length===4&&!same(raw.includedSteps[2].action.toToken.address,original.includedSteps[2].action.toToken.address))return fail('step_source_asset_mismatch');
 }
