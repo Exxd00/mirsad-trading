@@ -10,6 +10,7 @@ import type { FundingResolutionInput, GnosisFundingResolution } from './gnosis-f
 import { sqlGnosisEurStateStore } from './gnosis-eur-state-store';
 import { GNOSIS_REFERENCE_IDENTITY,GNOSIS_HISTORY_IDENTITY,GNOSIS_HISTORY_POLICY, gnosisEurBarFingerprint, parseStoredGnosisEurSeries, type GnosisEurStateStore } from './gnosis-market';
 import { readGnosisMarketReadiness } from './gnosis-market-readiness-job';
+import { GnosisFundingRouteError,gnosisFundingRoutesRequest,selectGnosisFundingStep,assertGnosisFundingStepResult } from './gnosis-funding-route';
 
 export class GnosisFundingError extends Error {
   constructor(readonly code: string) { super(code); this.name = 'GnosisFundingError'; }
@@ -268,18 +269,18 @@ export async function prepareGnosisFundingReview(ownerInput: string, deps: Fundi
   const owner = ownerAddress(ownerInput), c = context(deps);
   let review: GnosisFundingQuoteReview | null = null, rawQuote: unknown | null = null;
   try {
-    const url = new URL('https://li.quest/v1/quote');
-    for (const [key, value] of Object.entries({ fromChain: '1', toChain: '100', fromToken: policy.fromToken.address, toToken: policy.toToken.address,
-      // LI.FI applies this to each step; retain the separate aggregate .005 admission bound.
-      fromAmount: policy.fromAmount, fromAddress: owner, toAddress: owner, fromAmountForGas: policy.fromAmountForGas, slippage: '0.0025', allowBridges: 'layerswap',
-      allowExchanges: 'sushiswap' })) url.searchParams.set(key, value);
-    rawQuote = await jsonRead(c, url.toString(), { method: 'GET' }, 131072); const observedAt = c.clock();
+    const headers={'Content-Type':'application/json'};
+    const routes=await jsonRead(c,'https://li.quest/v1/advanced/routes',{method:'POST',headers,
+      body:JSON.stringify(gnosisFundingRoutesRequest(owner))},524288);
+    const selected=selectGnosisFundingStep(routes,owner);
+    rawQuote=await jsonRead(c,'https://li.quest/v1/advanced/stepTransaction',{method:'POST',headers,body:selected.body},131072);
+    assertGnosisFundingStepResult(selected,rawQuote);const observedAt=c.clock();
     review = await parseGnosisFundingQuote(rawQuote, { owner, observedAt, now: c.clock() });
     const freshProof = await prove(c, review, deps);
     return { rawQuote, audit: { version: 1, owner, sourceChainId: 1, destinationChainId: 100, status: 'reviewable', readAt: freshProof.readAt, expiresAt: review.expiresAt,
       review, freshProof, blockers: [], executionApproved: false, ownerReviewAllowed: false, unverified: unverified(review) } };
   } catch (e) {
-    const code = e instanceof GnosisFundingError ? e.code : e instanceof Error && e.message === 'wallet_gnosis_funding_quote_invalid' ? e.message : 'wallet_gnosis_funding_unavailable';
+    const code = e instanceof GnosisFundingError||e instanceof GnosisFundingRouteError ? e.code : e instanceof Error && e.message === 'wallet_gnosis_funding_quote_invalid' ? e.message : 'wallet_gnosis_funding_unavailable';
     return { rawQuote: null, audit: { version: 1, owner, sourceChainId: 1, destinationChainId: 100, status: code === 'wallet_gnosis_funding_unavailable' || code === 'wallet_gnosis_funding_timeout' || code === 'wallet_gnosis_funding_rate_limited'
       || /^wallet_gnosis_funding_(?:quote|rpc)_(?:http_\d{3}|transport_unavailable)$/.test(code) ? 'unavailable' : 'blocked',
       readAt: c.clock(), expiresAt: c.clock(), review, freshProof: null, blockers: [code], executionApproved: false, ownerReviewAllowed: false, unverified: unverified(review) } };

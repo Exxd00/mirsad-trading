@@ -1,0 +1,1303 @@
+{
+  "startedAt": "2026-11-16T13:32:55.122Z",
+  "receivedAt": "2026-11-16T13:32:56.780Z",
+  "endpoint": "https://li.quest/v1/advanced/stepTransaction",
+  "requestStepDigest": "0xd4181680bda9c04a76eb5ab4116d036b5a67e0a7140d015fed92e95dcd6c42b0",
+  "requestStep": {
+    "type": "lifi",
+    "id": "1fa941c4-dd5d-4391-a027-d0c8d7f09189:0",
+    "tool": "layerswap",
+    "toolDetails": {
+      "key": "layerswap",
+      "name": "Layerswap",
+      "logoURI": "https://raw.githubusercontent.com/lifinance/types/main/src/assets/icons/bridges/layerswap.svg"
+    },
+    "action": {
+      "fromToken": {
+        "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+        "chainId": 1,
+        "symbol": "mUSD",
+        "decimals": 6,
+        "name": "Metamask USD",
+        "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+        "priceUSD": "1.0001621718",
+        "tags": [
+          "stablecoin"
+        ],
+        "verificationStatus": "verified",
+        "verificationStatusBreakdown": [
+          {
+            "provider": "hypernative",
+            "result": "verified",
+            "providerResult": "accept"
+          }
+        ]
+      },
+      "fromAmount": "10000000",
+      "toToken": {
+        "address": "0x2a22f9c3b484c3629090FeED35F17Ff8F88f76F0",
+        "chainId": 100,
+        "symbol": "USDC.e",
+        "decimals": 6,
+        "name": "Bridged USD Coin",
+        "coinKey": "USDCe",
+        "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
+        "priceUSD": "1.000113782",
+        "tags": [
+          "stablecoin"
+        ],
+        "verificationStatus": "verified",
+        "verificationStatusBreakdown": [
+          {
+            "provider": "hypernative",
+            "result": "verified",
+            "providerResult": "accept"
+          }
+        ]
+      },
+      "fromChainId": 1,
+      "toChainId": 100,
+      "slippage": 0.0025,
+      "fromAddress": "0xcb4157e47fc47c3f4cde0ded4d4115f1abae9472",
+      "toAddress": "0xcb4157e47fc47c3f4cde0ded4d4115f1abae9472"
+    },
+    "estimate": {
+      "tool": "layerswap",
+      "approvalAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+      "toAmountMin": "9806014",
+      "toAmount": "9855229",
+      "fromAmount": "10000000",
+      "feeCosts": [
+        {
+          "name": "LIFI Fixed Fee",
+          "description": "Fixed LIFI fee, independent of any other fee",
+          "token": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "1.0001621718",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "amount": "25000",
+          "amountUSD": "0.0250",
+          "percentage": "0.0025",
+          "included": true,
+          "feeSplit": {
+            "lifiFee": "25000",
+            "integratorFee": "0",
+            "recipients": [
+              {
+                "name": "lifi",
+                "type": "FIXED",
+                "fee": "25000"
+              }
+            ]
+          }
+        },
+        {
+          "name": "LayerSwap fee",
+          "description": "LayerSwap bridge fee",
+          "percentage": "0.0070",
+          "token": {
+            "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "chainId": 1,
+            "symbol": "USDC",
+            "decimals": 6,
+            "name": "USD Coin",
+            "coinKey": "USDC",
+            "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
+            "priceUSD": "1.0001716836",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "amount": "69796",
+          "amountUSD": "0.069764",
+          "included": true
+        }
+      ],
+      "gasCosts": [
+        {
+          "type": "SEND",
+          "price": "212698792",
+          "estimate": "365823",
+          "limit": "808823",
+          "amount": "77810110185816",
+          "amountUSD": "0.1399",
+          "token": {
+            "address": "0x0000000000000000000000000000000000000000",
+            "chainId": 1,
+            "symbol": "ETH",
+            "decimals": 18,
+            "name": "ETH",
+            "coinKey": "ETH",
+            "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2/logo.png",
+            "priceUSD": "1797.8",
+            "tags": [
+              "major_asset"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          }
+        }
+      ],
+      "executionDuration": 17,
+      "fromAmountUSD": "10.0016",
+      "toAmountUSD": "9.8564",
+      "skipPermit": false
+    },
+    "includedSteps": [
+      {
+        "id": "8ecc6676-6dcb-4f31-880b-9222e1dcce36",
+        "type": "protocol",
+        "action": {
+          "fromChainId": 1,
+          "fromAmount": "10000000",
+          "fromToken": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "1.0001621718",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "toChainId": 1,
+          "toToken": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "1.0001621718",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "slippage": 0.0025,
+          "fromAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+          "toAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE"
+        },
+        "estimate": {
+          "fromAmount": "10000000",
+          "toAmount": "9975000",
+          "toAmountMin": "9975000",
+          "tool": "feeCollection",
+          "approvalAddress": "0xDe2b920506EE931a6A2ABDF566526220214FBbAE",
+          "gasCosts": [
+            {
+              "type": "SEND",
+              "price": "212698792",
+              "estimate": "130000",
+              "limit": "169000",
+              "amount": "27650842960000",
+              "amountUSD": "0.0497",
+              "token": {
+                "address": "0x0000000000000000000000000000000000000000",
+                "chainId": 1,
+                "symbol": "ETH",
+                "decimals": 18,
+                "name": "ETH",
+                "coinKey": "ETH",
+                "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2/logo.png",
+                "priceUSD": "1797.8",
+                "tags": [
+                  "major_asset"
+                ],
+                "verificationStatus": "verified",
+                "verificationStatusBreakdown": [
+                  {
+                    "provider": "hypernative",
+                    "result": "verified",
+                    "providerResult": "accept"
+                  }
+                ]
+              }
+            }
+          ],
+          "feeCosts": [
+            {
+              "name": "LIFI Fixed Fee",
+              "description": "Fixed LIFI fee, independent of any other fee",
+              "token": {
+                "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+                "chainId": 1,
+                "symbol": "mUSD",
+                "decimals": 6,
+                "name": "Metamask USD",
+                "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+                "priceUSD": "1.0001621718",
+                "tags": [
+                  "stablecoin"
+                ],
+                "verificationStatus": "verified",
+                "verificationStatusBreakdown": [
+                  {
+                    "provider": "hypernative",
+                    "result": "verified",
+                    "providerResult": "accept"
+                  }
+                ]
+              },
+              "amount": "25000",
+              "amountUSD": "0.0250",
+              "percentage": "0.0025",
+              "included": true,
+              "feeSplit": {
+                "lifiFee": "25000",
+                "integratorFee": "0",
+                "recipients": [
+                  {
+                    "name": "lifi",
+                    "type": "FIXED",
+                    "fee": "25000"
+                  }
+                ]
+              }
+            }
+          ],
+          "executionDuration": 0
+        },
+        "tool": "feeCollection",
+        "toolDetails": {
+          "key": "feeCollection",
+          "name": "Integrator Fee",
+          "logoURI": "https://raw.githubusercontent.com/lifinance/types/main/src/assets/icons/protocols/feeCollection.svg"
+        }
+      },
+      {
+        "id": "55171410-3339-416b-a657-eed9a84357e5",
+        "type": "protocol",
+        "action": {
+          "fromChainId": 1,
+          "fromAmount": "9975000",
+          "fromToken": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "1.0001621718",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "toChainId": 1,
+          "toToken": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "1.0001621718",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "slippage": 0.0025,
+          "fromAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+          "toAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE"
+        },
+        "estimate": {
+          "tool": "gasZip",
+          "fromAmount": "9975000",
+          "toAmount": "9925000",
+          "toAmountMin": "9925000",
+          "approvalAddress": "0x363d698649cd04f9692Ab86e8365b227c1ee859d",
+          "executionDuration": 0,
+          "gasCosts": [
+            {
+              "type": "SEND",
+              "amount": "55623539882",
+              "token": {
+                "address": "0x0000000000000000000000000000000000000000",
+                "chainId": 1,
+                "symbol": "ETH",
+                "decimals": 18,
+                "name": "ETH",
+                "coinKey": "ETH",
+                "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2/logo.png",
+                "priceUSD": "1797.8",
+                "tags": [
+                  "major_asset"
+                ],
+                "verificationStatus": "verified",
+                "verificationStatusBreakdown": [
+                  {
+                    "provider": "hypernative",
+                    "result": "verified",
+                    "providerResult": "accept"
+                  }
+                ]
+              },
+              "limit": "262",
+              "estimate": "262",
+              "price": "212698792",
+              "amountUSD": "0.0001"
+            }
+          ],
+          "feeCosts": []
+        },
+        "tool": "gasZip",
+        "toolDetails": {
+          "key": "gasZip",
+          "name": "LI.Fuel",
+          "logoURI": "https://raw.githubusercontent.com/lifinance/types/main/src/assets/icons/bridges/lifi.svg"
+        }
+      },
+      {
+        "id": "2013ba6e-8208-46a5-a03f-7feded01a31d",
+        "type": "swap",
+        "action": {
+          "fromChainId": 1,
+          "fromAmount": "9925000",
+          "fromToken": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "1.0001621718",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "toChainId": 1,
+          "toToken": {
+            "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "chainId": 1,
+            "symbol": "USDC",
+            "decimals": 6,
+            "name": "USD Coin",
+            "coinKey": "USDC",
+            "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
+            "priceUSD": "1.0001716836",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "slippage": 0.0025,
+          "fromAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+          "toAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE"
+        },
+        "estimate": {
+          "tool": "sushiswap",
+          "fromAmount": "9925000",
+          "toAmount": "9925025",
+          "toAmountMin": "9900212",
+          "approvalAddress": "0xac4c6e212a361c968f1725b4d055b47e63f80b75",
+          "executionDuration": 0,
+          "feeCosts": [],
+          "gasCosts": [
+            {
+              "type": "SEND",
+              "price": "212698792",
+              "estimate": "25561",
+              "limit": "33229",
+              "amount": "5436793822312",
+              "amountUSD": "0.0098",
+              "token": {
+                "address": "0x0000000000000000000000000000000000000000",
+                "chainId": 1,
+                "symbol": "ETH",
+                "decimals": 18,
+                "name": "ETH",
+                "coinKey": "ETH",
+                "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2/logo.png",
+                "priceUSD": "1797.8",
+                "tags": [
+                  "major_asset"
+                ],
+                "verificationStatus": "verified",
+                "verificationStatusBreakdown": [
+                  {
+                    "provider": "hypernative",
+                    "result": "verified",
+                    "providerResult": "accept"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "tool": "sushiswap",
+        "toolDetails": {
+          "key": "sushiswap",
+          "name": "SushiSwap Aggregator",
+          "logoURI": "https://raw.githubusercontent.com/lifinance/types/main/src/assets/icons/exchanges/sushi.svg"
+        }
+      },
+      {
+        "id": "fb5462d6-f75f-444a-879f-963213210738",
+        "type": "cross",
+        "action": {
+          "fromChainId": 1,
+          "fromAmount": "9925025",
+          "fromToken": {
+            "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "chainId": 1,
+            "symbol": "USDC",
+            "decimals": 6,
+            "name": "USD Coin",
+            "coinKey": "USDC",
+            "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
+            "priceUSD": "1.0001716836",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "toChainId": 100,
+          "toToken": {
+            "address": "0x2a22f9c3b484c3629090FeED35F17Ff8F88f76F0",
+            "chainId": 100,
+            "symbol": "USDC.e",
+            "decimals": 6,
+            "name": "Bridged USD Coin",
+            "coinKey": "USDCe",
+            "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
+            "priceUSD": "1.000113782",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "slippage": 0.0025,
+          "fromAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+          "toAddress": "0xcb4157e47fc47c3f4cde0ded4d4115f1abae9472",
+          "destinationGasConsumption": "0"
+        },
+        "estimate": {
+          "tool": "layerswap",
+          "fromAmount": "9925025",
+          "toAmount": "9855229",
+          "toAmountMin": "9830591",
+          "gasCosts": [
+            {
+              "type": "SEND",
+              "price": "212698792",
+              "estimate": "210000",
+              "limit": "273000",
+              "amount": "44666746320000",
+              "amountUSD": "0.0803",
+              "token": {
+                "address": "0x0000000000000000000000000000000000000000",
+                "chainId": 1,
+                "symbol": "ETH",
+                "decimals": 18,
+                "name": "ETH",
+                "coinKey": "ETH",
+                "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2/logo.png",
+                "priceUSD": "1797.8",
+                "tags": [
+                  "major_asset"
+                ],
+                "verificationStatus": "verified",
+                "verificationStatusBreakdown": [
+                  {
+                    "provider": "hypernative",
+                    "result": "verified",
+                    "providerResult": "accept"
+                  }
+                ]
+              }
+            }
+          ],
+          "executionDuration": 17,
+          "approvalAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+          "feeCosts": [
+            {
+              "name": "LayerSwap fee",
+              "description": "LayerSwap bridge fee",
+              "percentage": "0.0070",
+              "token": {
+                "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                "chainId": 1,
+                "symbol": "USDC",
+                "decimals": 6,
+                "name": "USD Coin",
+                "coinKey": "USDC",
+                "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
+                "priceUSD": "1.0001716836",
+                "tags": [
+                  "stablecoin"
+                ],
+                "verificationStatus": "verified",
+                "verificationStatusBreakdown": [
+                  {
+                    "provider": "hypernative",
+                    "result": "verified",
+                    "providerResult": "accept"
+                  }
+                ]
+              },
+              "amount": "69796",
+              "amountUSD": "0.069764",
+              "included": true
+            }
+          ]
+        },
+        "tool": "layerswap",
+        "toolDetails": {
+          "key": "layerswap",
+          "name": "Layerswap",
+          "logoURI": "https://raw.githubusercontent.com/lifinance/types/main/src/assets/icons/bridges/layerswap.svg"
+        }
+      }
+    ],
+    "integrator": "lifi-api",
+    "executionType": "transaction",
+    "recommendedSlippage": null
+  },
+  "status": 200,
+  "bytes": 22006,
+  "response": {
+    "type": "lifi",
+    "id": "1fa941c4-dd5d-4391-a027-d0c8d7f09189:0",
+    "tool": "layerswap",
+    "toolDetails": {
+      "key": "layerswap",
+      "name": "Layerswap",
+      "logoURI": "https://raw.githubusercontent.com/lifinance/types/main/src/assets/icons/bridges/layerswap.svg"
+    },
+    "action": {
+      "fromToken": {
+        "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+        "chainId": 1,
+        "symbol": "mUSD",
+        "decimals": 6,
+        "name": "Metamask USD",
+        "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+        "priceUSD": "1.0001621718",
+        "tags": [
+          "stablecoin"
+        ],
+        "verificationStatus": "verified",
+        "verificationStatusBreakdown": [
+          {
+            "provider": "hypernative",
+            "result": "verified",
+            "providerResult": "accept"
+          }
+        ]
+      },
+      "fromAmount": "10000000",
+      "toToken": {
+        "address": "0x2a22f9c3b484c3629090FeED35F17Ff8F88f76F0",
+        "chainId": 100,
+        "symbol": "USDC.e",
+        "decimals": 6,
+        "name": "Bridged USD Coin",
+        "coinKey": "USDCe",
+        "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
+        "priceUSD": "1.000113782",
+        "tags": [
+          "stablecoin"
+        ],
+        "verificationStatus": "verified",
+        "verificationStatusBreakdown": [
+          {
+            "provider": "hypernative",
+            "result": "verified",
+            "providerResult": "accept"
+          }
+        ]
+      },
+      "fromChainId": 1,
+      "toChainId": 100,
+      "slippage": 0.0025,
+      "fromAddress": "0xcb4157e47fc47c3f4cde0ded4d4115f1abae9472",
+      "toAddress": "0xcb4157e47fc47c3f4cde0ded4d4115f1abae9472"
+    },
+    "estimate": {
+      "tool": "layerswap",
+      "approvalAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+      "toAmountMin": "9805891",
+      "toAmount": "9855105",
+      "fromAmount": "10000000",
+      "feeCosts": [
+        {
+          "name": "LIFI Fixed Fee",
+          "description": "Fixed LIFI fee, independent of any other fee",
+          "token": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "1.0001621718",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "amount": "25000",
+          "amountUSD": "0.0250",
+          "percentage": "0.0025",
+          "included": true,
+          "feeSplit": {
+            "lifiFee": "25000",
+            "integratorFee": "0",
+            "recipients": [
+              {
+                "name": "lifi",
+                "type": "FIXED",
+                "fee": "25000"
+              }
+            ]
+          }
+        },
+        {
+          "name": "LayerSwap fee",
+          "description": "LayerSwap bridge fee",
+          "percentage": "0.0070",
+          "token": {
+            "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "chainId": 1,
+            "symbol": "USDC",
+            "decimals": 6,
+            "name": "USD Coin",
+            "coinKey": "USDC",
+            "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
+            "priceUSD": "1.0001716836",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "amount": "69744",
+          "amountUSD": "0.069716",
+          "included": true
+        }
+      ],
+      "gasCosts": [
+        {
+          "type": "SEND",
+          "price": "212992957",
+          "estimate": "946556",
+          "limit": "1230523",
+          "amount": "201609761406092",
+          "amountUSD": "0.3635",
+          "token": {
+            "address": "0x0000000000000000000000000000000000000000",
+            "chainId": 1,
+            "symbol": "ETH",
+            "decimals": 18,
+            "name": "ETH",
+            "coinKey": "ETH",
+            "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2/logo.png",
+            "priceUSD": "1802.93",
+            "tags": [
+              "major_asset"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          }
+        }
+      ],
+      "executionDuration": 17,
+      "fromAmountUSD": "10.0016",
+      "toAmountUSD": "9.8562"
+    },
+    "includedSteps": [
+      {
+        "id": "8ecc6676-6dcb-4f31-880b-9222e1dcce36",
+        "type": "protocol",
+        "action": {
+          "fromChainId": 1,
+          "fromAmount": "10000000",
+          "fromToken": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "1.0001621718",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "toChainId": 1,
+          "toToken": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "1.0001621718",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "slippage": 0.0025,
+          "fromAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+          "toAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE"
+        },
+        "estimate": {
+          "fromAmount": "10000000",
+          "toAmount": "9975000",
+          "toAmountMin": "9975000",
+          "tool": "feeCollection",
+          "approvalAddress": "0xDe2b920506EE931a6A2ABDF566526220214FBbAE",
+          "gasCosts": [
+            {
+              "type": "SEND",
+              "price": "212698792",
+              "estimate": "130000",
+              "limit": "169000",
+              "amount": "27650842960000",
+              "amountUSD": "0.0497",
+              "token": {
+                "address": "0x0000000000000000000000000000000000000000",
+                "chainId": 1,
+                "symbol": "ETH",
+                "decimals": 18,
+                "name": "ETH",
+                "coinKey": "ETH",
+                "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2/logo.png",
+                "priceUSD": "1797.8",
+                "tags": [
+                  "major_asset"
+                ],
+                "verificationStatus": "verified",
+                "verificationStatusBreakdown": [
+                  {
+                    "provider": "hypernative",
+                    "result": "verified",
+                    "providerResult": "accept"
+                  }
+                ]
+              }
+            }
+          ],
+          "feeCosts": [
+            {
+              "name": "LIFI Fixed Fee",
+              "description": "Fixed LIFI fee, independent of any other fee",
+              "token": {
+                "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+                "chainId": 1,
+                "symbol": "mUSD",
+                "decimals": 6,
+                "name": "Metamask USD",
+                "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+                "priceUSD": "1.0001621718",
+                "tags": [
+                  "stablecoin"
+                ],
+                "verificationStatus": "verified",
+                "verificationStatusBreakdown": [
+                  {
+                    "provider": "hypernative",
+                    "result": "verified",
+                    "providerResult": "accept"
+                  }
+                ]
+              },
+              "amount": "25000",
+              "amountUSD": "0.0250",
+              "percentage": "0.0025",
+              "included": true,
+              "feeSplit": {
+                "lifiFee": "25000",
+                "integratorFee": "0",
+                "recipients": [
+                  {
+                    "name": "lifi",
+                    "type": "FIXED",
+                    "fee": "25000"
+                  }
+                ]
+              }
+            }
+          ],
+          "executionDuration": 0
+        },
+        "tool": "feeCollection",
+        "toolDetails": {
+          "key": "feeCollection",
+          "name": "Integrator Fee",
+          "logoURI": "https://raw.githubusercontent.com/lifinance/types/main/src/assets/icons/protocols/feeCollection.svg"
+        }
+      },
+      {
+        "id": "55171410-3339-416b-a657-eed9a84357e5",
+        "type": "protocol",
+        "action": {
+          "fromChainId": 1,
+          "fromAmount": "9975000",
+          "fromToken": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "1.0001621718",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "toChainId": 1,
+          "toToken": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "1.0001621718",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "slippage": 0.0025,
+          "fromAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+          "toAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE"
+        },
+        "estimate": {
+          "tool": "gasZip",
+          "fromAmount": "9975000",
+          "toAmount": "9925000",
+          "toAmountMin": "9925000",
+          "approvalAddress": "0x363d698649cd04f9692Ab86e8365b227c1ee859d",
+          "executionDuration": 0,
+          "gasCosts": [
+            {
+              "type": "SEND",
+              "amount": "55623539882",
+              "token": {
+                "address": "0x0000000000000000000000000000000000000000",
+                "chainId": 1,
+                "symbol": "ETH",
+                "decimals": 18,
+                "name": "ETH",
+                "coinKey": "ETH",
+                "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2/logo.png",
+                "priceUSD": "1797.8",
+                "tags": [
+                  "major_asset"
+                ],
+                "verificationStatus": "verified",
+                "verificationStatusBreakdown": [
+                  {
+                    "provider": "hypernative",
+                    "result": "verified",
+                    "providerResult": "accept"
+                  }
+                ]
+              },
+              "limit": "262",
+              "estimate": "262",
+              "price": "212698792",
+              "amountUSD": "0.0001"
+            }
+          ],
+          "feeCosts": []
+        },
+        "tool": "gasZip",
+        "toolDetails": {
+          "key": "gasZip",
+          "name": "LI.Fuel",
+          "logoURI": "https://raw.githubusercontent.com/lifinance/types/main/src/assets/icons/bridges/lifi.svg"
+        }
+      },
+      {
+        "id": "2013ba6e-8208-46a5-a03f-7feded01a31d",
+        "type": "swap",
+        "action": {
+          "fromChainId": 1,
+          "fromAmount": "9925000",
+          "fromToken": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "1.0001621718",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "toChainId": 1,
+          "toToken": {
+            "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "chainId": 1,
+            "symbol": "USDC",
+            "decimals": 6,
+            "name": "USD Coin",
+            "coinKey": "USDC",
+            "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
+            "priceUSD": "1.0001716836",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "slippage": 0.0025,
+          "fromAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+          "toAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE"
+        },
+        "estimate": {
+          "tool": "sushiswap",
+          "fromAmount": "9925000",
+          "toAmount": "9925025",
+          "toAmountMin": "9900212",
+          "approvalAddress": "0xac4c6e212a361c968f1725b4d055b47e63f80b75",
+          "executionDuration": 0,
+          "feeCosts": [],
+          "gasCosts": [
+            {
+              "type": "SEND",
+              "price": "212992957",
+              "estimate": "25561",
+              "limit": "33229",
+              "amount": "5444312973877",
+              "amountUSD": "0.0098",
+              "token": {
+                "address": "0x0000000000000000000000000000000000000000",
+                "chainId": 1,
+                "symbol": "ETH",
+                "decimals": 18,
+                "name": "ETH",
+                "coinKey": "ETH",
+                "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2/logo.png",
+                "priceUSD": "1802.93",
+                "tags": [
+                  "major_asset"
+                ],
+                "verificationStatus": "verified",
+                "verificationStatusBreakdown": [
+                  {
+                    "provider": "hypernative",
+                    "result": "verified",
+                    "providerResult": "accept"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "tool": "sushiswap",
+        "toolDetails": {
+          "key": "sushiswap",
+          "name": "SushiSwap Aggregator",
+          "logoURI": "https://raw.githubusercontent.com/lifinance/types/main/src/assets/icons/exchanges/sushi.svg"
+        }
+      },
+      {
+        "id": "fb5462d6-f75f-444a-879f-963213210738",
+        "type": "cross",
+        "action": {
+          "fromChainId": 1,
+          "fromAmount": "9925025",
+          "fromToken": {
+            "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "chainId": 1,
+            "symbol": "USDC",
+            "decimals": 6,
+            "name": "USD Coin",
+            "coinKey": "USDC",
+            "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
+            "priceUSD": "1.0001716836",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "toChainId": 100,
+          "toToken": {
+            "address": "0x2a22f9c3b484c3629090FeED35F17Ff8F88f76F0",
+            "chainId": 100,
+            "symbol": "USDC.e",
+            "decimals": 6,
+            "name": "Bridged USD Coin",
+            "coinKey": "USDCe",
+            "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
+            "priceUSD": "1.000113782",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "slippage": 0.0025,
+          "fromAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+          "toAddress": "0xcb4157e47fc47c3f4cde0ded4d4115f1abae9472",
+          "destinationGasConsumption": "0"
+        },
+        "estimate": {
+          "tool": "layerswap",
+          "fromAmount": "9900212",
+          "toAmount": "9855105",
+          "toAmountMin": "9805891",
+          "gasCosts": [
+            {
+              "type": "SEND",
+              "price": "212992957",
+              "estimate": "210000",
+              "limit": "273000",
+              "amount": "44728520970000",
+              "amountUSD": "0.0806",
+              "token": {
+                "address": "0x0000000000000000000000000000000000000000",
+                "chainId": 1,
+                "symbol": "ETH",
+                "decimals": 18,
+                "name": "ETH",
+                "coinKey": "ETH",
+                "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2/logo.png",
+                "priceUSD": "1802.93",
+                "tags": [
+                  "major_asset"
+                ],
+                "verificationStatus": "verified",
+                "verificationStatusBreakdown": [
+                  {
+                    "provider": "hypernative",
+                    "result": "verified",
+                    "providerResult": "accept"
+                  }
+                ]
+              }
+            }
+          ],
+          "executionDuration": 17,
+          "approvalAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+          "feeCosts": [
+            {
+              "name": "LayerSwap fee",
+              "description": "LayerSwap bridge fee",
+              "percentage": "0.0070",
+              "token": {
+                "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                "chainId": 1,
+                "symbol": "USDC",
+                "decimals": 6,
+                "name": "USD Coin",
+                "coinKey": "USDC",
+                "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
+                "priceUSD": "1.0001716836",
+                "tags": [
+                  "stablecoin"
+                ],
+                "verificationStatus": "verified",
+                "verificationStatusBreakdown": [
+                  {
+                    "provider": "hypernative",
+                    "result": "verified",
+                    "providerResult": "accept"
+                  }
+                ]
+              },
+              "amount": "69744",
+              "amountUSD": "0.069716",
+              "included": true
+            }
+          ]
+        },
+        "tool": "layerswap",
+        "toolDetails": {
+          "key": "layerswap",
+          "name": "Layerswap",
+          "logoURI": "https://raw.githubusercontent.com/lifinance/types/main/src/assets/icons/bridges/layerswap.svg"
+        }
+      }
+    ],
+    "integrator": "lifi-api",
+    "stepSimulation": {
+      "status": "success",
+      "gasSource": "simulation"
+    },
+    "transactionRequest": {
+      "value": "0x0",
+      "to": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+      "data": "0x4c279d6b000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000002200000000000000000000000000000000000000000000000000000000000000f80414176a2f5bb70e4cfb9f4e3b481433bcd05ce21ad4aa6992fe3d9c477638736000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000001800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000cb4157e47fc47c3f4cde0ded4d4115f1abae947200000000000000000000000000000000000000000000000000000000009710b400000000000000000000000000000000000000000000000000000000000000640000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000096c6179657273776170000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000086c6966692d6170690000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000002200000000000000000000000000000000000000000000000000000000000000940000000000000000000000000de2b920506ee931a6a2abdf566526220214fbbae000000000000000000000000de2b920506ee931a6a2abdf566526220214fbbae000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da000000000000000000000000000000000000000000000000000000000098968000000000000000000000000000000000000000000000000000000000000000e0000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000a4332d746b000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da00000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000001000000000000000000000000c06ebbefd94032b85424d51906e2a335efae264b00000000000000000000000000000000000000000000000000000000000061a800000000000000000000000000000000000000000000000000000000000000000000000000000000363d698649cd04f9692ab86e8365b227c1ee859d000000000000000000000000363d698649cd04f9692ab86e8365b227c1ee859d000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da00000000000000000000000000000000000000000000000000000000009834d800000000000000000000000000000000000000000000000000000000000000e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006048b71ae6c0000000000000000000000000000000000000000000000000000000000000060cb4157e47fc47c3f4cde0ded4d4115f1abae9472000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000020f6ee51340adeed01a59b0e65cb3703f3dc860c00000000000000000000000020f6ee51340adeed01a59b0e65cb3703f3dc860c000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c35000000000000000000000000000000000000000000000000000000000000000e00000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000048446ec278a0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000042503930100363d698649cd04f9692ab86e8365b227c1ee859daca92e438df0b2401ff60da7e4337b687a2435da0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c350e00114d00119d00120cbb971801f592a557aab426787c9b7d88080d35fd08d944dc3ca50dba5c17481f00127008b43abbae73fac6cf47fb25eac39157a90fca04c4d7868d14ba546bc81a2f2ed3afb94351c0b45d631328f82687b2abe2e0b2c0569d148f27220c6dcda126a861b00e06afb0734d019819e6c6ea0d01991fbda6b0df02710aca92e438df0b2401ff60da7e4337b687a2435da000000000022d473030f116ddee9f6b43ac78ba300ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff02012902013d03015187517c4566a9893cc07d91d95644aedd05d03f95e1dba8aff0c35001017b02012902017f0e0193019303011324856bc3f840f880f801001000000000000000000000000000000000000000000000000000000000000000f820f00360f803000b060f0000000000000000000000000000000000000000000000000000000000f860f8e0f00260f00160b62132e35a6c13ee1ee0f84dc5d40bad8d815206f02328f85af800f001200101a70301ab0301ad0301af0301b10301af0301d20301d40301ab0301ad0301d70301d90301d70301fa0301fc0301fe0301fa0201290e019301930301af0302010301d202012902020403021803021b03021d0301af03021d03021d03021f03021d0301ab02020403021ddc011f7a9aab21d19d853271c8c7dda1eccb1b1402020402028d0500000902f1ac0102aa70a082310102b102028d00020a0b00000000000000000000000000000000000000000000000000000000000302bb05006005004000030a0b03000e030d0c0102000401030000000000000000000000000000000000f003e5f003e80302e5050080030306030309050040050020022c0d9f01031e0500a003021d060301ad03021d6b175474e89094c44da98b954eedeac495271d0f02033202033202013d03015101017b02033202017f0500c0030113f00bb8f83c0101a70301ab0301ad0301af0301b10301af0301d20301d40301ab0301ad0301d70301d90301d70301fa0301fc0301fe0301fa0203320500c00301af0302010301d203021d02033203036103036403021d03021d03021d03021d03021f03021d0301ab03021d03021d020070020070070500e00100000172017b0000000000019601a7013d0000000222028d017f0600200269026c000003000002a102aa000000004002ae02b1028d00002002b502bb020407002002dc02e50000070020030c031e000000000003220332028d06002003460349000001000003490352000000000003520361013d000000036603cf017f06002003cf03d2000003000003d203d900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ac4c6e212a361c968f1725b4d055b47e63f80b75000000000000000000000000ac4c6e212a361c968f1725b4d055b47e63f80b75000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000000000000000000000000000000000000097718800000000000000000000000000000000000000000000000000000000000000e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002e45f3bd1c8000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da00000000000000000000000000000000000000000000000000000000009771880000000000000000000000001231deb6f5749ef6ce6943a275a1d3e7486f4eae000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb4800000000000000000000000000000000000000000000000000000000009710b4000000000000000000000000b36599414542f6630d411485d968f25592ca909100000000000000000000000000000000000000000000000000000000000000e000000000000000000000000000000000000000000000000000000000000001c401a8a270000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da0000000000000000000000000000000000000000000000000000000000977188000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb4800000000000000000000000000000000000000000000000000000000009771a10000000000000000000000001231deb6f5749ef6ce6943a275a1d3e7486f4eae000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000003e80000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000009e01a1e48f8ce9000101aca92e438df0b2401ff60da7e4337b687a2435da01ffff06000000000004444c5dc75cb358380d2e3de08a90a0b86991c6218b36c1d19d4a2e9eb0ce3606eb480000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000b36599414542f6630d411485d968f25592ca90919772089772080000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000017b3b940000000000000000000000002fc617e933a52713247ce25730f6695920b3befe000000000000000000000000cb4157e47fc47c3f4cde0ded4d4115f1abae9472000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000000000006afb086000000000000000000000000000000000000000000000000000000000000000417a071c1d2f0130a8a3b1515ef95ea501bd089dba704e614e2450ddb49d04d03616035faa686a230eb583ec1a3b8d16c1212934666352a75ba7c0e1657c05b83c1b00000000000000000000000000000000000000000000000000000000000000",
+      "from": "0xcb4157e47fc47c3f4cde0ded4d4115f1abae9472",
+      "chainId": 1,
+      "gasPrice": "0xcb203bd",
+      "gasLimit": "0x12c6bb"
+    },
+    "transactionId": "0x414176a2f5bb70e4cfb9f4e3b481433bcd05ce21ad4aa6992fe3d9c477638736"
+  }
+}

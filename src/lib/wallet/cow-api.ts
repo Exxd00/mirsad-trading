@@ -1,6 +1,7 @@
 import 'server-only';
 import { keccak256, stringToHex, type Address, type Hex } from 'viem';
 import { COW_SETTLEMENT, assertCowOrderUid, cowOrderDomain, normalizeCowAddress, normalizeCowOrder, normalizeCowUid, type CowOrder, type CowOrderChainId } from './cow-order';
+import { CowQuoteGateError, createCowQuoteGate, productionCowQuoteGate, type CowQuoteGate } from './cow-quote-gate';
 
 /** Read-only foundation. No method submits, signs, cancels or activates an order.
  * Schemas: cowprotocol/services c1e29b8b5135d5ca600b501a50b6cae4c203aa35.
@@ -10,10 +11,15 @@ const MAX_BYTES = 512 * 1024, MAX_UINT256 = (1n << 256n) - 1n;
 const MAX_VERSION_BYTES = 128;
 const NOT_FOUND = Symbol('cow_order_not_found');
 type Value = Record<string, unknown>;
-type ErrorCode = 'cow_request_invalid' | 'cow_response_invalid' | 'cow_identity_mismatch' | 'cow_read_timeout' | 'cow_read_unavailable';
+type ErrorCode = 'cow_request_invalid' | 'cow_response_invalid' | 'cow_identity_mismatch' | 'cow_read_timeout' | 'cow_read_unavailable' | 'cow_rate_limited';
 export class CowReadError extends Error {
-  constructor(public readonly code: ErrorCode) { super(code); this.name = 'CowReadError'; }
+  /** retryAt, when present, is absolute UTC milliseconds. */
+  constructor(public readonly code: ErrorCode, public readonly retryAt?: number) { super(code); this.name = 'CowReadError'; }
 }
+// An injected transport is a server-owned fixture seam. Reusing that transport
+// shares one isolated lane; it cannot poison unrelated fake transports. Normal
+// production clients never get a new lane by changing client/chain/clock.
+const transportQuoteGates = new WeakMap<typeof fetch, CowQuoteGate>();
 const fail = (code: ErrorCode): never => { throw new CowReadError(code); };
 const object = (raw: unknown): Value => raw !== null && typeof raw === 'object' && !Array.isArray(raw)
   ? raw as Value : fail('cow_response_invalid');
@@ -200,12 +206,17 @@ export class CowReadClient {
   private readonly fetcher: typeof fetch;
   private readonly clock: () => number;
   private readonly timeoutMs: number;
+  private readonly quoteGate: CowQuoteGate;
   constructor(options: { fetcher?: typeof fetch; clock?: () => number; timeoutMs?: number; chainId?: CowOrderChainId } = {}) {
     const chainId = options.chainId === undefined ? 1 : options.chainId;
     try { cowOrderDomain(chainId); } catch { throw new CowReadError('cow_request_invalid'); }
     this.chainId = chainId; this.prefix = chainId === 1 ? '/mainnet' : '/xdai';
     this.versionPath = this.prefix + '/api/v1/version';
     this.fetcher = options.fetcher ?? fetch; this.clock = options.clock ?? Date.now;
+    if (!options.fetcher) this.quoteGate = productionCowQuoteGate;
+    else { let gate = transportQuoteGates.get(options.fetcher);
+      if (!gate) { gate = createCowQuoteGate(options.clock); transportQuoteGates.set(options.fetcher, gate); }
+      this.quoteGate = gate; }
     this.timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(100, Math.min(options.timeoutMs!, 5000)) : 5000;
   }
   private now() { const now = this.clock(); if (!Number.isSafeInteger(now) || now < 0) return fail('cow_request_invalid'); return now; }
@@ -220,17 +231,21 @@ export class CowReadClient {
     if (payload === undefined ? !readable : path !== this.prefix + '/api/v1/quote') return fail('cow_request_invalid');
     const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new CowReadError('cow_read_timeout')); }, this.timeoutMs); });
-    const work = async () => {
+    const fetchAndRead = async (limited?: (retryAfter: string | null) => never) => {
       const response = await this.fetcher(COW_API_ORIGIN + path, { method: payload === undefined ? 'GET' : 'POST',
         headers: { Accept: path === this.versionPath ? 'text/plain' : 'application/json', ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }) },
         ...(payload === undefined ? {} : { body: JSON.stringify(payload) }), signal: controller.signal,
         cache: 'no-store', redirect: 'error', credentials: 'omit' });
+      if (controller.signal.aborted) { void response.body?.cancel().catch(() => undefined); return fail('cow_read_timeout'); }
+      if (limited && response.status === 429) { void response.body?.cancel().catch(() => undefined); return limited(response.headers.get('Retry-After')); }
       if (allowMissing && response.status === 404) { void response.body?.cancel().catch(() => undefined); return NOT_FOUND; }
       if (!response.ok) { void response.body?.cancel().catch(() => undefined); return fail('cow_read_unavailable'); }
       return path === this.versionPath ? versionText(response, controller.signal) : json(response, controller.signal);
     };
+    const work = () => payload === undefined ? fetchAndRead() : this.quoteGate.run(controller.signal, limited => fetchAndRead(limited));
     try { return await Promise.race([work(), deadline]); }
-    catch (error) { throw error instanceof CowReadError ? error : new CowReadError('cow_read_unavailable'); }
+    catch (error) { throw error instanceof CowReadError ? error : error instanceof CowQuoteGateError
+      ? new CowReadError(error.code, error.retryAt) : new CowReadError('cow_read_unavailable'); }
     finally { if (timer !== undefined) clearTimeout(timer); controller.abort(); }
   }
   async getVersion(): Promise<string> {

@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import { decodeFunctionData, encodeFunctionResult, parseAbi, toHex, zeroHash, type Hex } from 'viem';
-import quote from '../fixtures/lifi-gnosis-funding-quote.json';
+import legacyQuote from '../fixtures/lifi-gnosis-funding-quote.json';
+import preparedStep from '../fixtures/lifi-gnosis-reviewed-step-20261116.json';
 import runtime from '../fixtures/gnosis-funding-contract-runtime.json';
 import musdRuntime from '../fixtures/musd-reference-runtime.json';
 import gnosisRuntime from '../fixtures/cow-gnosis-runtime.json';
@@ -9,9 +10,19 @@ import policy from '../../src/lib/wallet/generated/gnosis-funding-contracts.json
 import { CONFIG } from '../../src/lib/execution/v1/model';
 import { GNOSIS_MARKET_PROVIDER, GNOSIS_REFERENCE_IDENTITY,gnosisHistoryPolicyEvidence, gnosisEurSeriesDigest, type GnosisEurStateSeries, type GnosisEurStateStore } from '../../src/lib/wallet/gnosis-market';
 
-export const FUNDING_NOW = Math.floor(Date.parse(quote.observedAt) / 1000);
-export const FUNDING_OWNER = quote.quote.action.fromAddress;
-export const FUNDING_QUOTE = quote.quote;
+export const FUNDING_NOW = Math.floor(Date.parse(preparedStep.receivedAt) / 1000);
+export const FUNDING_OWNER = preparedStep.response.action.fromAddress;
+export const FUNDING_QUOTE = preparedStep.response;
+export const LEGACY_FUNDING_QUOTE=legacyQuote.quote;
+export const LEGACY_FUNDING_NOW=Math.floor(Date.parse(legacyQuote.observedAt)/1000);
+/** Synthetic route metadata wrapper around recorded unmodified calldata.
+ * Actual route-provider response coverage uses its own captured fixture. */
+export function fundingRouteWrapper(rawQuote:unknown){
+  const q=structuredClone(rawQuote) as Record<string,any>,step=structuredClone(q);delete step.transactionRequest;
+  return {routes:[{id:q.id,fromChainId:q.action.fromChainId,toChainId:q.action.toChainId,fromAmount:q.action.fromAmount,
+    fromAddress:q.action.fromAddress,toAddress:q.action.toAddress,fromToken:q.action.fromToken,toToken:q.action.toToken,
+    toAmount:q.estimate.toAmount,toAmountMin:q.estimate.toAmountMin,steps:[step]}]};
+}
 export const fundingReadAbi = parseAbi(['function decimals() view returns(uint8)', 'function balanceOf(address) view returns(uint256)',
   'function allowance(address,address) view returns(uint256)', 'function coreAddress() view returns(address)', 'function weth() view returns(address)',
   'function paused() view returns(bool)', 'function internalCallers(address) view returns(bool)', 'function GAS_ZIP_ROUTER() view returns(address)',
@@ -39,7 +50,7 @@ export function fundingHistory(close = Math.floor(FUNDING_NOW / 900) * 900): Gno
 /** Real published runtime bytes plus explicitly synthetic current headers,
  * balances and public HTTP results. This is a parser/connector boundary test,
  * not a live quote, financial authority, transfer or bridge-arrival proof. */
-export function fundingReads(options: { quote?: unknown; now?: number } = {}) {
+export function fundingReads(options: { quote?: unknown; now?: number;routes?:unknown;step?:unknown } = {}) {
   let now = options.now ?? FUNDING_NOW;
   const state = { allowance: 0n, balance: 10807268n, used: false, receipt: null as Record<string, unknown> | null,
     tx: null as Record<string, unknown> | null, finalizedNumber: BigInt(runtime.block.number), destinationBalance: 0n,
@@ -52,7 +63,14 @@ export function fundingReads(options: { quote?: unknown; now?: number } = {}) {
   const seen: { url: string; call: Call }[] = [];
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     const url = String(input);
-    if (url.startsWith('https://li.quest/')) return Response.json(structuredClone(options.quote ?? FUNDING_QUOTE));
+    if (url==='https://li.quest/v1/advanced/routes') {
+      if(init?.method!=='POST')throw Error('Unexpected routes method');
+      return Response.json(structuredClone(options.routes??fundingRouteWrapper(options.quote??FUNDING_QUOTE)));
+    }
+    if(url==='https://li.quest/v1/advanced/stepTransaction'){
+      if(init?.method!=='POST')throw Error('Unexpected step method');
+      return Response.json(structuredClone(options.step??options.quote??FUNDING_QUOTE));
+    }
     if (!['https://ethereum-rpc.publicnode.com', 'https://eth.drpc.org', 'https://rpc.gnosischain.com', 'https://rpc.gnosis.gateway.fm'].includes(url)) throw new Error('Unexpected funding provider');
     const calls = JSON.parse(String(init?.body)) as (Call & { id: number })[];
     if (calls.length > (url === 'https://eth.drpc.org' ? 3 : 16)) throw new Error('Provider batch cap exceeded');
