@@ -24,6 +24,7 @@ export interface VenuePort {
   entryPlan?: EntryPlanner;
   lookup(key: string, lease: Lease): Promise<{ order: SourceOrder | null; authoritative: boolean }>;
   ensureProtection(position: Position, lease: Lease): Promise<void>;
+  observeProvisionalProtection?(account: Account, lease: Lease): Promise<{ watched: number; promoted: number; errors: { symbol?: string; reason: string }[] }>;
   prepareExit(intent: Extract<Intent, { side: 'sell' }>, lease: Lease): Promise<{ ready: boolean; quantity: string }>;
   submit(intent: Intent, lease: Lease): Promise<SourceOrder>;
   armCancellation(key: string, expiresAt: number): Promise<void>;

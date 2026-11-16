@@ -92,6 +92,54 @@ beforeEach(() => { vi.stubGlobal('fetch', vi.fn(() => { throw new Error('No netw
 afterEach(() => { expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('CoW SourceClient canonical evidence composition', () => {
+  it('exposes receipt-verified mined fills solely as shadow evidence at their completed historical FX minute', async () => {
+    const f = fixture(), { t } = f.fill();
+    f.inspection.finalizedTrades = []; f.inspection.minedTrades = [t];
+    f.inspection.canonicalHead = f.snapshot.latest; f.inspection.finalizedHead = { ...block, number: '99', timestamp: NOW - 30 };
+    f.inspection.pendingEvidence = true; f.inspection.unconfirmedSellAmount = t.sellAmount; f.inspection.unconfirmedBuyAmount = t.buyAmount;
+    vi.mocked(f.options.quotes.conversionAt).mockResolvedValue('1.1'); // Historical fill rate differs from frozen intent 1.2.
+    const o = await f.client.getOrder(uid);
+    expect(o).toMatchObject({ filledQuantity: '0', finality: { status: 'mined', unconfirmedFilledQuantity: '1' },
+      protectionEvidence: { scope: 'canonical-entry-fills-protection-only', orderId: uid, owner,
+        fills: [{ finality: 'mined', block: { hash: t.block.hash }, baseRaw: t.buyAmount, quoteRaw: t.sellAmount,
+          quantity: '1', priceEur: '55', fx: { currency: 'USDC', eurPerUnit: '1.1', minuteAt: Math.floor(t.block.timestamp / 60) * 60 } }] } });
+    expect(o).not.toHaveProperty('averageFillPrice'); expect(o).not.toHaveProperty('fee');
+    expect(await f.client.getFillsForOrders([o])).toMatchObject({ fills: [] });
+    expect(f.options.quotes.conversionAt).toHaveBeenCalledWith('USDC', t.block.timestamp);
+    expect(f.options.execution.submitOrder).not.toHaveBeenCalled(); expect(f.options.execution.cancelOrder).not.toHaveBeenCalled();
+  });
+  it('leaves finalized quantities separate in mixed evidence and labels unavailable provisional FX instead of fabricating a price', async () => {
+    const f = fixture(), { t } = f.fill();
+    f.inspection.minedTrades = [{ ...structuredClone(t), transactionHash: h('e'), logIndex: 8,
+      block: { ...f.snapshot.latest, hash: h('f') } }];
+    f.inspection.canonicalHead = { ...f.snapshot.latest, hash: h('f') }; f.inspection.finalizedHead = block;
+    f.inspection.pendingEvidence = true; f.inspection.unconfirmedBuyAmount = t.buyAmount; f.inspection.unconfirmedSellAmount = t.sellAmount;
+    expect(await f.client.getOrder(uid)).toMatchObject({ filledQuantity: '1', protectionEvidence: { fills: [
+      { finality: 'finalized', quantity: '1' }, { finality: 'mined', quantity: '1' }] } });
+    vi.mocked(f.options.quotes.conversionAt).mockImplementation(async (_currency, at) => {
+      if (at === NOW) throw new Error('private-provider-body'); return '1.2';
+    });
+    const unknown = await f.client.getOrder(uid);
+    expect(unknown).toMatchObject({ filledQuantity: '1', averageFillPrice: '60', protectionEvidence: null });
+    expect(JSON.stringify(unknown)).not.toContain('private-provider-body');
+  });
+  it('bounds a hung provisional FX read and ignores its late result before a fresh monitoring retry', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture(), { t } = f.fill(); f.inspection.finalizedTrades = []; f.inspection.minedTrades = [t];
+      f.inspection.canonicalHead = f.snapshot.latest; f.inspection.finalizedHead = { ...block, number: '99', timestamp: NOW - 30 };
+      f.inspection.pendingEvidence = true; f.inspection.unconfirmedBuyAmount = t.buyAmount; f.inspection.unconfirmedSellAmount = t.sellAmount;
+      let finish!: (rate: string) => void;
+      vi.mocked(f.options.quotes.conversionAt).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+      const pending = f.client.getOrder(uid);
+      await vi.advanceTimersByTimeAsync(20001);
+      expect(await pending).toMatchObject({ filledQuantity: '0', protectionEvidence: null });
+      finish('999'); await Promise.resolve();
+      vi.mocked(f.options.quotes.conversionAt).mockResolvedValue('1.2');
+      expect(await f.client.getOrder(uid)).toMatchObject({ filledQuantity: '0', protectionEvidence: { fills: [{ priceEur: '60' }] } });
+      expect(f.options.execution.submitOrder).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
   it('keeps finalized fill time stable while observation time advances and indexed costs are unavailable', async () => {
     const f = fixture(); f.fill(); f.inspection.cancellation = 'finalized';
     vi.mocked(f.options.api.getVersion).mockRejectedValue(new Error('isolated unavailable index'));

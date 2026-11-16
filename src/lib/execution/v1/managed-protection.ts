@@ -78,6 +78,13 @@ export async function protectionCycle(port: VenuePort, journal: Journal, clock =
     for (const decision of await journal.unresolved(lease)) heartbeat.errors.push({ symbol: decision.intent.symbol, reason: 'order_outcome_unknown' });
     let account = await port.account({ protectionOnly: true });
     if (account.id !== port.accountId || !fresh(account.sourceAt, clock(), CONFIG.accountMaxAgeSeconds)) throw new Error('protection_account_stale');
+    if (port.observeProvisionalProtection) {
+      try {
+        const observed = await port.observeProvisionalProtection(account, lease);
+        heartbeat.provisionalPositions = observed.watched; heartbeat.errors.push(...observed.errors);
+        if (observed.promoted) account = await port.account({ protectionOnly: true });
+      } catch (error) { heartbeat.errors.push({ reason: reasonFor(error) }); }
+    }
     if (account.orders.some(o => o.finality && o.finality.status !== 'finalized')) {
       heartbeat.errors.push({ reason: 'wallet_order_finality_pending' });
     }

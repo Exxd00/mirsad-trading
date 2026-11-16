@@ -39,6 +39,8 @@ export type CowFinalizedTrade = { uid: Hex; owner: Address; sellToken: Address; 
 export type CowFinalizedArchive = { version: 1; uid: Hex; through: CowBlock; trades: CowFinalizedTrade[] };
 export type CowOrderInspection = { record: CowOrderRecord; transactions: { phase: CowTxPhase; state: CowTxState }[];
   pendingEvidence: boolean; unconfirmedSellAmount: string; unconfirmedBuyAmount: string;
+  /** Canonical receipt evidence for monitoring only. Never spendable or PnL. */
+  minedTrades?: CowFinalizedTrade[]; canonicalHead?: CowBlock; finalizedHead?: CowBlock;
   finalizedTrades: CowFinalizedTrade[]; cancellation: 'not-requested' | 'pending' | 'finalized' | 'absent' | 'owner-required';
   actualGasWei: string; blocker: string | null };
 export type CowSubmitContext = { lease: Lease; intent: Intent };
@@ -54,6 +56,7 @@ export interface CowExecutionRpc {
   transactionState(tx: CowPreparedTx): Promise<CowTxState>;
   orderProof(record: CowOrderRecord): Promise<{ trades: CowFinalizedTrade[]; unconfirmedSellAmount: string;
     unconfirmedBuyAmount: string; presigned: boolean; invalidated: boolean; expired: boolean; finalizedHead: CowBlock;
+    minedTrades?: CowFinalizedTrade[]; canonicalHead?: CowBlock;
     archive?: CowFinalizedArchive }>;
 }
 export interface CowExecutionApi {

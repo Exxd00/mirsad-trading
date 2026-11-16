@@ -12,7 +12,18 @@ export interface ReportedOrder {
   feeRecognition?: { method: 'cow-api-total-at-finalized-last-fill-v1'; token: string; rawAmount: string;
     recognitionAt: number; eurPerToken: string; sourceId: 'coinbase-exchange-completed-1m-eur-v1' };
   finality?: { status: 'pending' | 'mined' | 'finalized'; unconfirmedFilledQuantity: string; transactionHashes: string[] };
+  protectionEvidence?: EntryProtectionEvidence | null;
 }
+export type ProtectionBlock = { number: string; hash: string; timestamp: number };
+export type CanonicalProtectionFill = { id: string; transactionHash: string; logIndex: number; block: ProtectionBlock;
+  finality: 'mined' | 'finalized'; baseRaw: string; quoteRaw: string; quantity: string; priceEur: string;
+  fx: { currency: string; eurPerUnit: string; minuteAt: number; sourceId: 'coinbase-exchange-completed-1m-eur-v1' } };
+/** Monitoring evidence only. It never contributes to filledQuantity, balances,
+ * reservations, fees or PnL until the ordinary finalized source path confirms. */
+export type EntryProtectionEvidence = { version: 1; scope: 'canonical-entry-fills-protection-only'; orderId: string;
+  clientOrderId: string; accountId: string; symbol: string; chainId: number; owner: string;
+  baseToken: string; quoteToken: string; baseDecimals: number; quoteDecimals: number; sourceAt: number;
+  canonicalHead: ProtectionBlock; finalizedHead: ProtectionBlock; fills: CanonicalProtectionFill[] };
 export interface SourceBalance {
   accountId: string; currency: string; available: string; reserved: string;
   total: string; staked?: string; observedAt: string;

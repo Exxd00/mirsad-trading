@@ -19,6 +19,7 @@ import { refreshSourceAccounting } from './account-evidence';
 import { reconcileReportFills } from './report-evidence';
 import { assertFundingEvidence } from './readiness';
 import type { EntryPlanner } from './runner';
+import { observeProvisionalProtection } from './provisional-protection';
 
 export type WalletVenueSource = {
   entryPlan?: EntryPlanner;
@@ -62,6 +63,7 @@ export function sourceOrder(order: ReportedOrder): SourceOrder {
       ? decimal(baseFee).mul(order.averageFillPrice).toFixed() : null,
     ...(order.feeIncludedInPriceEur !== undefined ? { feeIncludedInPriceEur: order.feeIncludedInPriceEur } : {}),
     ...(order.feeRecognition ? { feeRecognition: order.feeRecognition } : {}),
+    ...(order.protectionEvidence !== undefined ? { protectionEvidence: order.protectionEvidence } : {}),
     ...(baseFee !== undefined ? { baseFeeQuantity: baseFee } : {}), ...(order.finality ? { finality: order.finality } : {}) };
 }
 function ownedOrder(order: ReportedOrder, decision: DecisionRecord): SourceOrder {
@@ -445,6 +447,48 @@ export class ConnectedWalletVenue implements CancellationPort {
     if (!entry || !instrument) throw new Error('protection_source_missing');
     const old = (await this.source.journal.protections(this.accountId)).find(p => p.entryKey === entry.clientKey) ?? null;
     await this.source.journal.saveProtection(lease, protectionRecord(current, entry, instrument, old, this.clock()));
+  }
+  async observeProvisionalProtection(account: Account, lease: Lease) {
+    const result = { watched: 0, promoted: 0, errors: [] as { symbol?: string; reason: string }[] };
+    const journal = this.source.journal;
+    if (!journal || !this.source.binding) return result;
+    this.validateLease(lease);
+    const decisions = await journal.accountDecisions(this.accountId), protections = await journal.protections(this.accountId);
+    const orders = account.orders.filter(o => o.managed && o.side === 'buy' && o.protectionEvidence !== undefined
+      && protections.find(p => p.entryKey === o.clientKey)?.status !== 'closed');
+    if (!orders.length) return result;
+    if (!journal.provisionalProtections || !journal.saveProvisionalProtection || orders.length > 12) throw new Error('provisional_protection_unavailable');
+    const saved = await journal.provisionalProtections(this.accountId);
+    const instruments = await this.instruments();
+    for (const order of orders) {
+      await journal.renew(lease);
+      try {
+        if (order.protectionEvidence === null) throw new Error('provisional_protection_evidence_unavailable');
+        const decision = decisions.find(d => d.key === order.clientKey), instrument = instruments.find(i => i.symbol === order.symbol);
+        if (!decision || !instrument) throw new Error('provisional_protection_evidence_invalid');
+        const old = saved.find(p => p.entryKey === order.clientKey) ?? null;
+        let quote: Quote | null = null;
+        try { quote = (await this.quotes([order.symbol]))[0] ?? null; } catch { /* retry monitoring; never invent a bid */ }
+        const observed = observeProvisionalProtection(order.protectionEvidence!, order, decision, this.source.binding, instrument, old, quote, this.clock());
+        await journal.saveProvisionalProtection(lease, observed.value);
+        if (observed.value.levels) result.watched++;
+        if (observed.quoteIssue) result.errors.push({ symbol: order.symbol, reason: observed.quoteIssue });
+        if (observed.promote) {
+          const position = account.positions.find(p => p.id === protectionPositionId(order.clientKey) && p.managed);
+          if (!position) throw new Error('provisional_protection_final_position_missing');
+          const existing = protections.find(p => p.entryKey === order.clientKey) ?? null;
+          if (!existing?.trigger) {
+            const record = protectionRecord(position, order, instrument, existing, this.clock()), levels = observed.value.levels!, trigger = observed.value.trigger!;
+            await journal.saveProtection(lease, { ...record, stop: D.max(record.stop, levels.stop).toFixed(),
+              originalStop: existing?.originalStop ?? levels.originalStop, status: 'triggered',
+              trigger: { reason: trigger.reason, at: trigger.at, bid: trigger.bid } });
+            result.promoted++;
+          }
+          await journal.saveProvisionalProtection(lease, { ...observed.value, status: 'promoted' });
+        }
+      } catch (error) { result.errors.push({ symbol: order.symbol, reason: executionReason(error, 'provisional_protection_unavailable') }); }
+    }
+    return result;
   }
   async prepareExit(intent?: SellIntent, lease?: Lease) {
     if (!intent || !lease || !this.source.journal) return { ready: false, quantity: '0' };

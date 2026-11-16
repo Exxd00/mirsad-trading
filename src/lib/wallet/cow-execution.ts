@@ -278,6 +278,7 @@ export class CowExecution {
       : record.lastError === 'owner_cancellation_required' || record.lastError === 'cow_authority_unavailable' ? 'owner-required' as const : 'pending' as const : 'not-requested' as const;
     return { record, transactions, pendingEvidence: pending, unconfirmedSellAmount: proof.unconfirmedSellAmount,
       unconfirmedBuyAmount: proof.unconfirmedBuyAmount, finalizedTrades: proof.trades, cancellation, actualGasWei: actualGas.toString(),
+      ...(proof.minedTrades && proof.canonicalHead ? { minedTrades: proof.minedTrades, canonicalHead: proof.canonicalHead, finalizedHead: proof.finalizedHead } : {}),
       blocker: pending ? 'cow_pending_finality' : cancellation === 'owner-required' ? 'owner_cancellation_required' : terminal ? null : record.lastError };
   }
 }
