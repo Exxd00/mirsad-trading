@@ -1,10 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { encodeFunctionData, erc20Abi, keccak256, stringToHex, type Hex } from 'viem';
 import { assertGnosisFundingReservationFresh, gnosisFundingUIDigest, parseGnosisFundingAuditUI, parseGnosisFundingAttemptResultUI,
   parseGnosisFundingReservationUI } from '../src/lib/wallet/gnosis-funding-ui';
 import { fundingDigest } from '../src/lib/wallet/gnosis-funding-service';
 import { emptyFundingFence, fundingAt, fundingOwner, fundingReservation, fundingResolved } from './fixtures/gnosis-funding-ui';
 import type { GnosisFundingReservation } from '../src/lib/wallet/gnosis-funding-attempts';
+import { FundingReviewAvailability } from '../src/components/WalletFundingReview';
 
 function rehash(r: GnosisFundingReservation) {
   const { digest: _r, ...review } = r.review; r.review.digest = keccak256(stringToHex(JSON.stringify(review)));
@@ -14,6 +17,19 @@ function rehash(r: GnosisFundingReservation) {
     proofDigest: a.proofDigest, issuedAt: a.issuedAt, expiresAt: a.expiresAt, review: r.review, freshProof: r.freshProof, transaction: r.transaction });
 }
 describe('owner funding browser DTO validation (recorded quote, synthetic proof only)', () => {
+  it('explains a missing or expired review without rendering financial controls or issuing a request',async()=>{
+    const fetcher=vi.spyOn(globalThis,'fetch').mockImplementation(()=>{throw new Error('No automatic request from availability messaging');});
+    try{
+      const r=await fundingReservation();
+      const missing=renderToStaticMarkup(createElement(FundingReviewAvailability,{audit:{review:null,status:'blocked'},fresh:false}));
+      expect(missing).toContain('لم يتوفر عرض تمويل صالح');expect(missing).toContain('لا يظهر مربع مراجعة المبلغ والرسوم');
+      const expired=renderToStaticMarkup(createElement(FundingReviewAvailability,{audit:{review:r.review,status:'reviewable'},fresh:false}));
+      expect(expired).toContain('انتهت صلاحية عرض التمويل');expect(expired).toContain('معطّلة');
+      expect(missing+expired).not.toMatch(/<(?:input|button)\b/);
+      expect(renderToStaticMarkup(createElement(FundingReviewAvailability,{audit:{review:r.review,status:'reviewable'},fresh:true}))).toBe('');
+      expect(fetcher).not.toHaveBeenCalled();
+    }finally{fetcher.mockRestore();}
+  });
   it.each(['approve', 'fund'] as const)('accepts a server-compatible %s snapshot and strips outer CSRF metadata', async phase => {
     const r = await fundingReservation(phase), parsed = parseGnosisFundingReservationUI({ ...r, csrfToken: 'never-forwarded' }, fundingOwner, phase);
     expect(parsed).toEqual(r); expect(parsed).not.toHaveProperty('csrfToken');
@@ -67,6 +83,10 @@ describe('owner funding browser DTO validation (recorded quote, synthetic proof 
     expect(parseGnosisFundingAuditUI({ ...audit, fence: { ...audit.fence, blocked: true } }, fundingOwner)).toBeNull();
     expect(parseGnosisFundingAuditUI({ ...audit, status: 'blocked', expiresAt: fundingAt, freshProof: null, ownerReviewAllowed: false,
       blockers: ['wallet_gnosis_funding_history_required'] }, fundingOwner)?.status).toBe('blocked');
+    const failed={...audit,status:'blocked',expiresAt:fundingAt,review:null,freshProof:null,ownerReviewAllowed:false,
+      blockers:['wallet_gnosis_funding_route_unavailable','wallet_gnosis_funding_route_step_id_mismatch']};
+    expect(parseGnosisFundingAuditUI(failed,fundingOwner)?.blockers).toEqual(failed.blockers);
+    expect(parseGnosisFundingAuditUI({...failed,ownerReviewAllowed:true},fundingOwner)).toBeNull();
   });
   it('requires canonical receipt resolution and coherent durable fences', async () => {
     const r = await fundingReservation(), done = fundingResolved(r);

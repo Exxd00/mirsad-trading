@@ -65,7 +65,7 @@ describe('actual funding parser and fresh two-reader public evidence', () => {
   it('fails closed if the provider ignores the fixed reviewed-exchange filter',async()=>{
     const f=fundingReads({quote:fly.response,now:Math.floor(Date.parse(fly.receivedAt)/1000)});
     const {audit}=await prepareGnosisFundingReview(FUNDING_OWNER,f.dependencies);
-    expect(audit).toMatchObject({status:'blocked',blockers:['wallet_gnosis_funding_route_unavailable'],review:null,ownerReviewAllowed:false});
+    expect(audit).toMatchObject({status:'blocked',blockers:['wallet_gnosis_funding_route_unavailable','wallet_gnosis_funding_route_selection_no_match'],review:null,ownerReviewAllowed:false});
     expect(f.store.load).not.toHaveBeenCalled();expect(f.seen).toEqual([]);
   });
   it('uses exactly the fixed routes POST and one unchanged Step POST, with no quote GET or financial RPC', async () => {

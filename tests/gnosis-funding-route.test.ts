@@ -1,6 +1,6 @@
 import {describe,expect,it,vi}from'vitest';
 import {decodeFunctionData,encodeFunctionData,type Abi,type Hex}from'viem';
-import {selectGnosisFundingStep,assertGnosisFundingStepResult}from'../src/lib/wallet/gnosis-funding-route';
+import {selectGnosisFundingStep,assertGnosisFundingStepResult,GnosisFundingRouteError,type GnosisFundingRouteReason}from'../src/lib/wallet/gnosis-funding-route';
 import {prepareGnosisFundingReview}from'../src/lib/wallet/gnosis-funding-service';
 import policy from'../src/lib/wallet/generated/gnosis-funding-contracts.json';
 import routes from'./fixtures/lifi-gnosis-reviewed-routes-20261116.json';
@@ -12,6 +12,11 @@ import{fundingReads,fundingRouteWrapper,FUNDING_OWNER,FUNDING_NOW}from'./helpers
 // external-port fixtures, never live assets, permission or bridge-arrival proof.
 const dataCalls=(f:ReturnType<typeof fundingReads>)=>f.fetcher.mock.calls.filter(([u])=>String(u).startsWith('https://li.quest/'));
 describe('bounded USDC route selection before the existing calldata verifier',()=>{
+  it('keeps the compatible error code and exposes only a finite reason even for an untyped caller',()=>{
+    const e=new GnosisFundingRouteError('private-provider-detail' as GnosisFundingRouteReason);
+    expect(e).toMatchObject({code:'wallet_gnosis_funding_route_unavailable',reason:'selection_shape'});
+    expect(e.message).toBe('wallet_gnosis_funding_route_unavailable');expect(JSON.stringify(e)).not.toContain('private-provider-detail');
+  });
   it('selects the actual single USDC Step unchanged and accepts its matching unsigned response identity',()=>{
     const selected=selectGnosisFundingStep(routes.response,FUNDING_OWNER);
     expect(JSON.parse(selected.body)).toEqual(built.requestStep);expect(selected.id).toBe(built.response.id);
@@ -37,7 +42,8 @@ describe('bounded USDC route selection before the existing calldata verifier',()
       if(fault==='gas-delta')input.routes[0].steps[0].includedSteps[1].estimate.toAmount='9924999';
       if(fault==='oversized-step')Object.assign(input.routes[0].steps[0],{padding:'x'.repeat(131073)});
       const f=fundingReads({routes:input});const {audit}=await prepareGnosisFundingReview(FUNDING_OWNER,f.dependencies);
-      expect(audit).toMatchObject({status:'blocked',blockers:['wallet_gnosis_funding_route_unavailable'],ownerReviewAllowed:false,review:null});
+      const reason=fault==='none'?'selection_empty':fault==='too-many'?'selection_shape':fault==='oversized-step'?'selection_oversize':'selection_no_match';
+      expect(audit).toMatchObject({status:'blocked',blockers:['wallet_gnosis_funding_route_unavailable',`wallet_gnosis_funding_route_${reason}`],ownerReviewAllowed:false,review:null});
       expect(dataCalls(f)).toHaveLength(1);expect(f.seen).toEqual([]);expect(f.store.load).not.toHaveBeenCalled();
     });
   it.each(['id','owner','amount','native-asset','router','oversized']as const)('rejects unsigned builder %s drift without another candidate or financial RPC',async fault=>{
@@ -54,6 +60,10 @@ describe('bounded USDC route selection before the existing calldata verifier',()
     if(fault==='oversized')Object.assign(step,{padding:'x'.repeat(131073)});
     const f=fundingReads({step});const {audit}=await prepareGnosisFundingReview(FUNDING_OWNER,f.dependencies);
     expect(audit.status).not.toBe('reviewable');expect(audit.freshProof).toBeNull();expect(audit.ownerReviewAllowed).toBe(false);
+    if(fault==='id'||fault==='owner'||fault==='amount'||fault==='native-asset'){
+      const reason=fault==='id'?'step_id_mismatch':fault==='native-asset'?'step_source_asset_mismatch':'step_profile_mismatch';
+      expect(audit.blockers).toEqual(['wallet_gnosis_funding_route_unavailable',`wallet_gnosis_funding_route_${reason}`]);
+    }else expect(audit.blockers).toEqual([fault==='router'?'wallet_gnosis_funding_quote_invalid':'wallet_gnosis_funding_response_invalid']);
     expect(dataCalls(f)).toHaveLength(2);expect(f.seen).toEqual([]);expect(f.store.load).not.toHaveBeenCalled();
   });
   it('enforces the routes response byte ceiling before selecting any candidate',async()=>{
