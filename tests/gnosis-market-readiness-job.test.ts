@@ -35,7 +35,7 @@ describe('explicitly enabled, durable bounded source warmup', () => {
   });
   it('persists only its private job, uses the same 300s cadence, and resumes through a new host adapter', async () => {
     const f = fixture(), first = await f.job.start();
-    expect(first).toMatchObject({ job: { state: 'waiting', attempts: 1, nextAt: NOW + 300, expiresAt: NOW + 21600, lastTrigger: 'manual' },
+    expect(first).toMatchObject({ job: { state: 'waiting', attempts: 1, maxAttempts: 144, nextAt: NOW + 300, expiresAt: NOW + 43200, lastTrigger: 'manual' },
       report: { createdExecutionState: false, financialReadiness: 'not-certified' } });
     const other = createGnosisMarketReadinessJob(f.deps); expect(await other.read()).toEqual(first);
     expect(await other.resume()).toEqual(first); expect(await other.start()).toEqual(first); expect(f.audit).toHaveBeenCalledTimes(1);
@@ -67,17 +67,17 @@ describe('explicitly enabled, durable bounded source warmup', () => {
     f.setNow(NOW + 300); expect(await f.job.resume()).toEqual({ ...complete, currentFresh: false, reportFresh: false }); expect(f.audit).toHaveBeenCalledTimes(1);
     f.audit.mockResolvedValue(report(NOW + 300, true)); await f.job.start(); expect(f.audit).toHaveBeenCalledTimes(2);
   });
-  it('expires after six hours and does not start work in the final 65s of its lifetime', async () => {
-    const f = fixture(); await f.job.start(); f.setNow(NOW + 21600 - 64);
-    expect(await f.job.resume()).toMatchObject({ job: { state: 'waiting', attempts: 1, nextAt: NOW + 21600 } });
-    expect(f.audit).toHaveBeenCalledTimes(1); f.setNow(NOW + 21600);
+  it('expires after twelve hours and does not start work in the final 65s of its lifetime', async () => {
+    const f = fixture(); await f.job.start(); f.setNow(NOW + 43200 - 64);
+    expect(await f.job.resume()).toMatchObject({ job: { state: 'waiting', attempts: 1, nextAt: NOW + 43200 } });
+    expect(f.audit).toHaveBeenCalledTimes(1); f.setNow(NOW + 43200);
     expect(await f.job.resume()).toMatchObject({ job: { state: 'expired' } }); expect(f.audit).toHaveBeenCalledTimes(1);
   });
-  it('caps a continuing unavailable source at 72 attempts without changing the cadence or financial state', async () => {
+  it('caps a continuing unavailable source at 144 attempts without changing the cadence or financial state', async () => {
     const f = fixture(); await f.job.start();
-    for (let attempt = 1; attempt < 72; attempt++) { f.setNow(NOW + attempt * 300); await f.job.resume(); }
-    expect(await f.job.read()).toMatchObject({ job: { state: 'exhausted', attempts: 72 } });
-    expect(f.audit).toHaveBeenCalledTimes(72); await f.job.resume(); expect(f.audit).toHaveBeenCalledTimes(72);
+    for (let attempt = 1; attempt < 144; attempt++) { f.setNow(NOW + attempt * 300); await f.job.resume(); }
+    expect(await f.job.read()).toMatchObject({ job: { state: 'exhausted', attempts: 144, maxAttempts: 144 } });
+    expect(f.audit).toHaveBeenCalledTimes(144); await f.job.resume(); expect(f.audit).toHaveBeenCalledTimes(144);
     expect((await query('SELECT key FROM app_settings')).rows).toEqual([{ key: KEY }]);
   });
   it('preserves the previous report on transient failure and sanitizes exceptions before persistence', async () => {
@@ -118,12 +118,12 @@ describe('explicitly enabled, durable bounded source warmup', () => {
   });
   it('keeps the final allowed attempt visibly running until it settles', async () => {
     const f = fixture(); await f.job.start();
-    await query("UPDATE app_settings SET value=jsonb_set(value,'{attempts}','71'::jsonb) WHERE key=$1", [KEY]);
+    await query("UPDATE app_settings SET value=jsonb_set(value,'{attempts}','143'::jsonb) WHERE key=$1", [KEY]);
     f.setNow(NOW + 300); let finish!: (r: GnosisMarketReadiness) => void;
     f.audit.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })); const last = f.job.resume();
     await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
-    expect(await f.job.read()).toMatchObject({ job: { state: 'running', attempts: 72 } });
-    finish(report(NOW + 300)); expect(await last).toMatchObject({ job: { state: 'exhausted', attempts: 72 } });
+    expect(await f.job.read()).toMatchObject({ job: { state: 'running', attempts: 144 } });
+    finish(report(NOW + 300)); expect(await last).toMatchObject({ job: { state: 'exhausted', attempts: 144 } });
   });
   it('persists a provider cooldown beyond 300s and honors it after a host cold start', async () => {
     const f = fixture(); f.audit.mockResolvedValue({ ...report(NOW), retryAt: NOW + 1800, errors: ['gnosis_market_provider_cooldown'] });
@@ -133,9 +133,9 @@ describe('explicitly enabled, durable bounded source warmup', () => {
     f.setNow(NOW + 1800); f.audit.mockResolvedValue(report(NOW + 1800));
     expect(await restarted.resume()).toMatchObject({ job: { attempts: 2, nextAt: NOW + 2100 } });
   });
-  it('outlives the six-hour job on invalid provider retry evidence and rejects absurd persisted retry values', async () => {
+  it('outlives the twelve-hour job on invalid provider retry evidence and rejects absurd persisted retry values', async () => {
     const f = fixture(); f.audit.mockResolvedValue({ ...report(NOW), retryAt: 253402300799, errors: ['wallet_market_readiness_retry_invalid'] });
-    await f.job.start(); f.setNow(NOW + 21600);
+    await f.job.start(); f.setNow(NOW + 43200);
     expect(await createGnosisMarketReadinessJob(f.deps).resume()).toMatchObject({ job: { state: 'expired', nextAt: 253402300799 } });
     await f.job.start(); expect(f.audit).toHaveBeenCalledTimes(1);
     await query("UPDATE app_settings SET value=jsonb_set(value,'{nextAt}',to_jsonb($2::numeric)) WHERE key=$1", [KEY, Number.MAX_SAFE_INTEGER]);
@@ -146,5 +146,56 @@ describe('explicitly enabled, durable bounded source warmup', () => {
     await f.job.start(); f.setNow(NOW + 86400);
     expect(await createGnosisMarketReadinessJob(f.deps).start()).toMatchObject({ job: { state: 'expired', nextAt: NOW + 172800 } });
     expect(f.audit).toHaveBeenCalledTimes(1);
+  });
+  it('keeps legacy policy on GET/scheduler and upgrades only an explicit POST without resetting progress or cooldown', async () => {
+    const f = fixture(); f.audit.mockResolvedValue({ ...report(NOW), retryAt: NOW + 1800, errors: ['gnosis_market_provider_cooldown'] }); await f.job.start();
+    await query("UPDATE app_settings SET value=jsonb_set(jsonb_set(jsonb_set(value,'{version}','1'::jsonb),'{expiresAt}',to_jsonb($2::bigint)),'{attempts}','72'::jsonb) WHERE key=$1", [KEY, NOW + 21600]);
+    const before = (await query<{ value: Record<string, unknown> }>('SELECT value FROM app_settings WHERE key=$1', [KEY])).rows[0].value;
+    expect(await f.job.read()).toMatchObject({ job: { state: 'exhausted', maxAttempts: 72, attempts: 72, expiresAt: NOW + 21600 } });
+    await createGnosisMarketReadinessJob(f.deps).resume(); expect(f.audit).toHaveBeenCalledTimes(1);
+    expect((await query<{ value: unknown }>('SELECT value FROM app_settings WHERE key=$1', [KEY])).rows[0].value).toEqual(before);
+    f.setNow(NOW + 300); const upgraded = await createGnosisMarketReadinessJob(f.deps).start();
+    expect(upgraded).toMatchObject({ job: { state: 'waiting', maxAttempts: 144, attempts: 72, expiresAt: NOW + 43200, nextAt: NOW + 1800 } });
+    const after = (await query<{ value: unknown }>('SELECT value FROM app_settings WHERE key=$1', [KEY])).rows[0].value;
+    expect(after).toEqual({ ...before, version: 2, expiresAt: NOW + 43200 }); expect(f.audit).toHaveBeenCalledTimes(1);
+    f.setNow(NOW + 1800); f.audit.mockResolvedValue(report(NOW + 1800));
+    expect(await createGnosisMarketReadinessJob(f.deps).resume()).toMatchObject({ job: { attempts: 73, maxAttempts: 144 } });
+    expect((await query('SELECT key FROM app_settings')).rows).toEqual([{ key: KEY }]);
+  });
+  it('preserves a live legacy lease during explicit upgrade and lets its current owner commit into version2', async () => {
+    const f = fixture(); let finish!: (r: GnosisMarketReadiness) => void;
+    f.audit.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })); const work = f.job.start();
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    await query("UPDATE app_settings SET value=jsonb_set(jsonb_set(value,'{version}','1'::jsonb),'{expiresAt}',to_jsonb($2::bigint)) WHERE key=$1", [KEY, NOW + 21600]);
+    const before = (await query<{ value: Record<string, unknown> }>('SELECT value FROM app_settings WHERE key=$1', [KEY])).rows[0].value;
+    expect(await f.job.start()).toMatchObject({ job: { state: 'running', maxAttempts: 144, attempts: 1 } });
+    expect((await query<{ value: unknown }>('SELECT value FROM app_settings WHERE key=$1', [KEY])).rows[0].value).toEqual({ ...before, version: 2, expiresAt: NOW + 43200 });
+    finish(report(NOW)); await work;
+    expect((await query<{ value: { version: number; lease: unknown } }>('SELECT value FROM app_settings WHERE key=$1', [KEY])).rows[0].value).toMatchObject({ version: 2, lease: null });
+    expect(f.audit).toHaveBeenCalledTimes(1);
+  });
+  it('does not silently extend expired legacy work on cron, but an owner POST can resume its original id within twelve hours', async () => {
+    const f = fixture(); await f.job.start();
+    await query("UPDATE app_settings SET value=jsonb_set(jsonb_set(value,'{version}','1'::jsonb),'{expiresAt}',to_jsonb($2::bigint)) WHERE key=$1", [KEY, NOW + 21600]);
+    const id = (await query<{ value: { id: string } }>('SELECT value FROM app_settings WHERE key=$1', [KEY])).rows[0].value.id;
+    f.setNow(NOW + 21601); expect(await f.job.resume()).toMatchObject({ job: { state: 'expired', maxAttempts: 72 } });
+    expect(f.audit).toHaveBeenCalledTimes(1); f.audit.mockResolvedValue(report(NOW + 21601));
+    expect(await f.job.start()).toMatchObject({ job: { state: 'waiting', maxAttempts: 144, attempts: 2, expiresAt: NOW + 43200 } });
+    expect((await query<{ value: { id: string } }>('SELECT value FROM app_settings WHERE key=$1', [KEY])).rows[0].value.id).toBe(id);
+  });
+  it('runs on the next 300s cron after a 30s normal read rather than waiting another period after completion', async () => {
+    const f = fixture(); f.audit.mockImplementationOnce(async () => { f.setNow(NOW + 30); return { ...report(NOW + 30), providerRetryAt: null }; });
+    const first = await f.job.start(); expect(first).toMatchObject({ job: { nextAt: NOW + 300 }, report: { readAt: NOW + 30, retryAt: NOW + 330 } });
+    f.setNow(NOW + 300); f.audit.mockResolvedValue({ ...report(NOW + 300), providerRetryAt: null });
+    expect(await createGnosisMarketReadinessJob(f.deps).resume()).toMatchObject({ job: { attempts: 2, nextAt: NOW + 600 } });
+    expect(f.audit).toHaveBeenCalledTimes(2);
+  });
+  it('distinguishes new provider-directed holds from normal advisory retry and preserves legacy cooldown semantics', async () => {
+    const f = fixture(); f.audit.mockResolvedValue({ ...report(NOW), retryAt: NOW + 1800, providerRetryAt: NOW + 1800,
+      errors: ['gnosis_market_provider_cooldown'] }); await f.job.start();
+    f.setNow(NOW + 300); expect(await createGnosisMarketReadinessJob(f.deps).resume()).toMatchObject({ job: { nextAt: NOW + 1800, attempts: 1 } });
+    f.setNow(NOW + 1800); f.audit.mockResolvedValue({ ...report(NOW + 1800), retryAt: NOW + 2400, providerRetryAt: null,
+      errors: ['gnosis_market_provider_cooldown'] });
+    expect(await f.job.resume()).toMatchObject({ job: { attempts: 2, nextAt: NOW + 2100 } });
   });
 });

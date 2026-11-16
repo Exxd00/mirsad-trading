@@ -13,7 +13,7 @@ function valid(v: unknown): v is GnosisMarketReadinessEnvelope {
   if (!record(v) || typeof v.reportFresh !== 'boolean' || typeof v.currentFresh !== 'boolean') return false;
   const j = v.job;
   if (j !== null && (!record(j) || !['running', 'waiting', 'complete', 'expired', 'exhausted'].includes(String(j.state))
-    || !time(j.attempts) || j.attempts > 72 || !time(j.nextAt) || !time(j.expiresAt)
+    || typeof j.maxAttempts !== 'number' || ![72, 144].includes(j.maxAttempts) || !time(j.attempts) || j.attempts > j.maxAttempts || !time(j.nextAt) || !time(j.expiresAt)
     || !['manual', 'scheduler'].includes(String(j.lastTrigger)) || (j.lastError !== null && typeof j.lastError !== 'string'))) return false;
   const r = v.report;
   if (r === null) return !v.reportFresh && !v.currentFresh;
@@ -41,7 +41,7 @@ function valid(v: unknown): v is GnosisMarketReadinessEnvelope {
 }
 const stamp = (seconds: number) => new Date(seconds * 1000).toISOString();
 const states = { running: 'يجري فحص دفعة البيانات', waiting: 'بانتظار موعد الدفعة التالية', complete: 'اكتمل آخر فحص للبيانات',
-  expired: 'انتهت نافذة الفحص؛ يمكن استئنافه بطلب جديد', exhausted: 'انتهت محاولات الفحص؛ يمكن طلب متابعة جديدة' };
+  expired: 'انتهت نافذة الفحص', exhausted: 'انتهت محاولات الفحص' };
 
 export function WalletGnosisReadiness({ csrfToken, disabled = false }: { csrfToken: string | null; disabled?: boolean }) {
   const [value, setValue] = useState<GnosisMarketReadinessEnvelope | null>(null);
@@ -97,8 +97,8 @@ export function WalletGnosisReadiness({ csrfToken, disabled = false }: { csrfTok
       <button className={styles.button} type="button" disabled={pending} onClick={() => void load('GET')}>تحديث الحالة المحفوظة</button>
     </div>
     {error && <p role="alert">{error}</p>}
-    {job && <p role="status">{states[job.state]} · المحاولة {job.attempts} من 72. {['running', 'waiting'].includes(job.state)
-      && <>موعد المتابعة: <bdi dir="ltr">{stamp(job.nextAt)}</bdi>.</>}</p>}
+    {job && <p role="status">{states[job.state]} · المحاولة {job.attempts} من {job.maxAttempts}. {(['running', 'waiting'].includes(job.state) || cooldown)
+      ? <> أقرب موعد للمتابعة: <bdi dir="ltr">{stamp(job.nextAt)}</bdi>.</> : ' يمكنك طلب متابعة جديدة.'}</p>}
     {report && <>
       <p role="status">{fresh ? 'اكتمل فحص البيانات بقراءة حديثة.' : report.history.complete ? 'اكتمل التاريخ في آخر تحقق؛ يلزم تحقق حديث قبل مراجعة التشغيل.' : 'جمع التاريخ لم يكتمل بعد.'}</p>
       <p>الشموع المحفوظة: {report.history.completedCandles ?? 'غير معلوم'} من 1000؛ المتتابعة حتى آخر فترة مطلوبة: {report.history.contiguousCandles ?? 'غير معلوم'}.</p>

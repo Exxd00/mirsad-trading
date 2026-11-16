@@ -5,20 +5,23 @@ import { query, transaction, type SqlExecutor } from '../db';
 import { auditGnosisMarketReadiness, type GnosisMarketReadiness } from './gnosis-market-readiness';
 
 export const GNOSIS_MARKET_READINESS_JOB_KEY = 'wallet:gnosis:market-readiness-job:v1';
-const KEY = GNOSIS_MARKET_READINESS_JOB_KEY, LEASE = 65, PERIOD = 300, LIFETIME = 21600, ATTEMPTS = 72;
+const KEY = GNOSIS_MARKET_READINESS_JOB_KEY, LEASE = 65, PERIOD = 300, LIFETIME = 43200, ATTEMPTS = 144;
+const jobLifetime = (version: 1 | 2) => version === 1 ? 21600 : LIFETIME;
+const jobAttempts = (version: 1 | 2): 72 | 144 => version === 1 ? 72 : ATTEMPTS;
 const time = z.number().int().min(0).max(253402300799), hash = z.string().regex(/^0x[0-9a-f]{64}$/).transform(v => v as `0x${string}`);
 const price = z.string().max(512).regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/).refine(v => /[1-9]/.test(v));
 const nullableTime = time.nullable(), count = z.number().int().min(0).max(1000).nullable();
 const reportSchema = z.object({ version: z.literal(1), chainId: z.literal(100), referenceOnly: z.literal(true),
   createdExecutionState: z.literal(false), financialReadiness: z.literal('not-certified'), status: z.enum(['ready', 'warming', 'unavailable']),
-  readAt: time, retryAt: time, errors: z.array(z.string().regex(/^(?:wallet_market_readiness|gnosis_(?:market|pool|oracle|reference))_[a-z_]{1,96}$/)).max(16),
+  readAt: time, retryAt: time, providerRetryAt: time.nullable().optional(),
+  errors: z.array(z.string().regex(/^(?:wallet_market_readiness|gnosis_(?:market|pool|oracle|reference))_[a-z_]{1,96}$/)).max(16),
   history: z.object({ requiredCandles: z.literal(1000), completedCandles: count, contiguousCandles: count, targetCloseTime: time,
     firstCloseTime: nullableTime, lastCloseTime: nullableTime, provenanceIds: z.array(z.string().regex(/^0x[0-9a-f]{64}$/)).max(1200), complete: z.boolean() }).strict(),
   current: z.object({ status: z.enum(['ready', 'unavailable']), block: z.object({ number: z.string().regex(/^[1-9]\d{0,19}$/),
     hash, parentHash: hash, timestamp: time }).strict().nullable(), sourceAt: nullableTime, readAt: nullableTime,
     wethEur: price.nullable(), usdceEur: price.nullable(), xdaiEur: price.nullable(), sourceId: z.string().regex(/^gnosis-eur:current:v1:0x[0-9a-f]{64}$/).nullable() }).strict(),
 }).strict().superRefine((r, ctx) => {
-  if (r.retryAt < r.readAt + PERIOD || r.history.targetCloseTime % 900
+  if (r.retryAt < r.readAt + PERIOD || (r.providerRetryAt != null && (r.providerRetryAt <= r.readAt || r.providerRetryAt > r.retryAt)) || r.history.targetCloseTime % 900
     || (r.history.lastCloseTime !== null && r.history.lastCloseTime > r.history.targetCloseTime)
     || (r.history.firstCloseTime !== null && (r.history.lastCloseTime === null || r.history.firstCloseTime > r.history.lastCloseTime))
     || (r.history.complete && (r.history.completedCandles !== 1000 || r.history.contiguousCandles !== 1000
@@ -28,19 +31,20 @@ const reportSchema = z.object({ version: z.literal(1), chainId: z.literal(100), 
       || r.current.block.timestamp > r.current.readAt || r.current.readAt > r.readAt || r.readAt - r.current.block.timestamp > 15 || r.readAt - r.current.readAt > 15
       || [r.current.wethEur, r.current.usdceEur, r.current.xdaiEur, r.current.sourceId].some(v => v === null)))) ctx.addIssue({ code: 'custom', message: 'Invalid reference report.' });
 });
-const jobSchema = z.object({ version: z.literal(1), id: z.string().uuid(), createdAt: time, expiresAt: time, nextAt: time,
+const jobSchema = z.object({ version: z.union([z.literal(1), z.literal(2)]), id: z.string().uuid(), createdAt: time, expiresAt: time, nextAt: time,
   attempts: z.number().int().min(0).max(ATTEMPTS), complete: z.boolean(), lastTrigger: z.enum(['manual', 'scheduler']),
   lease: z.object({ owner: z.string().uuid(), until: time }).strict().nullable(), report: reportSchema.nullable(),
   lastError: z.enum(['wallet_market_readiness_unavailable', 'wallet_market_readiness_total_timeout']).nullable() }).strict();
 type Job = z.infer<typeof jobSchema>;
 export type GnosisMarketReadinessEnvelope = { job: null | { state: 'running' | 'waiting' | 'complete' | 'expired' | 'exhausted';
-  attempts: number; nextAt: number; expiresAt: number; lastTrigger: 'manual' | 'scheduler'; lastError: Job['lastError'] };
+  attempts: number; maxAttempts: 72 | 144; nextAt: number; expiresAt: number; lastTrigger: 'manual' | 'scheduler'; lastError: Job['lastError'] };
   report: GnosisMarketReadiness | null; currentFresh: boolean; reportFresh: boolean };
 type Dependencies = { query?: SqlExecutor['query']; transact?: typeof transaction; clock?: () => number; audit?: () => Promise<GnosisMarketReadiness> };
 const invalid = (): never => { throw new Error('wallet_market_readiness_job_invalid'); };
 function parse(value: unknown): Job {
   const p = jobSchema.safeParse(value); if (!p.success) return invalid(); const j = p.data;
-  if (j.expiresAt !== j.createdAt + LIFETIME || j.nextAt < j.createdAt || (j.lease && (j.lease.until > j.expiresAt || j.lease.until < j.createdAt))
+  if (j.expiresAt !== j.createdAt + jobLifetime(j.version) || j.attempts > jobAttempts(j.version) || j.nextAt < j.createdAt
+    || (j.lease && (j.lease.until > j.expiresAt || j.lease.until < j.createdAt))
     || (j.complete && j.report?.status !== 'ready')) return invalid();
   return j;
 }
@@ -51,7 +55,7 @@ const envelope = (job: Job | null, now: number): GnosisMarketReadinessEnvelope =
     && !job?.lastError;
   return { job: job ? {
     state: job.complete ? 'complete' : now >= job.expiresAt ? 'expired' : job.lease && job.lease.until > now ? 'running'
-      : job.attempts >= ATTEMPTS ? 'exhausted' : 'waiting', attempts: job.attempts, nextAt: job.nextAt,
+      : job.attempts >= jobAttempts(job.version) ? 'exhausted' : 'waiting', attempts: job.attempts, maxAttempts: jobAttempts(job.version), nextAt: job.nextAt,
     expiresAt: job.expiresAt, lastTrigger: job.lastTrigger, lastError: job.lastError } : null, report: r ?? null, currentFresh, reportFresh };
 };
 
@@ -72,15 +76,21 @@ export function createGnosisMarketReadinessJob(deps: Dependencies = {}) {
     const claimed = await transact(async tx => {
       const now = clock(), owner = randomUUID();
       if (trigger === 'manual') {
-        const initial: Job = { version: 1, id: randomUUID(), createdAt: now, expiresAt: now + LIFETIME, nextAt: now,
+        const initial: Job = { version: 2, id: randomUUID(), createdAt: now, expiresAt: now + LIFETIME, nextAt: now,
           attempts: 0, complete: false, lease: null, lastTrigger: trigger, lastError: null, report: null };
         await tx.query('INSERT INTO app_settings(key,value) VALUES($1,$2::jsonb) ON CONFLICT(key) DO NOTHING', [KEY, JSON.stringify(initial)]);
       }
       let j = await load(tx, true); if (!j) return { job: null, owner: null };
+      let upgraded = false;
+      if (trigger === 'manual' && j.version === 1) {
+        // Only the explicit owner POST extends the finite market-only policy.
+        // Keep its identity, original start, progress, cooldown and live lease.
+        j = { ...j, version: 2, expiresAt: j.createdAt + LIFETIME }; await save(tx, j); upgraded = true;
+      }
       if ((j.lease && j.lease.until > now) || now < j.nextAt) return { job: j, owner: null };
-      if (j.complete || now >= j.expiresAt || j.attempts >= ATTEMPTS) {
-        if (trigger !== 'manual') return { job: j, owner: null };
-        j = { ...j, id: randomUUID(), createdAt: now, expiresAt: now + LIFETIME, nextAt: now, attempts: 0, complete: false, lease: null, lastError: null };
+      if (j.complete || now >= j.expiresAt || j.attempts >= jobAttempts(j.version)) {
+        if (trigger !== 'manual' || upgraded) return { job: j, owner: null };
+        j = { ...j, version: 2, id: randomUUID(), createdAt: now, expiresAt: now + LIFETIME, nextAt: now, attempts: 0, complete: false, lease: null, lastError: null };
       }
       if (now + LEASE > j.expiresAt) { j.nextAt = j.expiresAt; await save(tx, j); return { job: j, owner: null }; }
       j = { ...j, attempts: j.attempts + 1, lease: { owner, until: now + LEASE }, nextAt: now + PERIOD, lastTrigger: trigger };
@@ -97,7 +107,11 @@ export function createGnosisMarketReadinessJob(deps: Dependencies = {}) {
     const result = await transact(async tx => {
       const now = clock(), j = await load(tx, true);
       if (!j || j.id !== claimed.job!.id || j.lease?.owner !== claimed.owner || j.lease.until <= now) return j;
-      const next: Job = { ...j, lease: null, report: report ?? j.report, nextAt: Math.max(j.nextAt, report?.retryAt ?? 0), complete: report?.status === 'ready', lastError };
+      const providerNext = report && Object.hasOwn(report, 'providerRetryAt') ? report.providerRetryAt ?? 0
+        : report?.errors.some(e => ['gnosis_market_provider_cooldown', 'wallet_market_readiness_retry_invalid'].includes(e)) ? report.retryAt : 0;
+      // Normal cadence is measured from the claim, not from completion. Adding
+      // another 300s after a 30s read would skip the next existing cron tick.
+      const next: Job = { ...j, lease: null, report: report ?? j.report, nextAt: Math.max(j.nextAt, providerNext), complete: report?.status === 'ready', lastError };
       await save(tx, next); return next;
     });
     return envelope(result, clock());
