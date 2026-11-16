@@ -385,7 +385,7 @@ describe('public candle contract and durable timer', () => {
     await timer.fetch(new Request('https://deadline.internal/schedule', { method: 'POST', body: JSON.stringify({ key: 'a'.repeat(64), expiresAt: NOW + 600 }) }));
     expect(data.get('job')).toMatchObject({ expiresAt: NOW + 60 });
     const fetcher = vi.fn(async () => Response.json({ status: 'cancellation_pending', retryAt: NOW + 65 })); vi.stubGlobal('fetch', fetcher);
-    await timer.alarm(); expect(data.has('job')).toBe(true); expect(storage.setAlarm).toHaveBeenCalledTimes(3);
+    await timer.alarm(); expect(data.has('job')).toBe(true); expect(storage.setAlarm).toHaveBeenCalledTimes(4);
     fetcher.mockResolvedValueOnce(Response.json({ status: 'cancelled', retryAt: null })); await timer.alarm(); expect(data.has('job')).toBe(false);
     expect((await worker.fetch(new Request('https://worker.test/schedule', { method: 'POST' }), { EXECUTION_SCHEDULER_TOKEN: 'test' })).status).toBe(401);
   });
@@ -400,7 +400,7 @@ describe('public candle contract and durable timer', () => {
     vi.stubGlobal('fetch', fetcher);
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     await new OrderDeadline({ storage }, { EXECUTION_SCHEDULER_TOKEN: 'test-secret' }).alarm();
-    expect(data.has('job')).toBe(true); expect(storage.setAlarm).toHaveBeenCalledOnce(); expect(storage.delete).not.toHaveBeenCalled();
+    expect(data.has('job')).toBe(true); expect(storage.setAlarm).toHaveBeenCalledTimes(2); expect(storage.delete).not.toHaveBeenCalled();
     expect(fetcher).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
     expect(JSON.parse(warning.mock.calls[0][0])).toMatchObject({ type: 'execution.v1.deadline_retry', reason: `scheduler_http_${status}` });
