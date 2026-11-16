@@ -17,12 +17,22 @@ const captions: Record<WalletView['status'], string> = {
 };
 export function WalletConnection() {
   const [view, setView] = useState<WalletView | null>(null);
+  const [switching, setSwitching] = useState(false), [switchError, setSwitchError] = useState('');
+  const switchBusy = useRef(false), alive = useRef(true);
   const session = useRef<ReturnType<typeof watchMetaMask> | null>(null);
   useEffect(() => {
+    alive.current = true;
     const client = watchMetaMask(window, setView);
     session.current = client;
-    return () => { client.close(); session.current = null; };
+    return () => { alive.current = false; client.close(); session.current = null; };
   }, []);
+  async function switchNetwork(chainId: 1 | 100) {
+    if (!session.current || switchBusy.current) return;
+    switchBusy.current = true; setSwitching(true); setSwitchError('');
+    try { await session.current.switchNetwork(chainId); }
+    catch { if (alive.current) setSwitchError('لم يكتمل تبديل الشبكة. راجع الطلب في MetaMask ثم أعد المحاولة.'); }
+    finally { switchBusy.current = false; if (alive.current) setSwitching(false); }
+  }
   const details = view?.status === 'connected' ? displayWallet(view.wallet) : null;
   return <><section className={styles.panel} aria-labelledby="wallet-heading">
     <div className={styles.panelHeading}><h2 id="wallet-heading">محفظة MetaMask</h2></div>
@@ -35,8 +45,15 @@ export function WalletConnection() {
         <dd><bdi dir="ltr">{details.balance}</bdi></dd>
       </dl>}
       {view && view.status !== 'ambiguous' && view.status !== 'missing' &&
-        <div className={styles.controls}><button type="button" className={styles.button} disabled={view.status === 'pending'}
+        <div className={styles.controls}><button type="button" className={styles.button} disabled={view.status === 'pending' || switching}
           onClick={() => void session.current?.connect()}>{view.status === 'connected' ? 'تحديث المحفظة' : 'ربط MetaMask'}</button></div>}
+      {view?.status === 'connected' && <div className={styles.controls}>
+        <button type="button" className={styles.button} disabled={switching || view.wallet.chainId === '1'} onClick={() => void switchNetwork(1)}>اختيار Ethereum (1) في MetaMask</button>
+        <button type="button" className={styles.button} disabled={switching || view.wallet.chainId === '100'} onClick={() => void switchNetwork(100)}>اختيار Gnosis (100) في MetaMask</button>
+      </div>}
+      {switching && <p role="status">راجع طلب الشبكة في MetaMask…</p>}
+      {switchError && <p role="alert">{switchError}</p>}
+      <p>اختيار الشبكة يغيّر عرض الحساب فقط؛ لا ينقل رصيداً ولا يفعّل التداول.</p>
     </div>
   </section><WalletStrategyAuthority key={'authority:' + (view?.status === 'connected' ? view.wallet.address + ':' + view.wallet.chainId : 'detached')}
     wallet={view?.status === 'connected' ? view.wallet : null}

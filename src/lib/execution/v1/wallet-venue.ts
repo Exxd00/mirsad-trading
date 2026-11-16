@@ -22,10 +22,11 @@ import type { EntryPlanner } from './runner';
 import { observeProvisionalProtection } from './provisional-protection';
 
 export type WalletVenueSource = {
+  candleSourceIdentity?: string;
   entryPlan?: EntryPlanner;
   entryBlocker?: () => Promise<string | null>;
   client: Pick<SourceClient, 'getBalances' | 'getOrders'> & Partial<Pick<SourceClient,
-    'getOrder' | 'getFunding' | 'getExpenses' | 'getTransactionsPage' | 'getTransaction' | 'getOrderBook' | 'getValuationCandles' | 'getFillsForOrders' | 'getActiveOrders' | 'submitOrder' | 'cancelOrder'>>;
+    'getOrder' | 'getEntryProtectionEvidence' | 'getFunding' | 'getExpenses' | 'getTransactionsPage' | 'getTransaction' | 'getOrderBook' | 'getValuationCandles' | 'getFillsForOrders' | 'getActiveOrders' | 'submitOrder' | 'cancelOrder'>>;
   journal?: Journal;
   binding?: WalletExecutionBinding;
   /** Recheck the actual on-chain grant, revocation and token/chain identity. */
@@ -91,6 +92,7 @@ function ownedOrder(order: ReportedOrder, decision: DecisionRecord): SourceOrder
  * balances, stored-account fallback, or adoption of existing owner holdings. */
 export class ConnectedWalletVenue implements CancellationPort {
   readonly accountId = CONFIG.accountId;
+  get candleSourceIdentity() { return this.source.candleSourceIdentity; }
   constructor(private readonly source: WalletVenueSource, private readonly clock = () => Math.floor(Date.now() / 1000)) {}
   entryPlan: EntryPlanner = async (account, signal, instrument, quote, risk, now, quantityCap) => {
     if (this.source.entryPlan) return this.source.entryPlan(account, signal, instrument, quote, risk, now, quantityCap);
@@ -463,13 +465,23 @@ export class ConnectedWalletVenue implements CancellationPort {
     for (const order of orders) {
       await journal.renew(lease);
       try {
-        if (order.protectionEvidence === null) throw new Error('provisional_protection_evidence_unavailable');
         const decision = decisions.find(d => d.key === order.clientKey), instrument = instruments.find(i => i.symbol === order.symbol);
         if (!decision || !instrument) throw new Error('provisional_protection_evidence_invalid');
         const old = saved.find(p => p.entryKey === order.clientKey) ?? null;
         let quote: Quote | null = null;
         try { quote = (await this.quotes([order.symbol]))[0] ?? null; } catch { /* retry monitoring; never invent a bid */ }
-        const observed = observeProvisionalProtection(order.protectionEvidence!, order, decision, this.source.binding, instrument, old, quote, this.clock());
+        let evidence = order.protectionEvidence;
+        if (this.source.binding.chainId === 100 && this.source.client.getEntryProtectionEvidence) {
+          try { evidence = await this.source.client.getEntryProtectionEvidence(order.id, old?.fills ?? evidence?.fills ?? []); }
+          catch (error) {
+            if ((error as Error)?.message === 'provisional_protection_basis_changed' && old) {
+              await journal.saveProvisionalProtection(lease, { ...old, status: 'invalidated', updatedAt: this.clock(), fills: [], levels: null, trigger: null });
+            }
+            throw error;
+          }
+        }
+        if (!evidence) throw new Error('provisional_protection_evidence_unavailable');
+        const observed = observeProvisionalProtection(evidence, order, decision, this.source.binding, instrument, old, quote, this.clock());
         await journal.saveProvisionalProtection(lease, observed.value);
         if (observed.value.levels) result.watched++;
         if (observed.quoteIssue) result.errors.push({ symbol: order.symbol, reason: observed.quoteIssue });

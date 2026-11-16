@@ -290,6 +290,103 @@ would cost 17.28 USDC/day for one market, so that polling model is unsuitable
 for the observed small wallet. Free history reads and a separate on-chain
 reference-data method must not be relabelled as a firm CoW quote or paid access.
 
+### Gnosis source and chain identity foundation (16 November 2026)
+
+The connector accepts explicit Ethereum (1) or Gnosis (100) identity throughout
+the read/submit API, RPC, setup, policy, journal and owner-review UI. This
+software capability is distinct from a funded, delegated or armed account. The
+public deployment manifest pins chain 100 Manager, 7702 implementation,
+Settlement, Relayer, token proxies and implementations using two fixed official
+RPC endpoints. These runtimes differ from Ethereum even where addresses match.
+USDC.e is bridged USDC; the local WETH is bridged Ethereum WETH, not native xDAI.
+No native/bridged asset parity or bridge solvency follows from a matching name.
+
+Order digest/UID, delegation terms/signing domain and custom-enforcer constructor
+helpers now support explicit chain 1 or 100. Existing callers default to chain 1;
+other values fail instead of selecting a fallback. A local chain-100 EVM test
+installs the observed public Manager/7702/Settlement code, deploys the candidate
+enforcer and proves exact patched runtime, bounded presign/retry/cancellation
+and rejection of Ethereum delegation replay. This does not deploy a real
+contract or create an owner grant. Gnosis CoW paths use the published `xdai`
+namespace; a missing network on a legacy record means Ethereum only. Requests
+and persisted quote identities cannot silently cross networks. Owner wallet
+actions snapshot the reviewed account, chain, calldata and expiration before
+waiting for the wallet. Network switching remains an explicit owner action.
+
+The independent `gnosis-reserve-state-bars-v1` reader reconstructs actual
+15-minute WETH/WXDAI reserve STATE OHLC and actual gross base Swap flow from the
+pinned Sushi V2 pool. LP/sync changes affect this price state; it is not a
+traded-price OHLC series. No-change intervals retain proven reserve state, never
+fabricated transactions or volume. Bounded complete log ranges must match both
+RPCs; canonical event headers and baseline/end archive state replay are checked.
+The scope explicitly relies on matching RPC coverage rather than receipt-trie
+proofs. Actual 1,000-bar RAW reserve-state history passed a read-only source
+probe; this alone does not certify the composed EUR history required by EMA.
+
+Only finalized blocks are accepted; there is no latest/unfinalized downgrade.
+The five-minute scheduler configuration uses UTC minutes `3-58/5`: this keeps
+the 300-second period and allows finalized blocks to arrive before the first
+scan after a 15-minute close. Late finality still blocks/misses the signal;
+original close time is never restamped. A configuration edit is not evidence
+that the existing Worker has been deployed with this phase.
+
+`gnosis-chainlink-underlying-eur-reference-v1` separately validates the published
+EUR/USD, DAI/USD and USDC/USD feeds and their pinned proxies/aggregators. It
+reconstructs actual transmission-block availability before each requested close,
+preserves update times and the published 86,400-second heartbeat, and rejects
+phase changes, stale/nonpositive answers, inconsistent identity or coverage.
+The source probe verified 1,000 historical points with 92 actual transmissions.
+Its DAI/EUR and USDC/EUR values remain UNDERLYING references: native xDAI and
+bridged USDC.e spot EUR fields stay null in this isolated oracle reader.
+
+The composed `gnosis-canonical-state-eur-reference-v1` source uses actual
+WETH/WXDAI reserve state, WXDAI/USDC.e Uniswap V3 state and the underlying
+USDC/EUR feed. Events are merged by canonical block and global log index before
+OHLC calculation; independent OHLC extrema are never multiplied. Its explicit
+USDC.e unit reference checks the pinned USDCTransmuter, enabled state, exact
+token identities and backing. Both RPCs must agree on the complete historical
+backing/supply log replay and controls; a temporary shortfall is rejected even
+if restored before the end. This is a redemption-unit assumption with bridge
+and governance risk, not a claim that bridged assets always trade at a peg.
+
+Validated finalized EUR chunks persist in private SQL settings with compiled
+source identity, canonical digests and per-bar semantic fingerprints. A
+conflicting overlap commits a permanent global quarantine before returning an
+error; later reads cannot erase it. SQL limits cumulative JSON bytes before
+returning rows. Process restarts preserve chunks and quarantine. Source identity
+also binds EMA state; legacy nonempty or mismatched indicators block migration
+instead of reusing Ethereum history or resetting capital/performance.
+
+The authenticated, CSRF-protected chain-100 market-readiness POST starts or
+resumes a separate data-only job. GET reads stored state only. The existing
+five-minute tick may resume an explicitly requested job while the financial
+profile is missing; protection ticks never warm 1,000 bars. A 65-second SQL
+lease, 300-second cooldown, six-hour/72-attempt cap and owner fence prevent
+parallel work and late writes. Each attempt budgets 40 seconds for history,
+three for stored progress and eight for a fresh current reference. Small
+verified chunks survive an incomplete attempt. The UI preserves observation
+times and expires freshness locally; reference completeness is expressly not
+financial readiness. Full 1,000-bar composed EUR history still requires an
+actual successful source probe and is not certified by fixture tests.
+
+For a newly mined fill, separate provisional entry-protection FX uses an actual
+canonical block strictly before the completed minute. The original FX block
+and hash are retained across restart and revalidated before latching a stop or
+target; final accounting and PnL still wait for finalized evidence. Neither this
+reference data nor the preflight creates a balance, executor, grant, order,
+paid quote subscription or execution readiness.
+
+The earlier public quote quota response was temporary: a bounded retry at
+00:04:36 UTC returned HTTP 200. At 00:05:27–28 UTC, two verified but non-partial
+quotes for the same 544792194100668 bridged-WETH atoms gave maximum reference
+entry debit 1001073 USDC.e atoms and reference return 998093, about 0.29768%
+round-trip loss BEFORE executor gas. App-data was zero research identity and
+the owner had no Gnosis funds; this is not a grant-bound admission certificate.
+The response's 2-bps protocol fee annotation is already included in adjusted
+quote amounts and must not be added a second time. Quote gas estimates are not
+owner-executor receipts. Lower-priced actual unrelated transactions establish
+historical inclusion only, not a future timeliness or cost guarantee.
+
 ### mUSD reference valuation (15 November 2026)
 
 The owner-authenticated, CSRF-protected `POST /api/wallet/strategy/valuation`

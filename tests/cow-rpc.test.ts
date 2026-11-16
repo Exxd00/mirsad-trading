@@ -6,7 +6,10 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { CowRpcTransport } from '../src/lib/wallet/cow-rpc';
 import { CowExecutionError, type CowAuthority, type CowOrderRecord, type CowPreparedTx } from '../src/lib/wallet/cow-execution-types';
 import { createCowPolicyDraft, cowPolicyOrderAppData } from '../src/lib/wallet/cow-policy';
+import { expectedCowEnforcerRuntime } from '../src/lib/wallet/cow-artifact';
 import { COW_DOMAIN, COW_SETTLEMENT, COW_VAULT_RELAYER, cowOrderUid, type CowOrder } from '../src/lib/wallet/cow-order';
+import gnosis from './fixtures/cow-gnosis-runtime.json';
+import ethereum from './fixtures/cow-mainnet-runtime.json';
 
 // Fresh throwaway keys sign only isolated bytes; the RPC below is entirely fake.
 const owner = privateKeyToAccount(generatePrivateKey()), executor = privateKeyToAccount(generatePrivateKey());
@@ -19,33 +22,48 @@ const GPV2_MAINNET_DOMAIN = '0xc078f884a2676e1345748b1feace7b0abee5d00ecadb6e574
 beforeEach(() => { vi.stubGlobal('fetch', vi.fn(() => { throw new Error('No network in isolated CoW RPC tests'); })); });
 afterEach(() => { expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-async function fixture() {
-  const draft = createCowPolicyDraft({ id: randomUUID(), chainId: 1, owner: owner.address, executor: executor.address, quoteToken: quote,
+async function fixture(chainId: 1 | 100 = 1) {
+  const activeManager = chainId === 100 ? getAddress(gnosis.contracts.manager.address) : manager;
+  const activeImplementation = chainId === 100 ? getAddress(gnosis.contracts.implementation.address) : implementation;
+  const quoteToken = chainId === 100 ? getAddress(gnosis.contracts.quoteToken.address) : quote;
+  const baseToken = chainId === 100 ? getAddress(gnosis.contracts.wethBridged.address) : base;
+  const enforcerCode = chainId === 100 ? expectedCowEnforcerRuntime(activeManager, chainId) : code;
+  const draft = createCowPolicyDraft({ id: randomUUID(), chainId, owner: owner.address, executor: executor.address, quoteToken,
     startsAt: NOW - 60, expiresAt: NOW + 3600, maxOrderValiditySeconds: 600, maxQuotePerBuy: '1000000000', maxQuoteTotal: '10000000000',
-    markets: [{ baseToken: base, maxBasePerSell: '100000000000000000000', maxBaseTotal: '1000000000000000000000',
+    markets: [{ baseToken, maxBasePerSell: '100000000000000000000', maxBaseTotal: '1000000000000000000000',
       buyFloorQuote: '100000000', buyFloorBase: '2000000000000000000', sellFloorBase: '1000000000000000000', sellFloorQuote: '1000000' }],
-  }, { manager, enforcer });
-  const authority: CowAuthority = { draft, signature: await owner.signTypedData(draft.typed), ownerImplementation: implementation,
-    codeHashes: { manager: keccak256(code), enforcer: keccak256(code), ownerImplementation: keccak256(code), settlement: keccak256(code) } };
-  const order: CowOrder = { sellToken: quote, buyToken: base, receiver: owner.address, sellAmount: '100000000', buyAmount: '2000000000000000000',
+  }, { manager: activeManager, enforcer });
+  const authority: CowAuthority = { draft, signature: await owner.signTypedData(draft.typed), ownerImplementation: activeImplementation,
+    codeHashes: { manager: chainId === 100 ? gnosis.contracts.manager.codeHash as Hex : keccak256(code), enforcer: keccak256(enforcerCode),
+      ownerImplementation: chainId === 100 ? gnosis.contracts.implementation.codeHash as Hex : keccak256(code),
+      settlement: chainId === 100 ? gnosis.contracts.settlement.codeHash as Hex : keccak256(code) } };
+  const order: CowOrder = { sellToken: quoteToken, buyToken: baseToken, receiver: owner.address, sellAmount: '100000000', buyAmount: '2000000000000000000',
     validTo: NOW + 600, appData: cowPolicyOrderAppData(draft, intentKey).hash, feeAmount: '0', kind: 'buy', partiallyFillable: true,
     sellTokenBalance: 'erc20', buyTokenBalance: 'erc20' };
-  const uid = cowOrderUid(order, owner.address); let head = 100n, latest = 101n, revoked = false, clock = NOW;
+  const uid = cowOrderUid(order, owner.address, chainId); let head = 100n, latest = 101n, revoked = false, clock = NOW;
   let observed: CowPreparedTx | undefined, receipt: Record<string, unknown> | null = null, receiptLogs: Record<string, unknown>[] = [];
   const blockHash = (n: bigint) => n === 100n ? h('a') : n === 101n ? h('b') : h('c');
   const client = {
-    getChainId: vi.fn(async () => 1),
-    getCode: vi.fn(async ({ address }: { address: Address }) => address.toLowerCase() === owner.address.toLowerCase()
-      ? ('0xef0100' + implementation.slice(2).toLowerCase()) as Hex : address.toLowerCase() === executor.address.toLowerCase() ? undefined : code),
+    getChainId: vi.fn(async () => chainId as number),
+    getCode: vi.fn(async ({ address }: { address: Address }) => {
+      if (address.toLowerCase() === owner.address.toLowerCase()) return ('0xef0100' + activeImplementation.slice(2).toLowerCase()) as Hex;
+      if (address.toLowerCase() === executor.address.toLowerCase()) return undefined;
+      if (chainId === 100) {
+        if (address === enforcer) return enforcerCode;
+        const row = Object.values(gnosis.contracts).find(v => v.address.toLowerCase() === address.toLowerCase());
+        if (!row) throw new Error('Unexpected Gnosis contract'); return row.runtime as Hex;
+      }
+      return code;
+    }),
     readContract: vi.fn(async ({ functionName }: { functionName: string; blockNumber?: bigint }): Promise<unknown> => {
-      if (functionName === 'delegationManager') return manager;
+      if (functionName === 'delegationManager') return activeManager;
       if (functionName === 'settlement') return COW_SETTLEMENT;
-      if (functionName === 'chainId') return 1n;
+      if (functionName === 'chainId') return BigInt(chainId);
       if (functionName === 'disabledDelegations') return revoked;
       if (functionName === 'paused') return false;
       if (functionName === 'NAME') return 'DelegationManager';
       if (functionName === 'DOMAIN_VERSION') return '1';
-      if (functionName === 'domainSeparator') return GPV2_MAINNET_DOMAIN;
+      if (functionName === 'domainSeparator') return chainId === 100 ? gnosis.domainSeparator : GPV2_MAINNET_DOMAIN;
       if (functionName === 'vaultRelayer') return COW_VAULT_RELAYER;
       if (functionName === 'preSignature') return 1n;
       if (functionName === 'filledAmount') return 0n;
@@ -61,8 +79,8 @@ async function fixture() {
       return { number: n, hash: blockHash(n), parentHash: h('c'), timestamp: BigInt(NOW) };
     }),
     getTransactionReceipt: vi.fn(async () => receipt),
-    getTransaction: vi.fn(async () => ({ hash: observed!.hash, from: executor.address, to: manager, nonce: observed!.nonce,
-      chainId: 1, input: observed!.data, value: 0n, blockHash: h('b'), blockNumber: 101n })),
+    getTransaction: vi.fn(async () => ({ hash: observed!.hash, from: executor.address, to: activeManager, nonce: observed!.nonce,
+      chainId: chainId as number, input: observed!.data, value: 0n, blockHash: h('b'), blockNumber: 101n })),
     request: vi.fn(async () => receiptLogs.filter(l => String(l.address).toLowerCase() === COW_SETTLEMENT.toLowerCase())),
   };
   const signer = { address: executor.address, signTransaction: vi.fn(executor.signTransaction) };
@@ -70,19 +88,19 @@ async function fixture() {
     gasLimits: { maxGas: '200000', maxFeePerGasWei: '1000', maxPriorityFeePerGasWei: '100', maxTransactionCostWei: '1000000000' }, clock: () => clock,
     authorizeWrite: vi.fn(async () => {}) };
   const rpc = new CowRpcTransport(options);
-  return { rpc, client, signer, options, authority, order, uid, setRevoked: (v: boolean) => { revoked = v; }, setClock: (value: number) => { clock = value; },
+  return { rpc, client, signer, options, authority, order, uid, manager: activeManager, setRevoked: (v: boolean) => { revoked = v; }, setClock: (value: number) => { clock = value; },
     setHead: (v: bigint) => { head = v; latest = v > latest ? v : latest; },
     setReceipt: (prepared: CowPreparedTx, status = 'success') => {
-      observed = prepared; receipt = { transactionHash: prepared.hash, from: executor.address, to: manager, status,
+      observed = prepared; receipt = { transactionHash: prepared.hash, from: executor.address, to: activeManager, status,
         blockHash: h('b'), blockNumber: 101n, transactionIndex: 0, gasUsed: 1000n, effectiveGasPrice: 10n, logs: [] };
     },
     fillReceipt: (received = 1000000000000000000n) => {
       const txHash = h('e'), common = { transactionHash: txHash, blockHash: h('a'), blockNumber: 100n, removed: false };
       receiptLogs = [
         { ...common, address: COW_SETTLEMENT, logIndex: 0, topics: encodeEventTopics({ abi: [trade], eventName: 'Trade', args: { owner: owner.address } }),
-          data: encodeAbiParameters(parseAbiParameters('address,address,uint256,uint256,uint256,bytes'), [quote, base, 50000000n, 1000000000000000000n, 0n, uid]) },
-        { ...common, address: quote, logIndex: 1, topics: encodeEventTopics({ abi: erc20Abi, eventName: 'Transfer', args: { from: owner.address, to: COW_SETTLEMENT } }), data: encodeAbiParameters([{ type: 'uint256' }], [50000000n]) },
-        { ...common, address: base, logIndex: 2, topics: encodeEventTopics({ abi: erc20Abi, eventName: 'Transfer', args: { from: COW_VAULT_RELAYER, to: owner.address } }), data: encodeAbiParameters([{ type: 'uint256' }], [received]) },
+          data: encodeAbiParameters(parseAbiParameters('address,address,uint256,uint256,uint256,bytes'), [quoteToken, baseToken, 50000000n, 1000000000000000000n, 0n, uid]) },
+        { ...common, address: quoteToken, logIndex: 1, topics: encodeEventTopics({ abi: erc20Abi, eventName: 'Transfer', args: { from: owner.address, to: COW_SETTLEMENT } }), data: encodeAbiParameters([{ type: 'uint256' }], [50000000n]) },
+        { ...common, address: baseToken, logIndex: 2, topics: encodeEventTopics({ abi: erc20Abi, eventName: 'Transfer', args: { from: COW_VAULT_RELAYER, to: owner.address } }), data: encodeAbiParameters([{ type: 'uint256' }], [received]) },
       ];
       receipt = { transactionHash: txHash, from: addr('f'), to: COW_SETTLEMENT, status: 'success', blockHash: h('a'), blockNumber: 100n,
         transactionIndex: 0, gasUsed: 300000n, effectiveGasPrice: 10n, logs: receiptLogs };
@@ -91,6 +109,59 @@ async function fixture() {
       return { uid, order, owner: owner.address, createdBlock: '99', createdAt: NOW } as CowOrderRecord;
     } };
 }
+
+describe('explicit Gnosis transport identity, never inferred from a ticker or RPC response', () => {
+  it('uses the pinned Gnosis runtimes, signing domain, UID and EIP1559 chain for an explicit chain-100 draft', async () => {
+    const f = await fixture(100); await f.rpc.assertAuthority();
+    const prepared = await f.rpc.prepare(f.uid, 'presign', f.order, intentKey, 3);
+    expect(prepared.chainId).toBe(100); expect(parseTransaction(prepared.raw as TransactionSerialized)).toMatchObject({ chainId: 100, nonce: 3, to: f.manager.toLowerCase() });
+    expect(cowOrderUid(f.order, owner.address)).not.toBe(f.uid);
+    await expect(f.rpc.prepare(cowOrderUid(f.order, owner.address), 'presign', f.order, intentKey, 3)).rejects.toThrow('cow_transaction_identity_invalid');
+    f.setReceipt(prepared); expect(await f.rpc.transactionState(prepared)).toMatchObject({ status: 'mined' });
+    f.setHead(101n); expect(await f.rpc.transactionState(prepared)).toMatchObject({ status: 'finalized', actualGasWei: '10000' });
+    expect(f.client.sendRawTransaction).not.toHaveBeenCalled();
+  });
+  it.each(['rpc', 'enforcer', 'domain', 'runtime'] as const)('rejects Ethereum %s identity on a Gnosis grant', async fault => {
+    const f = await fixture(100), read = f.client.readContract.getMockImplementation()!;
+    if (fault === 'rpc') f.client.getChainId.mockResolvedValue(1);
+    if (fault === 'runtime') {
+      const readCode = f.client.getCode.getMockImplementation()!;
+      f.client.getCode.mockImplementation(async args => args.address === COW_SETTLEMENT ? ethereum.contracts.settlement.runtime as Hex : readCode(args));
+    }
+    f.client.readContract.mockImplementation(async args => args.functionName === 'chainId' && fault === 'enforcer' ? 1n
+      : args.functionName === 'domainSeparator' && fault === 'domain' ? GPV2_MAINNET_DOMAIN : read(args));
+    await expect(f.rpc.prepare(f.uid, 'presign', f.order, intentKey, 0)).rejects.toThrow(/cow_chain_mismatch|cow_authority_invalid|cow_contract_identity_mismatch/);
+    expect(f.signer.signTransaction).not.toHaveBeenCalled(); expect(f.client.sendRawTransaction).not.toHaveBeenCalled();
+  });
+  it('rejects cross-chain saved/signed bytes and a transaction returned for the wrong chain', async () => {
+    const f = await fixture(100), p = await f.rpc.prepare(f.uid, 'presign', f.order, intentKey, 3);
+    const raw = await executor.signTransaction({ type: 'eip1559', chainId: 1, nonce: p.nonce, to: p.to, data: p.data,
+      value: 0n, gas: BigInt(p.gas), maxFeePerGas: BigInt(p.maxFeePerGasWei), maxPriorityFeePerGas: BigInt(p.maxPriorityFeePerGasWei) });
+    await expect(f.rpc.validatePrepared({ ...p, raw, hash: keccak256(raw) }, 'presign', f.order, intentKey)).rejects.toThrow('cow_transaction_identity_invalid');
+    await expect(f.rpc.validatePrepared({ ...p, chainId: 1 }, 'presign', f.order, intentKey)).rejects.toThrow('cow_transaction_identity_invalid');
+    f.setReceipt(p); const transaction = f.client.getTransaction.getMockImplementation()!;
+    f.client.getTransaction.mockImplementation(async () => ({ ...await transaction(), chainId: 1 }));
+    await expect(f.rpc.transactionState(p)).rejects.toThrow('cow_chain_mismatch'); expect(f.client.sendRawTransaction).not.toHaveBeenCalled();
+  });
+  it('keeps Gnosis canonical Trade evidence isolated from Ethereum UID reuse', async () => {
+    const f = await fixture(100), record = f.fillReceipt(), proof = await f.rpc.orderProof(record);
+    expect(proof.trades[0]).toMatchObject({ uid: f.uid, sellToken: getAddress(gnosis.contracts.quoteToken.address), buyToken: getAddress(gnosis.contracts.wethBridged.address) });
+    await expect(f.rpc.orderProof({ ...record, uid: cowOrderUid(f.order, owner.address) })).rejects.toThrow('cow_order_identity_invalid');
+    expect(f.client.sendRawTransaction).not.toHaveBeenCalled();
+  });
+  it('keeps Gnosis cancellation and self-clearance on chain 100 with its own UID after revocation', async () => {
+    const f = await fixture(100), p = await f.rpc.prepare(f.uid, 'presign', f.order, intentKey, 3);
+    const cancel = await f.rpc.prepare(f.uid, 'cancel', f.order, intentKey, 4);
+    expect(cancel.chainId).toBe(100); expect(cancel.data).toContain(f.uid.slice(2));
+    expect(cancel.data).not.toContain(cowOrderUid(f.order, owner.address).slice(2));
+    expect(await f.rpc.broadcast(cancel)).toBe(cancel.hash);
+    f.setRevoked(true);
+    const clear = await f.rpc.prepare(f.uid, 'clear-presign', f.order, intentKey, 3, p);
+    expect(clear).toMatchObject({ chainId: 100, nonce: 3, data: '0x', to: executor.address, value: '0', replaces: p.hash });
+    expect(parseTransaction(clear.raw as TransactionSerialized).chainId).toBe(100);
+    expect(await f.rpc.broadcast(clear)).toBe(clear.hash);
+  });
+});
 
 describe('actual RPC transaction construction with isolated signer and injected chain reads', () => {
   it('enforces independent phase caps after the full 20% estimate margin and never clamps an oversized estimate', async () => {

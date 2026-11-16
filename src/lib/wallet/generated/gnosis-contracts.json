@@ -1,0 +1,313 @@
+{
+  "version": 1,
+  "chainId": 100,
+  "status": "observed-read-only-not-production-approved",
+  "release": "sdk-2.0.0-framework-1.3.0-gpv2-gnosis-research",
+  "observedAt": "2026-11-15T22:54:20.938Z",
+  "observedBlock": {
+    "number": "49299336",
+    "hash": "0x9f4e35afe20bf2746c4f4454cc3eb7b469bcdfbe1cf7dd3700863414e06f4945",
+    "timestamp": 1794782255
+  },
+  "readers": [
+    "https://rpc.gnosischain.com",
+    "https://rpc.gnosis.gateway.fm"
+  ],
+  "checks": [
+    {
+      "reader": "https://rpc.gnosischain.com",
+      "chainId": 100,
+      "blockHash": "0x9f4e35afe20bf2746c4f4454cc3eb7b469bcdfbe1cf7dd3700863414e06f4945",
+      "finalizedHead": {
+        "number": "49299505",
+        "hash": "0xb109db9e8514b4b1f9b2b84c5cd003750c15e8f6466200145045ea0044eb5089",
+        "timestamp": 1794783100
+      },
+      "allRuntimeBytecodesMatched": true
+    },
+    {
+      "reader": "https://rpc.gnosis.gateway.fm",
+      "chainId": 100,
+      "blockHash": "0x9f4e35afe20bf2746c4f4454cc3eb7b469bcdfbe1cf7dd3700863414e06f4945",
+      "finalizedHead": {
+        "number": "49299505",
+        "hash": "0xb109db9e8514b4b1f9b2b84c5cd003750c15e8f6466200145045ea0044eb5089",
+        "timestamp": 1794783100
+      },
+      "allRuntimeBytecodesMatched": true
+    }
+  ],
+  "contracts": {
+    "manager": "0xdb9B1e94B5b69Df7e401DDbedE43491141047dB3",
+    "implementation": "0x63c0c19a282a1B52b07dD5a65b58948A07DAE32B",
+    "settlement": "0x9008D19f58AAbD9eD0D60971565AA8510560ab41",
+    "vaultRelayer": "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110",
+    "quoteToken": "0x2a22f9c3b484c3629090FeED35F17Ff8F88f76F0",
+    "wethBridged": "0x6A023CCd1ff6F2045C3309768eAd9E68F978f6e1",
+    "wrappedNative": "0xe91D153E0b41518A2Ce8Dd3D7944Fa863463a97d",
+    "legacyQuoteToken": "0xDDAfbb505ad214D7b80b1f830fcCc89B60fb7A83",
+    "homeOmnibridge": "0xf6A78083ca3e2a662D6dd1703c939c8aCE2e268d",
+    "homeAMB": "0x75Df5AF045d91108662D8080fD1FEFAd6aA0bb59",
+    "xDaiBridge": "0x7301CFA0e1756B71869E93d4e4Dca5c7d0eb0AA6",
+    "quoteTokenImplementation": "0x107CF7fb73EA48D1D200989b156Ce1894d7AfEC7",
+    "wethBridgedImplementation": "0xf8D1677c8a0c961938bf2f9aDc3F3CFDA759A9d9",
+    "legacyQuoteTokenImplementation": "0xf8D1677c8a0c961938bf2f9aDc3F3CFDA759A9d9",
+    "homeOmnibridgeImplementation": "0x2dbdCC6CAd1a5a11FD6337244407bC06162aAf92",
+    "homeAMBImplementation": "0xA033535983d1aBcc2648af730EDCb198909903D7",
+    "xDaiBridgeImplementation": "0xe6998b0C03D3cb9ee8C04f266e573c7Fa8782846",
+    "reserveStatePool": "0x8C0C36c85192204c8d782F763fF5a30f5bA0192F",
+    "reserveStateFactory": "0xc35DADB65012eC5796536bD9864eD8773aBc74C4"
+  },
+  "codeHashes": {
+    "manager": "0xdb4919cae38dc67755995fff02e6553930ee6a0758df8c01f7b089dcb259f4c9",
+    "implementation": "0x21dbc654c220eb4b54b591b4364d800d91b64e56f98fc0a8512d99ed25c3f571",
+    "legacyQuoteToken": "0x1f47c489cf12828f5215e58f237046f4bb948888884c3affbcb52243246730ce",
+    "homeAMB": "0x9f3cd0f1390974b3c196266384304c8a769f5d91511832122d7e1d6f2272d765",
+    "vaultRelayer": "0x500097799c1379a3728ed70b17de4132de2c07f6937b041c361deaade22b6a5e",
+    "wethBridged": "0x1f47c489cf12828f5215e58f237046f4bb948888884c3affbcb52243246730ce",
+    "quoteToken": "0xad30d819dbc47814b7e6cb837fd7cc57fcb591479a38596ee93de4fc52e8c435",
+    "settlement": "0x68963e5b27aadd4ee70ecd933fac9312fe5f527390b88ae6092c68937b80f5e2",
+    "xDaiBridge": "0x33aece4e6780def60d025d7c5c6b7cf6ea1fbc7c73d34a736dd599ab9347c384",
+    "quoteTokenImplementation": "0xaada1fda4d1c1b638e3ed53169a42e70647b824a8f6ace10326fd33fd216deb4",
+    "homeOmnibridge": "0x9f3cd0f1390974b3c196266384304c8a769f5d91511832122d7e1d6f2272d765",
+    "wrappedNative": "0xdfff0c54be05b5df7dc8f015f8c813825344770fee1ba1202130a4652b529ca9",
+    "xDaiBridgeImplementation": "0xfa047c93c784231e57196bf818ec20b303dd1e9a65e4452507361858f7784ab5",
+    "wethBridgedImplementation": "0x3c42cd875bf3a7c6ef70a1e3ff64377f4e9d35aa8db0695f6724a4f94e1f5c3f",
+    "legacyQuoteTokenImplementation": "0x3c42cd875bf3a7c6ef70a1e3ff64377f4e9d35aa8db0695f6724a4f94e1f5c3f",
+    "homeAMBImplementation": "0xf2e6095b5d3dddfa862b8141d9cc4ab6b146cafe0ddd81de8925ecbac4354d60",
+    "homeOmnibridgeImplementation": "0x76db05b27062f2e630fe7f70164f85773b7c1a2dfdf5407524d92d2b11daf859",
+    "reserveStatePool": "0xcd82e2d9daddbf51cbce8d5429a0996e16fc670c4056566f19cf8864ad45a746",
+    "reserveStateFactory": "0xeba2e349904f5b2c1f6086ffb00d5c7efb4a2c8ea8af2efccfd1c812c7869b6c"
+  },
+  "domain": {
+    "name": "Gnosis Protocol",
+    "version": "v2",
+    "chainId": 100,
+    "verifyingContract": "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
+  },
+  "domainSeparator": "0x8f05589c4b810bc2f706854508d66d447cd971f8354a4bb0b3471ceb0a466bc7",
+  "nativeFeeToken": {
+    "symbol": "xDAI",
+    "decimals": 18
+  },
+  "tokens": {
+    "quoteToken": {
+      "symbol": "USDC.e",
+      "name": "Bridged USDC (Gnosis)",
+      "decimals": 6,
+      "role": "bridged-quote",
+      "nativeIssuanceCertified": false
+    },
+    "wethBridged": {
+      "symbol": "WETH",
+      "name": "Wrapped Ether on xDai",
+      "decimals": 18,
+      "role": "ethereum-bridged-base",
+      "originChainId": 1,
+      "originToken": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+      "nativeRedemption": false
+    },
+    "wrappedNative": {
+      "symbol": "WXDAI",
+      "decimals": 18,
+      "role": "wrapped-native-xDAI",
+      "nativeToken": "xDAI",
+      "ethereumETHRedemption": false
+    },
+    "legacyQuoteToken": {
+      "symbol": "USDC",
+      "name": "USD//C on xDai",
+      "decimals": 6,
+      "role": "legacy-bridged-usdc",
+      "originChainId": 1,
+      "originToken": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    }
+  },
+  "proxyImplementationPins": {
+    "quoteToken": {
+      "method": "implementation()",
+      "implementationKey": "quoteTokenImplementation",
+      "address": "0x107CF7fb73EA48D1D200989b156Ce1894d7AfEC7",
+      "mustRecheckBeforeProductionUse": true
+    },
+    "wethBridged": {
+      "method": "implementation()",
+      "implementationKey": "wethBridgedImplementation",
+      "address": "0xf8D1677c8a0c961938bf2f9aDc3F3CFDA759A9d9",
+      "mustRecheckBeforeProductionUse": true
+    },
+    "legacyQuoteToken": {
+      "method": "implementation()",
+      "implementationKey": "legacyQuoteTokenImplementation",
+      "address": "0xf8D1677c8a0c961938bf2f9aDc3F3CFDA759A9d9",
+      "mustRecheckBeforeProductionUse": true
+    },
+    "homeOmnibridge": {
+      "method": "implementation()",
+      "implementationKey": "homeOmnibridgeImplementation",
+      "address": "0x2dbdCC6CAd1a5a11FD6337244407bC06162aAf92",
+      "mustRecheckBeforeProductionUse": true
+    },
+    "homeAMB": {
+      "method": "implementation()",
+      "implementationKey": "homeAMBImplementation",
+      "address": "0xA033535983d1aBcc2648af730EDCb198909903D7",
+      "mustRecheckBeforeProductionUse": true
+    },
+    "xDaiBridge": {
+      "method": "implementation()",
+      "implementationKey": "xDaiBridgeImplementation",
+      "address": "0xe6998b0C03D3cb9ee8C04f266e573c7Fa8782846",
+      "mustRecheckBeforeProductionUse": true
+    }
+  },
+  "getterEvidence": {
+    "managerName": {
+      "contractKey": "manager",
+      "functionName": "NAME",
+      "args": [],
+      "result": "DelegationManager"
+    },
+    "managerDomainVersion": {
+      "contractKey": "manager",
+      "functionName": "DOMAIN_VERSION",
+      "args": [],
+      "result": "1"
+    },
+    "implementationManager": {
+      "contractKey": "implementation",
+      "functionName": "delegationManager",
+      "args": [],
+      "result": "0xdb9B1e94B5b69Df7e401DDbedE43491141047dB3"
+    },
+    "settlementDomain": {
+      "contractKey": "settlement",
+      "functionName": "domainSeparator",
+      "args": [],
+      "result": "0x8f05589c4b810bc2f706854508d66d447cd971f8354a4bb0b3471ceb0a466bc7"
+    },
+    "settlementRelayer": {
+      "contractKey": "settlement",
+      "functionName": "vaultRelayer",
+      "args": [],
+      "result": "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110"
+    },
+    "wethBridge": {
+      "contractKey": "wethBridged",
+      "functionName": "bridgeContract",
+      "args": [],
+      "result": "0xf6A78083ca3e2a662D6dd1703c939c8aCE2e268d"
+    },
+    "wethEthereumOrigin": {
+      "contractKey": "homeOmnibridge",
+      "functionName": "foreignTokenAddress",
+      "args": [
+        "0x6A023CCd1ff6F2045C3309768eAd9E68F978f6e1"
+      ],
+      "result": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+    },
+    "legacyUSDCEthereumOrigin": {
+      "contractKey": "homeOmnibridge",
+      "functionName": "foreignTokenAddress",
+      "args": [
+        "0xDDAfbb505ad214D7b80b1f830fcCc89B60fb7A83"
+      ],
+      "result": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    },
+    "quoteTokenPaused": {
+      "contractKey": "quoteToken",
+      "functionName": "paused",
+      "args": [],
+      "result": false
+    }
+  },
+  "bridgeIdentities": {
+    "ethereum": {
+      "chainId": 1,
+      "foreignOmnibridge": "0x88ad09518695c6c3712AC10a214bE5109a655671",
+      "foreignAMB": "0x4C36d2919e407f0Cc2Ee3c993ccF8ac26d9CE64e",
+      "xDaiBridge": "0x4aa42145Aa6Ebf72e164C9bBC74fbD3788045016",
+      "evidence": "Official documentation identities only; Ethereum bridge runtimes are not pinned in this chain-100 artifact."
+    },
+    "gnosis": {
+      "chainId": 100,
+      "homeOmnibridge": "0xf6A78083ca3e2a662D6dd1703c939c8aCE2e268d",
+      "homeAMB": "0x75Df5AF045d91108662D8080fD1FEFAd6aA0bb59",
+      "xDaiBridge": "0x7301CFA0e1756B71869E93d4e4Dca5c7d0eb0AA6",
+      "ethereumOriginMappingsVerifiedAtBlock": true,
+      "USDCeReturnPath": "Official bridge UI requires conversion from USDC.e to legacy USDC before canonical return to Ethereum; no return quote or action was performed."
+    }
+  },
+  "sources": {
+    "sdkDeployments": "https://github.com/MetaMask/smart-accounts-kit/blob/main/packages/delegation-deployments/src/contractAddresses.ts",
+    "cowContracts": "https://docs.cow.fi/cow-protocol/reference/contracts/core",
+    "network": "https://docs.gnosischain.com/about/networks/mainnet/",
+    "pectra": "https://docs.gnosischain.com/about/specs/hard-forks/pectra",
+    "bridges": "https://docs.gnosischain.com/bridges/About%20Token%20Bridges/omnibridge",
+    "nativeBridge": "https://docs.gnosischain.com/bridges/About%20Token%20Bridges/xdai-bridge",
+    "bridgedUSDCStandard": "https://github.com/circlefin/stablecoin-evm/blob/master/doc/bridged_USDC_standard.md"
+  },
+  "caveats": [
+    "Public read-only observed pins; no production adapter, grant, deployment, transfer or trading approval is established.",
+    "Two named RPC endpoints agreed; this does not establish independent infrastructure ownership or a future availability SLA.",
+    "Proxy implementations are observed separately at this block and can change; every runtime and implementation binding requires a fresh canonical check before use.",
+    "USDC.e is bridged USDC under the Circle standard, not a claim of Circle native issuance or a guaranteed price peg.",
+    "wethBridged represents Ethereum WETH through Omnibridge; it is not native xDAI, and an Ethereum WETH-to-ETH native redemption method must not be reused for this asset.",
+    "Bridge origin mappings establish contract identity at the observed block, not future bridge solvency, transferability, market price, exit availability or execution costs.",
+    "No candles, historical FX, current liquidity, exact partial-order price, full-cycle cost or financial readiness is certified by this artifact.",
+    "No custom Mirsad enforcer address or deployed runtime is supplied; the existing chain-1 enforcer must not be silently reused."
+  ],
+  "tokenMetadataEvidence": {
+    "quoteToken": {
+      "address": "0x2a22f9c3b484c3629090FeED35F17Ff8F88f76F0",
+      "name": "Bridged USDC (Gnosis)",
+      "symbol": "USDC.e",
+      "decimals": 6
+    },
+    "wethBridged": {
+      "address": "0x6A023CCd1ff6F2045C3309768eAd9E68F978f6e1",
+      "name": "Wrapped Ether on xDai",
+      "symbol": "WETH",
+      "decimals": 18
+    },
+    "wrappedNative": {
+      "address": "0xe91D153E0b41518A2Ce8Dd3D7944Fa863463a97d",
+      "name": "Wrapped XDAI",
+      "symbol": "WXDAI",
+      "decimals": 18
+    },
+    "legacyQuoteToken": {
+      "address": "0xDDAfbb505ad214D7b80b1f830fcCc89B60fb7A83",
+      "name": "USD//C on xDai",
+      "symbol": "USDC",
+      "decimals": 6
+    }
+  },
+  "reserveStatePool": {
+    "method": "gnosis-reserve-state-bars-v1",
+    "address": "0x8C0C36c85192204c8d782F763fF5a30f5bA0192F",
+    "factory": "0xc35DADB65012eC5796536bD9864eD8773aBc74C4",
+    "token0": "0x6A023CCd1ff6F2045C3309768eAd9E68F978f6e1",
+    "token1": "0xe91D153E0b41518A2Ce8Dd3D7944Fa863463a97d",
+    "token0Decimals": 18,
+    "token1Decimals": 18,
+    "base": "WETH",
+    "quote": "WXDAI",
+    "intervalSeconds": 900,
+    "identityGetters": {
+      "token0": "0x6A023CCd1ff6F2045C3309768eAd9E68F978f6e1",
+      "token1": "0xe91D153E0b41518A2Ce8Dd3D7944Fa863463a97d",
+      "factory": "0xc35DADB65012eC5796536bD9864eD8773aBc74C4",
+      "getPair": "0x8C0C36c85192204c8d782F763fF5a30f5bA0192F"
+    },
+    "identityObservedBlock": {
+      "number": "49299336",
+      "hash": "0x9f4e35afe20bf2746c4f4454cc3eb7b469bcdfbe1cf7dd3700863414e06f4945",
+      "timestamp": 1794782255
+    },
+    "referenceOnly": true,
+    "executionReady": false,
+    "semantics": "Calendar OHLC of actual reserve-state ratios after every Sync, including liquidity/sync changes; base-token gross swap flow volume from actual Swap logs only. Persisting state in no-change intervals is not a claim of trades.",
+    "sourcePolicyReviewRequired": true
+  }
+}

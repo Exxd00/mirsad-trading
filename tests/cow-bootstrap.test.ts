@@ -123,9 +123,17 @@ describe('cold start with durable wallet configuration', () => {
   it('retains a prior grant reader and its unresolved nonce gate without restoring its write authority', async () => {
     const current = await seeded(), old = runtime.parseCowRuntime({ ...current, terms: { ...current.terms, id: randomUUID() } });
     const draft = createCowPolicyDraft(old.terms, { manager: old.manager, enforcer: old.enforcer }), id = randomUUID();
+    const decisionKey = 'a'.repeat(64), data = cowPolicyOrderAppData(draft, ('0x' + decisionKey) as Hex);
+    const order: CowOrder = { kind: 'sell', sellToken: old.terms.markets[0].baseToken, buyToken: old.terms.quoteToken,
+      receiver: owner, sellAmount: '1000000000000000000', buyAmount: '100000000', validTo: NOW + 300,
+      appData: data.hash, feeAmount: '0', partiallyFillable: true, sellTokenBalance: 'erc20', buyTokenBalance: 'erc20' };
+    const intent: Intent = { side: 'sell', key: decisionKey, symbol: 'WETH-EUR', quantity: '1', positionId: 'isolated-prior-position',
+      reason: 'stop', signal: null, reduceOnly: true, protectionIds: [] };
     await put(cowRuntimeArchiveKey(old), old);
-    await put(`wallet:cow:v1:${draft.delegationHash.toLowerCase()}:order:${id}`, { version: 1, bindingId: draft.delegationHash.toLowerCase(),
-      clientOrderId: id, uid: '0x' + 'a'.repeat(112), neverSubmitted: { at: NOW, nonceReleased: false } });
+    await put(`wallet:cow:v1:${draft.delegationHash.toLowerCase()}:order:${id}`, { version: 1, revision: 1, bindingId: draft.delegationHash.toLowerCase(),
+      clientOrderId: id, decisionKey, owner, intent, order, uid: cowOrderUid(order, owner), fullAppData: data.full,
+      conversion: { currency: 'USDC', eurPerUnit: '1', sourceAt: NOW, sourceId: 'isolated-prior-fx' }, createdAt: NOW,
+      createdBlock: '1', cancelAt: null, postState: 'not-posted', cancelRequested: false, lastError: null, neverSubmitted: { at: NOW, nonceReleased: false } });
     const before = await settings(), source = await ensureCowWalletSource();
     expect(await source!.entryBlocker!()).toBe('cow_nonce_gap_requires_clearance');
     expect(await source!.verifyGrant!(source!.binding!)).toBe(false);

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { displayWallet, readWallet, watchMetaMask, type WalletProvider, type WalletView } from '../src/lib/wallet/metamask';
 import type { Plan } from '../src/lib/wallet/mandate';
 import { authorityPreparation, authorityReview, hash, owner } from './fixtures/wallet-authority';
-import { createAuthorityReview } from '../src/lib/wallet/authority';
+import { createAuthorityCloseReview, createAuthorityReview } from '../src/lib/wallet/authority';
 import { getContractAddress } from 'viem';
 import { randomUUID } from 'node:crypto';
 
@@ -234,11 +234,150 @@ describe('explicit main strategy wallet operations', () => {
     const origin = f.request.getMockImplementation()!; let nonce = '0x0';
     f.request.mockImplementation(async req => req.method === 'eth_getTransactionCount' ? nonce : req.method === 'eth_sendTransaction' ? hash : origin(req));
     expect(await f.client.authorityAction(review, 'deploy')).toEqual({ kind: 'transaction', value: hash });
-    expect(f.request).toHaveBeenCalledWith({ method: 'eth_sendTransaction', params: [{ from: owner.address, data: '0x6000', value: '0x0', nonce: '0x0' }] });
+    expect(f.request).toHaveBeenCalledWith({ method: 'eth_sendTransaction', params: [{ from: owner.address, chainId: '0x1', data: '0x6000', value: '0x0', nonce: '0x0' }] });
     nonce = '0x1';
     await expect(f.client.authorityAction(review, 'deploy')).rejects.toThrow('تغيّر ترتيب معاملات الحساب');
     expect(f.request.mock.calls.filter(([q]) => q.method === 'eth_sendTransaction')).toHaveLength(1);
     await expect(f.client.authorityAction(review, 'sign')).rejects.toThrow('أكمل التحقق من العقود');
     expect(f.request.mock.calls.some(([q]) => q.method === 'eth_signTypedData_v4')).toBe(false);
+  });
+});
+
+describe('explicit reviewed Gnosis wallet operations', () => {
+  const reviewFor = (chainId: 1 | 100, now = Math.floor(Date.now() / 1000)) => {
+    const preparation = authorityPreparation(now); preparation.terms.chainId = chainId;
+    return createAuthorityReview({ id: randomUUID(), profileRevision: 1, preparation, now });
+  };
+  it('uses the review chain for atomic capabilities, calls and EIP712, with no automatic prompts', async () => {
+    const f = fixture({ addresses: [owner.address], chain: '0x64' }); await vi.waitFor(() => expect(f.last()?.status).toBe('connected'));
+    expect(displayWallet({ address: owner.address, chainId: '100', nativeBalance: '1230000000000000000' })).toEqual({ network: 'Gnosis (100)', balance: '1.23 xDAI', baseUnits: false });
+    const read = f.request.getMockImplementation()!, review = reviewFor(100);
+    expect(f.request.mock.calls.every(([q]) => ['eth_accounts', 'eth_chainId', 'eth_getBalance'].includes(q.method))).toBe(true);
+    f.request.mockImplementation(async req => req.method === 'wallet_getCapabilities' ? { '0x64': { atomic: { status: 'ready' } } }
+      : req.method === 'wallet_sendCalls' ? { id: '0xabcd' } : req.method === 'eth_signTypedData_v4' ? owner.signTypedData(review.delegation.typed) : read(req));
+    expect(await f.client.authorityAction(review, 'bootstrap')).toEqual({ kind: 'batch', value: '0xabcd' });
+    expect(f.request).toHaveBeenCalledWith({ method: 'wallet_getCapabilities', params: [owner.address, ['0x64']] });
+    expect(f.request).toHaveBeenCalledWith({ method: 'wallet_sendCalls', params: [{ version: '2.0.0', chainId: '0x64', from: owner.address, atomicRequired: true, calls: review.calls }] });
+    expect(await f.client.authorityAction(review, 'sign')).toMatchObject({ kind: 'signature' });
+    const signed = f.request.mock.calls.find(([q]) => q.method === 'eth_signTypedData_v4')![0].params!;
+    expect(JSON.parse(signed[1] as string).domain.chainId).toBe(100);
+    expect(f.request.mock.calls.some(([q]) => q.method === 'eth_sendTransaction' || q.method === 'eth_requestAccounts' || q.method === 'wallet_switchEthereumChain')).toBe(false);
+  });
+  it.each([[1, '0x64'], [100, '0x1']] as const)('rejects review chain %s on wallet %s before any financial request', async (chain, walletChain) => {
+    const f = fixture({ addresses: [owner.address], chain: walletChain }); await vi.waitFor(() => expect(f.last()?.status).toBe('connected'));
+    await expect(f.client.authorityAction(reviewFor(chain), 'bootstrap')).rejects.toThrow('تغيّر الحساب أو الشبكة');
+    expect(f.request.mock.calls.every(([q]) => ['eth_accounts', 'eth_chainId', 'eth_getBalance'].includes(q.method))).toBe(true);
+  });
+  it('freezes the entire review before asynchronous wallet reads', async () => {
+    const f = fixture({ addresses: [owner.address], chain: '0x64' }); await vi.waitFor(() => expect(f.last()?.status).toBe('connected'));
+    const read = f.request.getMockImplementation()!, review = reviewFor(100), expected = structuredClone(review.calls);
+    f.request.mockImplementation(async req => {
+      if (req.method === 'wallet_getCapabilities') {
+        review.calls[0].data = '0xdeadbeef'; review.owner = other; review.chainId = 1;
+        return { '0x64': { atomic: { status: 'supported' } } };
+      }
+      return req.method === 'wallet_sendCalls' ? { id: '0xabcd' } : read(req);
+    });
+    expect(await f.client.authorityAction(review, 'bootstrap')).toMatchObject({ value: '0xabcd' });
+    expect(f.request).toHaveBeenCalledWith({ method: 'wallet_sendCalls', params: [{ version: '2.0.0', chainId: '0x64', from: owner.address, atomicRequired: true, calls: expected }] });
+  });
+  it('rechecks review expiry after awaited capabilities before sending, but retains an already submitted reference after a long prompt', async () => {
+    const f = fixture({ addresses: [owner.address], chain: '0x64' }); await vi.waitFor(() => expect(f.last()?.status).toBe('connected'));
+    const now = Math.floor(Date.now() / 1000), read = f.request.getMockImplementation()!;
+    vi.useFakeTimers(); vi.setSystemTime(now * 1000);
+    f.request.mockImplementation(async req => {
+      if (req.method === 'wallet_getCapabilities') { vi.setSystemTime((now + 601) * 1000); return { '0x64': { atomic: { status: 'supported' } } }; }
+      return read(req);
+    });
+    await expect(f.client.authorityAction(reviewFor(100, now), 'bootstrap')).rejects.toThrow('انتهت صلاحية المراجعة');
+    expect(f.request.mock.calls.some(([q]) => q.method === 'wallet_sendCalls')).toBe(false);
+    vi.setSystemTime(now * 1000);
+    f.request.mockImplementation(async req => {
+      if (req.method === 'wallet_getCapabilities') return { '0x64': { atomic: { status: 'supported' } } };
+      if (req.method === 'wallet_sendCalls') { vi.setSystemTime((now + 601) * 1000); return { id: '0x1234' }; }
+      return read(req);
+    });
+    expect(await f.client.authorityAction(reviewFor(100, now), 'bootstrap')).toEqual({ kind: 'batch', value: '0x1234' });
+    expect(f.request.mock.calls.filter(([q]) => q.method === 'wallet_sendCalls')).toHaveLength(1);
+  });
+  it('uses a fresh close snapshot on its own deadline even after the original review expires', async () => {
+    const f = fixture({ addresses: [owner.address], chain: '0x64' }); await vi.waitFor(() => expect(f.last()?.status).toBe('connected'));
+    const now = Math.floor(Date.now() / 1000), review = reviewFor(100, now), later = now + 601;
+    const close = createAuthorityCloseReview(review, { block: { number: '101', hash, timestamp: later }, outstandingUids: [], fenceReference: 'isolated-fence', blockers: [] }, later);
+    const expected = structuredClone(close.calls), read = f.request.getMockImplementation()!;
+    vi.useFakeTimers(); vi.setSystemTime(later * 1000);
+    f.request.mockImplementation(async req => {
+      if (req.method === 'wallet_getCapabilities') { close.calls.length = 0; close.reviewExpiresAt = 1; return { '0x64': { atomic: { status: 'supported' } } }; }
+      return req.method === 'wallet_sendCalls' ? '0xdead' : read(req);
+    });
+    expect(await f.client.authorityAction(review, 'close', close)).toEqual({ kind: 'batch', value: '0xdead' });
+    expect(f.request).toHaveBeenCalledWith({ method: 'wallet_sendCalls', params: [{ version: '2.0.0', chainId: '0x64', from: owner.address, atomicRequired: true, calls: expected }] });
+  });
+  it('pins Gnosis deployment chain and checks the deadline after the awaited pending nonce', async () => {
+    const f = fixture({ addresses: [owner.address], chain: '0x64' }); await vi.waitFor(() => expect(f.last()?.status).toBe('connected'));
+    const now = Math.floor(Date.now() / 1000), preparation = authorityPreparation(now); preparation.terms.chainId = 100;
+    preparation.contracts.enforcer = getContractAddress({ from: owner.address, nonce: 0n }); preparation.blockers = ['wallet_enforcer_missing'];
+    preparation.deploymentStep = { compilerVersion: '0.8.30', artifactHash: hash, expectedAddress: preparation.contracts.enforcer,
+      sender: owner.address, chainId: 100, transaction: { data: '0x6000', value: '0x0', nonce: '0x0' }, gasEstimate: '100000', blocker: null };
+    const review = createAuthorityReview({ id: randomUUID(), profileRevision: 1, preparation, now }), read = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async req => req.method === 'eth_getTransactionCount' ? '0x0' : req.method === 'eth_sendTransaction' ? hash : read(req));
+    expect(await f.client.authorityAction(review, 'deploy')).toEqual({ kind: 'transaction', value: hash });
+    expect(f.request).toHaveBeenCalledWith({ method: 'eth_sendTransaction', params: [{ from: owner.address, chainId: '0x64', data: '0x6000', value: '0x0', nonce: '0x0' }] });
+    vi.useFakeTimers(); vi.setSystemTime(now * 1000);
+    f.request.mockImplementation(async req => { if (req.method === 'eth_getTransactionCount') { vi.setSystemTime((now + 601) * 1000); return '0x0'; } return read(req); });
+    await expect(f.client.authorityAction(review, 'deploy')).rejects.toThrow('انتهت صلاحية المراجعة');
+    expect(f.request.mock.calls.filter(([q]) => q.method === 'eth_sendTransaction')).toHaveLength(1);
+  });
+  it.each(['chain', 'account'] as const)('rechecks %s after capabilities without opening a financial prompt', async changed => {
+    const f = fixture({ addresses: [owner.address], chain: '0x64' }); await vi.waitFor(() => expect(f.last()?.status).toBe('connected'));
+    const read = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async req => {
+      if (req.method === 'wallet_getCapabilities') {
+        if (changed === 'chain') f.state.chain = '0x1'; else f.state.addresses = [other];
+        return { '0x64': { atomic: { status: 'supported' } } };
+      }
+      return read(req);
+    });
+    await expect(f.client.authorityAction(reviewFor(100), 'bootstrap')).rejects.toThrow('تغيّر الحساب أو الشبكة');
+    expect(f.request.mock.calls.some(([q]) => ['wallet_sendCalls', 'eth_sendTransaction', 'eth_signTypedData_v4'].includes(q.method))).toBe(false);
+  });
+  it('does not send an expired close or release an existing switch lock for a second prompt', async () => {
+    const f = fixture({ addresses: [owner.address], chain: '0x64' }); await vi.waitFor(() => expect(f.last()?.status).toBe('connected'));
+    const now = Math.floor(Date.now() / 1000), review = reviewFor(100, now), read = f.request.getMockImplementation()!;
+    const close = createAuthorityCloseReview(review, { block: { number: '101', hash, timestamp: now }, outstandingUids: [], fenceReference: 'isolated-fence', blockers: [] }, now);
+    vi.useFakeTimers(); vi.setSystemTime(now * 1000);
+    f.request.mockImplementation(async req => { if (req.method === 'wallet_getCapabilities') { vi.setSystemTime((now + 601) * 1000); return { '0x64': { atomic: { status: 'supported' } } }; } return read(req); });
+    await expect(f.client.authorityAction(review, 'close', close)).rejects.toThrow('حدّث مراجعة الإغلاق');
+    expect(f.request.mock.calls.some(([q]) => q.method === 'wallet_sendCalls')).toBe(false);
+    let finish!: (value: unknown) => void;
+    f.request.mockImplementation(req => req.method === 'wallet_switchEthereumChain' ? new Promise(resolve => { finish = resolve; }) : read(req));
+    const switching = f.client.switchNetwork(1);
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    await expect(f.client.switchNetwork(1)).rejects.toThrow('راجع اتصال المحفظة');
+    await expect(f.client.authorityAction(reviewFor(100), 'sign')).rejects.toThrow('راجع اتصال محفظة');
+    f.state.chain = '0x1'; finish(null); await switching;
+    expect(f.request.mock.calls.filter(([q]) => q.method === 'wallet_switchEthereumChain')).toHaveLength(1);
+  });
+  it('never switches automatically; explicit switching uses fixed Gnosis metadata only on unknown-chain error', async () => {
+    const f = fixture(); await vi.waitFor(() => expect(f.last()?.status).toBe('connected'));
+    const read = f.request.getMockImplementation()!; let added = false;
+    f.request.mockImplementation(async req => {
+      if (req.method === 'wallet_switchEthereumChain') { if (!added) throw { code: 4902 }; f.state.chain = '0x64'; f.event('chainChanged', '0x64'); return null; }
+      if (req.method === 'wallet_addEthereumChain') { added = true; return null; }
+      return read(req);
+    });
+    expect(f.request.mock.calls.some(([q]) => q.method.startsWith('wallet_'))).toBe(false);
+    await f.client.switchNetwork(100);
+    expect(f.request).toHaveBeenCalledWith({ method: 'wallet_addEthereumChain', params: [{ chainId: '0x64', chainName: 'Gnosis', nativeCurrency: { name: 'xDAI', symbol: 'xDAI', decimals: 18 }, rpcUrls: ['https://rpc.gnosischain.com'], blockExplorerUrls: ['https://gnosisscan.io'] }] });
+    await vi.waitFor(() => expect(f.last()).toMatchObject({ status: 'connected', wallet: { chainId: '100', address } }));
+    expect(f.request.mock.calls.some(([q]) => ['wallet_sendCalls', 'eth_sendTransaction', 'eth_signTypedData_v4', 'eth_requestAccounts'].includes(q.method))).toBe(false);
+  });
+  it('does not add a network after user rejection or accept unsupported targets', async () => {
+    const f = fixture(); await vi.waitFor(() => expect(f.last()?.status).toBe('connected'));
+    const read = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async req => { if (req.method === 'wallet_switchEthereumChain') throw { code: 4001 }; return read(req); });
+    await expect(f.client.switchNetwork(100)).rejects.toMatchObject({ code: 4001 });
+    await expect(f.client.switchNetwork(84532 as 100)).rejects.toThrow('راجع اتصال المحفظة');
+    expect(f.request.mock.calls.some(([q]) => q.method === 'wallet_addEthereumChain')).toBe(false);
   });
 });

@@ -35,7 +35,7 @@ function fixture(reduced = false) {
       // admission certificate, not this false flag, justifies order bounds.
       partiallyFillable: false, appDataHash: r.appDataHash ?? ('0x' + '0'.repeat(64)), verified, readAt: NOW * 1000, expiration: new Date((NOW + 30) * 1000).toISOString() };
   }) };
-  const market = { referenceBook: vi.fn(async () => ({ ask: '100', bid: '99.99', tradeAt: NOW, readAt: NOW, sourceId: 'isolated-eth-eur' })) };
+  const market = { referenceBook: vi.fn(async () => ({ currency: 'ETH', ask: '100', bid: '99.99', tradeAt: NOW, readAt: NOW, sourceId: 'isolated-eth-eur' })) };
   const client = { estimateFeesPerGas: vi.fn(async () => ({ maxFeePerGas: 1000000000n, maxPriorityFeePerGas: 100000000n })) };
   const risk: RiskResult = evaluateRisk({ reduced, dailyHaltDate: null }, [], a.equityHistory, true, NOW);
   const quotes = new CowMarketQuotes({ config, client: client as unknown as PublicClient, market: market as unknown as CoinbaseMarketClient,
@@ -57,7 +57,7 @@ function atomicFixture(reduced = false, rate = '1', ask = '150', bid = ask) {
     markets: [{ mapping, euroPrice: eurAsk }], eurPerQuote: rate });
   f.config.gasLimits = { maxGas: '1500000', maxFeePerGasWei: '20000000000', maxPriorityFeePerGasWei: '2000000000',
     maxTransactionCostWei: '30000000000000000' };
-  f.market.referenceBook.mockResolvedValue({ ask: '150', bid: '150', tradeAt: NOW, readAt: NOW, sourceId: 'isolated-eth-eur' }); // Existing ceiling gives EUR9 per leg.
+  f.market.referenceBook.mockResolvedValue({ currency: 'ETH', ask: '150', bid: '150', tradeAt: NOW, readAt: NOW, sourceId: 'isolated-eth-eur' }); // Existing ceiling gives EUR9 per leg.
   f.prices(ask, bid);
   return { ...f, entrySignal: { ...signal('WETH-EUR'), close: eurAsk } };
 }

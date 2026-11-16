@@ -6,11 +6,13 @@ import type { AuthorityPublic } from '@/lib/wallet/authority-service';
 import type { Snapshot } from '@/lib/wallet/metamask';
 import type { WalletFeasibility } from '@/lib/wallet/wallet-feasibility';
 import { currentFeasibility } from '@/lib/wallet/wallet-feasibility';
+import { strategyChainId, strategyNetwork, walletAssetLabel } from '@/lib/wallet/strategy-network-ui';
 import styles from '@/app/automation/page.module.css';
 import { WalletFeasibilityAudit } from './WalletFeasibilityAudit';
+import { WalletGnosisReadiness } from './WalletGnosisReadiness';
 
 type Report = AuthorityPublic & { csrfToken: string };
-type Setup = { status: 'funding-required' | 'configured'; owner: string; executor: string; chainId?: number;
+type Setup = { status: 'funding-required' | 'configured'; owner: string; executor: string; chainId: 1 | 100;
   funding?: { quoteUnit: string; quoteToken: string; quoteRaw: string; ownerGasWei: string; executorGasWei: string };
   markets: { symbol: string }[]; excluded?: { symbol: string; reason: string }[]; blockers: string[] };
 type OwnerAction = (review: AuthorityReview, action: 'deploy' | 'bootstrap' | 'sign' | 'close', close?: AuthorityCloseReview)
@@ -21,7 +23,7 @@ function amount(raw: string, asset: { decimals?: number; label?: string } | unde
   const digits = raw.padStart(asset.decimals + 1, '0');
   if (!asset.decimals) return raw + ' ' + asset.label;
   const fractional = digits.slice(-asset.decimals).replace(/0+$/, '');
-  return digits.slice(0, -asset.decimals) + (fractional ? '.' + fractional : '') + ' ' + asset.label;
+  return digits.slice(0, -asset.decimals) + (fractional ? '.' + fractional : '') + ' ' + walletAssetLabel(asset.label);
 }
 const labels: Record<AuthorityPublic['state'], string> = {
   missing: 'لم تُنشأ مراجعة الصلاحية بعد', unconfigured: 'مصدر التحقق من الصلاحية غير متاح',
@@ -65,8 +67,9 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus }: { 
     return () => { alive.current = false; controller.abort(); if (retryTimer) clearTimeout(retryTimer); };
   }, []);
   const review = report?.review, close = report?.close;
+  const walletNetwork = strategyNetwork(wallet?.chainId), reviewNetwork = strategyNetwork(review?.chainId), setupNetwork = strategyNetwork(setup?.chainId);
   const quoteAsset = review?.allowances.find(a => a.token.toLowerCase() === review.terms.quoteToken.toLowerCase());
-  const matched = !!wallet && !!review && wallet.chainId === '1' && wallet.address.toLowerCase() === review.owner.toLowerCase();
+  const matched = !!wallet && !!review && !!reviewNetwork && wallet.chainId === String(review.chainId) && wallet.address.toLowerCase() === review.owner.toLowerCase();
   const expiredReview = !review || Math.floor(Date.now() / 1000) >= review.reviewExpiresAt;
   const feasibleNow = () => !!wallet && currentFeasibility(feasibility, wallet.address, wallet.chainId);
   const feasible = feasibleNow();
@@ -101,13 +104,15 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus }: { 
         throw new Error('أكمل فحص الأصول والتكلفة الحديث لهذا الحساب والشبكة قبل تجهيز الإعداد أو مراجعة صلاحية جديدة.');
       }
       if (action === 'setup') {
-        if (!wallet || wallet.chainId !== '1') throw new Error('افتح حساب المالك على Ethereum (1) أولاً.');
+        const chainId = strategyChainId(wallet?.chainId);
+        if (!wallet || chainId === null) throw new Error('افتح حساب المالك على Ethereum (1) أو Gnosis (100) أولاً.');
         const response = await fetch('/api/wallet/strategy/setup', { method: 'POST', credentials: 'same-origin', cache: 'no-store',
           headers: { 'Content-Type': 'application/json', 'x-csrf-token': report.csrfToken }, signal: AbortSignal.timeout(75000),
-          body: JSON.stringify({ action: 'prepare', owner: wallet.address, chainId: 1 }) });
+          body: JSON.stringify({ action: 'prepare', owner: wallet.address, chainId }) });
         const result = await response.json().catch(() => null);
         if (!response.ok) throw new Error(result?.error ?? 'تعذر تجهيز الإعداد من بيانات السلسلة والأسواق.');
         if (!alive.current) return;
+        if (result?.chainId !== chainId || typeof result.owner !== 'string' || result.owner.toLowerCase() !== wallet.address.toLowerCase()) throw new Error('لم يطابق الإعداد الحساب والشبكة المطلوبين. أعد القراءة.');
         setSetup(result as Setup); setReviewed(false);
         setNotice(result.status === 'configured' ? 'حُفظ إعداد محدود وغير مفعّل من الأصول والأسواق المتحقق منها. الخطوة التالية إعداد مراجعة الصلاحية.'
           : 'لا تتوفر متطلبات إعداد الصلاحية بعد. الأرصدة والعوائق المقروءة موضحة أدناه.');
@@ -161,15 +166,17 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus }: { 
     finally { busy.current = false; if (alive.current) setPending(false); }
   }
   return <section className={styles.panel} aria-labelledby="strategy-authority-heading">
-    <div className={styles.panelHeading}><h2 id="strategy-authority-heading">صلاحية المحرك على Ethereum</h2></div>
+    <div className={styles.panelHeading}><h2 id="strategy-authority-heading">صلاحية المحرك{reviewNetwork ? ' على ' + reviewNetwork.name : ''}</h2></div>
     <div className={styles.reportDetails}>
       <p role="status">{report ? labels[report.state] : 'جارٍ قراءة سجل الصلاحية…'}</p>
+      <WalletGnosisReadiness csrfToken={report?.csrfToken ?? null} disabled={pending} />
       <WalletFeasibilityAudit wallet={wallet} csrfToken={report?.csrfToken ?? null} onAudit={setFeasibility} disabled={pending} />
       {!feasible && <p>لم يثبت فحص حديث يجيز إعداداً جديداً. يبقى التحقق وإغلاق الصلاحيات السابقة متاحين.</p>}
       <p>هذه الصلاحية لاستراتيجية المحرك الرئيسية. يراجع صاحب المحفظة ترقية الحساب والموافقات المحدودة والتفويض قبل أي طلب من MetaMask.</p>
       {review && <>
         <dl className={styles.details}>
           <dt>الحساب المالك</dt><dd><bdi dir="ltr">{review.owner}</bdi></dd>
+          <dt>شبكة الصلاحية</dt><dd><bdi dir="ltr">{reviewNetwork?.name ?? 'شبكة غير مدعومة'}</bdi></dd>
           <dt>منفّذ المحرك</dt><dd><bdi dir="ltr">{review.executor}</bdi></dd>
           <dt>مدة التفويض</dt><dd><bdi dir="ltr">{new Date(review.terms.startsAt * 1000).toISOString()} — {new Date(review.terms.expiresAt * 1000).toISOString()}</bdi></dd>
           <dt>النطاق</dt><dd>{review.terms.markets.length} أصول أساسية محددة؛ دخول محدد السعر، إلغاء المتبقي وخروج مُدار إلى حساب المالك فقط</dd>
@@ -178,7 +185,7 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus }: { 
           <dt>آخر تحقق محفوظ</dt><dd><bdi>{report?.verifiedAt ? new Date(report.verifiedAt * 1000).toISOString() : 'لم يُحفظ تحقق نهائي'}</bdi></dd>
         </dl>
         <p>الحدود الإجمالية تراكمية طوال مدة التفويض، ولا تُعاد عند إلغاء أمر. تنتهي الصلاحية في الموعد المعروض وتحتاج مراجعة صريحة للتجديد أو الإغلاق. تبقى التعبئات المعلقة غير نهائية حتى يثبتها الخادم.</p>
-        <p>إعداد المحفظة يشتق سقف شراء ثابتاً من 10% من USDC عند الإعداد، وحد دوران تراكمي يبلغ 10 أضعاف الرصيد الأولي خلال 7 أيام. يحجز توقيع الأمر من هذا الحد حتى عند إلغائه. نسب 10% و5% من المتاح، وEMA وحد التعرض 30% وخسارة اليوم 1% يطبقها المحرك؛ ليست كلها قيوداً داخل العقد.</p>
+        <p>إعداد المحفظة يشتق سقف شراء ثابتاً من 10% من {reviewNetwork?.quote ?? 'رمز التسعير المراجع'} عند الإعداد، وحد دوران تراكمي يبلغ 10 أضعاف الرصيد الأولي خلال 7 أيام. يحجز توقيع الأمر من هذا الحد حتى عند إلغائه. نسب 10% و5% من المتاح، وEMA وحد التعرض 30% وخسارة اليوم 1% يطبقها المحرك؛ ليست كلها قيوداً داخل العقد.</p>
         <p>حدود السعر داخل العقد أوسع: سقف الشراء ضعفا سعر الإعداد، وأرضية البيع نصفه. قد تحجب الأرضية خروج الوقف إذا هبط السعر دونها؛ لا يُضمن تنفيذ الوقف أو وقت التعبئة، وتتأخر نهائية إثبات السلسلة.</p>
         <details><summary>العقود والحدود التي ستُعرض للموافقة</summary>
           <p>عقد الحماية: <bdi dir="ltr">{review.contracts.enforcer}</bdi>. التوقيع محجوب حتى تثبت هوية الكود المنشور.</p>
@@ -196,7 +203,7 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus }: { 
           <p>{review.deploymentStep.gasEstimate ? <>تقدير الغاز: <bdi>{review.deploymentStep.gasEstimate}</bdi> وحدة؛ التكلفة النهائية تُعرض في MetaMask.</>
             : <>تقدير الغاز غير متاح: <bdi>{review.deploymentStep.blocker}</bdi>. لا يمكن إرسال النشر قبل معالجة هذا العائق.</>}</p>
         </div>}
-        {!matched && <p role="status">افتح حساب المالك على Ethereum (1) لمراجعة طلبات الموافقة.</p>}
+        {!matched && <p role="status">افتح حساب المالك على {reviewNetwork?.name ?? 'شبكة المراجعة المدعومة'} لمراجعة طلبات الموافقة.</p>}
         {expiredReview && report?.state !== 'closing' && report?.state !== 'verified' && <p>انتهت نافذة المراجعة؛ أنشئ مراجعة حديثة قبل الإرسال أو التوقيع.</p>}
         {close && <p>دفعة الإغلاق تشمل {close.outstandingUids.length} من أصل {close.remainingOrders ?? close.outstandingUids.length} أوامر تحتاج إنهاءً، وتعطيل التفويض وتصفير موافقات الرموز المحددة. عند بقاء أوامر، أعد إعداد دفعة الإغلاق بعد تأكيد السابقة. الإغلاق يُثبت بقراءة السلسلة للمجموعة المتتبعة كاملةً، ولا يُفترض من انتهاء المدة.</p>}
         {close && <details><summary>معرّفات الأوامر التي ستُبطَل</summary><ul>{close.outstandingUids.map(uid => <li key={uid}><bdi dir="ltr">{uid}</bdi></li>)}</ul>
@@ -206,7 +213,7 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus }: { 
       </>}
       <div className={styles.controls}>
         {report && !['verified', 'closing'].includes(report.state) && <button className={styles.button} type="button"
-          disabled={pending || !wallet || wallet.chainId !== '1' || !feasible} onClick={() => void run('setup')}>تجهيز إعداد المحرك من المحفظة والأسواق</button>}
+          disabled={pending || !wallet || !walletNetwork || !feasible} onClick={() => void run('setup')}>تجهيز إعداد المحرك من المحفظة والأسواق</button>}
         {canPrepare && <button className={styles.button} type="button" disabled={pending || !feasible} onClick={() => void run('prepare')}>إعداد مراجعة حديثة</button>}
         {review?.deploymentStep && <button className={styles.button} type="button" disabled={pending || !feasible || !matched || !reviewed || expiredReview || !review.deploymentStep.gasEstimate || !!review.deploymentStep.blocker}
           onClick={() => void run('deploy')}>مراجعة نشر عقد الحماية في MetaMask</button>}
@@ -224,14 +231,15 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus }: { 
         </>}
       </div>
       {setup && <div role="status">
-        <p>{setup.status === 'configured' ? 'إعداد مرشح محفوظ؛ لا يمنح صلاحية التداول.' : 'متطلبات مسار USDC الحالي غير مكتملة. تُراجع الأصول والتكلفة في الفحص أعلاه قبل اتخاذ قرار الإعداد.'}</p>
+        <p>{setup.status === 'configured' ? 'إعداد مرشح محفوظ؛ لا يمنح صلاحية التداول.' : `متطلبات مسار ${setupNetwork?.quote ?? 'التسعير'} الحالي غير مكتملة. تُراجع الأصول والتكلفة في الفحص أعلاه قبل اتخاذ قرار الإعداد.`}</p>
         <dl className={styles.details}>
+          <dt>شبكة الإعداد</dt><dd>{setupNetwork?.name}</dd>
           <dt>حساب المالك</dt><dd><bdi dir="ltr">{setup.owner}</bdi></dd>
           <dt>حساب رسوم المشغّل</dt><dd><bdi dir="ltr">{setup.executor}</bdi></dd>
           {setup.funding && <>
-            <dt>USDC المقروءة في حساب المالك</dt><dd><bdi>{amount(setup.funding.quoteRaw, { decimals: 6, label: 'USDC' })}</bdi></dd>
-            <dt>ETH المقروءة لرسوم المالك</dt><dd><bdi>{amount(setup.funding.ownerGasWei, { decimals: 18, label: 'ETH' })}</bdi></dd>
-            <dt>ETH المقروءة لرسوم المشغّل</dt><dd><bdi>{amount(setup.funding.executorGasWei, { decimals: 18, label: 'ETH' })}</bdi></dd>
+            <dt>{setupNetwork?.quote} المقروءة في حساب المالك</dt><dd><bdi>{amount(setup.funding.quoteRaw, { decimals: 6, label: setupNetwork?.quote })}</bdi></dd>
+            <dt>{setupNetwork?.native} المقروءة لرسوم المالك</dt><dd><bdi>{amount(setup.funding.ownerGasWei, { decimals: 18, label: setupNetwork?.native })}</bdi></dd>
+            <dt>{setupNetwork?.native} المقروءة لرسوم المشغّل</dt><dd><bdi>{amount(setup.funding.executorGasWei, { decimals: 18, label: setupNetwork?.native })}</bdi></dd>
           </>}
           <dt>أسواق اجتازت مطابقة الرمز وبيانات القياس</dt><dd>{setup.markets.map(m => m.symbol).join('، ') || 'لم تكتمل أسواق متاحة'}</dd>
         </dl>

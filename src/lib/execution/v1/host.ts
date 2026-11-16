@@ -14,6 +14,9 @@ import { walletOrderBlock } from '../../order-connection';
 import { strategyEntrySelection } from '../../wallet/selection-service';
 import { ensureCowWalletSource } from '../../wallet/cow-bootstrap';
 import { runMarketObservation } from './market-observation';
+import { query } from '../../db';
+import { loadStrategyProfile } from '../../wallet/strategy-profile';
+import { resumeGnosisMarketReadiness } from '../../wallet/gnosis-market-readiness-job';
 export const journal = new SqlJournal();
 export async function connectedVenue(): Promise<ConnectedWalletVenue | null> {
   const source = await ensureCowWalletSource();
@@ -111,6 +114,13 @@ export async function runProtection() {
   return port ? protectionCycle(port, journal) : { ...unavailable(), retryAt: Math.floor(Date.now() / 1000) + CONFIG.protectionPollSeconds };
 }
 export async function runTick() {
+  // An owner-enabled, market-only warmup can continue before a financial
+  // profile exists. Its own bounded job never creates authority or arms entries.
+  // Keep it outside the 10-second protection path and isolate read failures.
+  const marketReadiness = Promise.resolve().then(async () => {
+    if (await loadStrategyProfile({ query })) return undefined;
+    return await resumeGnosisMarketReadiness();
+  }).catch(() => ({ status: 'unavailable' as const, reason: 'wallet_market_readiness_unavailable' }));
   // Public reference measurement has its own bounded lease and state. It never
   // installs a financial source or creates execution signals, and an account
   // outage must not stop it. Start concurrently to preserve the host deadline.
@@ -126,5 +136,6 @@ export async function runTick() {
   let report: Awaited<ReturnType<typeof dailyReport>>;
   try { report = await dailyReport(await connectedVenue(), journal, Math.floor(Date.now() / 1000)); }
   catch (error) { report = { status: 'blocked', reason: executionReason(error, 'report_source_unavailable') }; }
-  return { ...execution, report, measurement: await measurement };
+  const readiness = await marketReadiness;
+  return { ...execution, report, measurement: await measurement, ...(readiness === undefined ? {} : { marketReadiness: readiness }) };
 }

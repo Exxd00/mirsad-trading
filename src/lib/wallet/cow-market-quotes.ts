@@ -5,24 +5,26 @@ import { planBuy } from '../execution/v1/planner';
 import type { EntryPlanner } from '../execution/v1/runner';
 import { validateQuoteConversion } from '../execution/v1/readiness';
 import type { SourceBalance, SourceInstrument, SourceOrderBook } from '../execution/v1/source-model';
-import { CoinbaseMarketClient } from './coinbase-market';
+import type { CowMarketPort } from './cow-market-port';
 import { CowReadClient } from './cow-api';
 import type { CowRuntimeConfig } from './cow-runtime-config';
 import { cowPolicyOrderAppData, createCowPolicyDraft } from './cow-policy';
 import { CowExecutionError } from './cow-execution-types';
-import { cowNetLimitGasUpper, createCowNetLimitProof, readCowStandardTokenEvidence, type CowNetLimitGasEvidence, type CowStandardTokenEvidence } from './cow-net-limit-proof';
-import tokenPolicy from './generated/cow-token-behavior.json';
+import { cowNetLimitGasUpper, createCowNetLimitProof, readCowStandardTokenEvidence, type CowNetLimitGasEvidence, type CowTokenEvidence } from './cow-net-limit-proof';
+import { readGnosisStandardTokenEvidence } from './gnosis-token-evidence';
+import { cowNetwork } from './cow-network';
+import type { GnosisProvisionalConversion } from './gnosis-market';
 
-export type CowMarketQuoteOptions = { config: CowRuntimeConfig; client: PublicClient; market: CoinbaseMarketClient;
+export type CowMarketQuoteOptions = { config: CowRuntimeConfig; client: PublicClient; market: CowMarketPort;
   api: CowReadClient; balances(): Promise<SourceBalance[]>; clock?: () => number;
   /** Trusted read-only provider seam; never a browser/config permission flag. */
-  standardTokens?: () => Promise<CowStandardTokenEvidence> };
+  standardTokens?: () => Promise<CowTokenEvidence> };
 /** Explicit size-bound CoW quote estimates, independent of the reference
  * candles. Token fees are embedded in net bid/ask. Executor gas is additional. */
 export class CowMarketQuotes {
   private readonly clock: () => number;
   private conversion: QuoteConversion | null = null;
-  private tokens: CowStandardTokenEvidence | null = null;
+  private tokens: CowTokenEvidence | null = null;
   private readonly books = new Map<string, { at: number; book: SourceOrderBook; instrument: SourceInstrument }>();
   constructor(private readonly options: CowMarketQuoteOptions) { this.clock = options.clock ?? (() => Math.floor(Date.now() / 1000)); }
   async fundingConversion(): Promise<QuoteConversion> {
@@ -34,7 +36,7 @@ export class CowMarketQuotes {
   }
   async getFunding(): Promise<FundingEvidence> {
     const [balances, conversion] = await Promise.all([this.options.balances(), this.fundingConversion()]);
-    const balance = balances.find(b => b.currency === 'USDC');
+    const balance = balances.find(b => b.currency === cowNetwork(this.options.config.terms.chainId).quoteCurrency);
     if (!balance) throw new Error('funding_balance_mismatch');
     return { ...conversion, available: balance.available, reserved: balance.reserved, total: balance.total };
   }
@@ -46,22 +48,34 @@ export class CowMarketQuotes {
     if (!value) throw new Error('accounting_historical_price_missing');
     return value;
   }
+  /** Canonical, pre-final price evidence is for shadow protection only. */
+  async provisionalConversionAt(currency: string, at: number, previous?: GnosisProvisionalConversion) {
+    if (this.options.config.terms.chainId !== 100 || !this.options.market.provisionalConversionAt) throw new Error('accounting_historical_price_missing');
+    return this.options.market.provisionalConversionAt(currency, at, previous);
+  }
   async gasReserveEur(): Promise<string> {
     return cowNetLimitGasUpper(await this.gasEvidence(), this.clock()).eur;
   }
-  private async standardTokens(): Promise<CowStandardTokenEvidence> {
+  private async standardTokens(): Promise<CowTokenEvidence> {
     if (!this.tokens || !fresh(this.tokens.readAt, this.clock(), 5)) this.tokens = await (this.options.standardTokens
-      ? this.options.standardTokens() : readCowStandardTokenEvidence(this.options.client, this.clock));
+      ? this.options.standardTokens() : this.options.config.terms.chainId === 100
+        ? readGnosisStandardTokenEvidence(this.options.client, this.options.config.terms.owner, this.clock)
+        : readCowStandardTokenEvidence(this.options.client, this.clock));
     return structuredClone(this.tokens);
   }
   private async gasEvidence(): Promise<CowNetLimitGasEvidence> {
-    const [fees, eth] = await Promise.all([this.options.client.estimateFeesPerGas({ type: 'eip1559', chain: this.options.client.chain }), this.options.market.referenceBook('ETH')]);
+    const network = cowNetwork(this.options.config.terms.chainId);
+    const [fees, native] = await Promise.all([this.options.client.estimateFeesPerGas({ type: 'eip1559', chain: this.options.client.chain }),
+      network.chainId === 100 ? this.options.market.nativeGasReference!() : this.options.market.referenceBook('ETH')]);
     const maxFee = fees.maxFeePerGas, tip = fees.maxPriorityFeePerGas;
     if (!maxFee || tip === undefined || maxFee > BigInt(this.options.config.gasLimits.maxFeePerGasWei)
       || tip > BigInt(this.options.config.gasLimits.maxPriorityFeePerGasWei)) throw new Error('wallet_gas_ceiling_exceeded');
     // Two distinct charged nonces per leg: presign and cancellation/clearance.
     // A same-nonce replacement cannot charge gas twice on the canonical chain.
-    return { limits: this.options.config.gasLimits, ethEurAsk: eth.ask, sourceAt: eth.tradeAt, readAt: eth.readAt, sourceId: eth.sourceId };
+    if (native.currency !== network.nativeCurrency) throw new Error('wallet_gas_ceiling_exceeded');
+    return { limits: this.options.config.gasLimits,
+      ...(network.chainId === 100 ? { nativeCurrency: 'XDAI' as const, nativeEurAsk: native.ask } : { ethEurAsk: native.ask }),
+      sourceAt: native.tradeAt, readAt: native.readAt, sourceId: native.sourceId };
   }
   private async exactQuote(symbol: string, quantity: string, conversion: QuoteConversion, intentKey?: string) {
     const m = this.options.config.mappings.find(m => m.symbol === symbol);
@@ -85,10 +99,12 @@ export class CowMarketQuotes {
     const ask = decimal(buy.sellAmount).add(buy.quotedFeeAmount).div('1000000').mul(conversion.eurPerUnit).div(quantity);
     const bid = decimal(sell.buyAmount).div('1000000').mul(conversion.eurPerUnit).div(quantity);
     if (!bid.gt(0) || bid.gt(ask)) throw new Error('wallet_quote_invalid');
-    const quote: Quote = { symbol, bid: bid.toFixed(), ask: ask.toFixed(), source: 'cow-mainnet-exact-size-v1',
+    const network = cowNetwork(config.terms.chainId);
+    if (![buy, sell].every(q => (q.chainId ?? 1) === network.chainId)) throw new Error('wallet_exact_quote_unavailable');
+    const quote: Quote = { symbol, bid: bid.toFixed(), ask: ask.toFixed(), source: network.chainId === 1 ? 'cow-mainnet-exact-size-v1' : 'cow-gnosis-exact-size-v1',
       sourceAt: Math.floor(Math.min(buy.readAt, sell.readAt) / 1000), readAt, conversion: { ...conversion },
       depth: { bids: [{ price: bid.toFixed(), quantity }], asks: [{ price: ask.toFixed(), quantity }] },
-      exactSize: { provider: 'cow-mainnet-v1', quantity, buyQuoteId: buy.quoteId, sellQuoteId: sell.quoteId,
+      exactSize: { provider: network.chainId === 1 ? 'cow-mainnet-v1' : 'cow-gnosis-v1', quantity, buyQuoteId: buy.quoteId, sellQuoteId: sell.quoteId,
         buySellAmount: buy.sellAmount, buyBuyAmount: buy.buyAmount, buyFeeAmount: buy.quotedFeeAmount,
         sellSellAmount: sell.sellAmount, sellBuyAmount: sell.buyAmount, sellFeeAmount: sell.quotedFeeAmount,
         buyExpiration: Math.floor(Date.parse(buy.expiration) / 1000), sellExpiration: Math.floor(Date.parse(sell.expiration) / 1000),
@@ -102,7 +118,8 @@ export class CowMarketQuotes {
       const terms = this.options.config.terms, mapping = this.options.config.mappings.find(m => m.symbol === signal.symbol);
       const scope = terms.markets.find(m => mapping && m.baseToken.toLowerCase() === mapping.tokenAddress.toLowerCase());
       if (!mapping || !scope || !account.funding || !referenceQuote.conversion) return blocked('funding_conversion_invalid');
-      if (mapping.tokenAddress.toLowerCase() !== tokenPolicy.weth9.address || terms.quoteToken.toLowerCase() !== tokenPolicy.usdc.proxy) {
+      const network = cowNetwork(terms.chainId);
+      if (mapping.tokenAddress.toLowerCase() !== network.contracts.baseToken.toLowerCase() || terms.quoteToken.toLowerCase() !== network.contracts.quoteToken.toLowerCase()) {
         return blocked('wallet_net_limit_proof_invalid');
       }
       if (this.clock() + terms.maxOrderValiditySeconds + 900 >= terms.expiresAt) return blocked('cow_grant_renewal_required');
@@ -156,7 +173,7 @@ export class CowMarketQuotes {
     if (!m) throw new Error('wallet_market_mapping_missing');
     const [balances, conversion, reference, gas] = await Promise.all([this.options.balances(), this.fundingConversion(),
       this.options.market.referenceBook(m.currency), this.gasReserveEur()]);
-    const available = balances.find(b => b.currency === 'USDC')?.available ?? '0';
+    const network = cowNetwork(this.options.config.terms.chainId), available = balances.find(b => b.currency === network.quoteCurrency)?.available ?? '0';
     const balance = decimal(balances.find(b => b.currency === m.currency)?.total ?? '0');
     const scale = decimal('10').pow(m.tokenDecimals);
     const budget = decimal(available).mul(conversion.eurPerUnit).mul(CONFIG.allocation).sub(gas);
@@ -170,15 +187,16 @@ export class CowMarketQuotes {
       bids: exact.depth!.bids, asks: exact.depth!.asks, conversion };
     const instrument: SourceInstrument = { symbol, base: m.currency, quote: 'EUR', baseStep: decimal('1').div(scale).toFixed(),
       quoteStep: '0.000000000001', minOrderSize: decimal('1').div(scale).toFixed(), maxOrderSize: size.toFixed(),
-      minOrderSizeQuote: '0', status: size.gt(0) ? 'active' : 'inactive', region: 'ethereum-mainnet', observedAt: new Date(readAt * 1000).toISOString(),
+      minOrderSizeQuote: '0', status: size.gt(0) ? 'active' : 'inactive', region: network.chainId === 1 ? 'ethereum-mainnet' : 'gnosis-chain', observedAt: new Date(readAt * 1000).toISOString(),
       costs: { buyFeeRate: '0', sellFeeRate: '0', buyFixedEur: gas, sellFixedEur: gas,
         buySlippageRate: '0', sellSlippageRate: '0', depthRequired: true,
         source: 'CoW size-bound net quotes with embedded token fees; two-nonce gas ceiling per leg v1', observedAt: readAt } };
     const result = { at: readAt, book, instrument }; this.books.set(symbol, result); return result;
   }
   async getOrderBook(symbol: string): Promise<SourceOrderBook> {
-    if (symbol === 'USDC-EUR') {
-      const c = await this.fundingConversion(), balances = await this.options.balances(), total = balances.find(b => b.currency === 'USDC')?.total ?? '0';
+    const unit = cowNetwork(this.options.config.terms.chainId).quoteCurrency;
+    if (symbol === `${unit}-EUR`) {
+      const c = await this.fundingConversion(), balances = await this.options.balances(), total = balances.find(b => b.currency === unit)?.total ?? '0';
       return { symbol, sourceAt: c.sourceAt * 1000, readAt: this.clock() * 1000,
         bids: [{ price: c.eurPerUnit, quantity: total }], asks: [{ price: c.eurPerUnit, quantity: total }], conversion: c };
     }

@@ -1,15 +1,16 @@
 import 'server-only';
 import { createPublicClient, http, getAddress, type Address, type Hex } from 'viem';
-import { mainnet } from 'viem/chains';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { z } from 'zod';
 import { query, transaction, type SqlExecutor } from '../db';
 import { decryptSecret, encryptSecret } from '../secrets';
-import { CoinbaseMarketClient, type CoinbaseMarketMapping } from './coinbase-market';
+import { validateCowMarketMappings, type CowMarketMapping } from './cow-market-port';
+import { GNOSIS_PROFILE_CONVERSION } from './gnosis-market';
+import { cowNetwork } from './cow-network';
+import type { CowOrderChainId } from './cow-order';
 import { parseCowPolicyTerms, type CowPolicyTerms } from './cow-policy';
 import type { CowGasLimits } from './cow-execution-types';
 import { normalizeCowGasLimits } from './cow-gas-limits';
-import manifest from './generated/mainnet-contracts.json';
 
 export const COW_RUNTIME_KEY = 'wallet:strategy:cow-runtime:v1';
 const signerKey = 'wallet:strategy:cow-executor:v1:' + (process.env.VERCEL_ENV || 'local');
@@ -18,13 +19,15 @@ export const COW_PROFILE_CONVERSION = Object.freeze({ quoteUnit: 'USDC', sourceI
   methodologyReference: 'urn:mirsad:coinbase-eur-reference-weth9-redemption:v1',
   evidenceReference: 'https://docs.cdp.coinbase.com/exchange/reference/exchangerestapi_getproductticker' });
 /** Fixed public RPC. Caller supplied URLs and owner private keys are not accepted. */
-export function productionCowClient() {
-  return createPublicClient({ chain: mainnet, transport: http(COW_MAINNET_RPC, { timeout: 8_000, retryCount: 0 }) });
+export function productionCowClient(chainId: CowOrderChainId = 1) {
+  const network = cowNetwork(chainId);
+  return createPublicClient({ chain: network.chain, transport: http(network.rpc, { timeout: 8_000, retryCount: 0 }) });
 }
+export const cowProfileConversion = (chainId: CowOrderChainId = 1) => chainId === 1 ? COW_PROFILE_CONVERSION : GNOSIS_PROFILE_CONVERSION;
 export type CowRuntimeConfig = {
   version: 1; profileRevision: number; terms: CowPolicyTerms; createdAt: number;
   manager: Address; implementation: Address; enforcer: Address; executorAddress: Address;
-  tokenCodeHashes: Record<string, Hex>; gasLimits: CowGasLimits; mappings: CoinbaseMarketMapping[];
+  tokenCodeHashes: Record<string, Hex>; gasLimits: CowGasLimits; mappings: CowMarketMapping[];
 };
 const address = z.string().regex(/^0x[0-9a-fA-F]{40}$/).transform(v => getAddress(v.toLowerCase()));
 const schema = z.object({ version: z.literal(1), profileRevision: z.number().int().positive(), terms: z.unknown(),
@@ -34,12 +37,11 @@ const schema = z.object({ version: z.literal(1), profileRevision: z.number().int
   mappings: z.array(z.unknown()).min(1).max(30) }).strict();
 export function parseCowRuntime(value: unknown): CowRuntimeConfig {
   try {
-    const p = schema.parse(value), terms = parseCowPolicyTerms(p.terms), mappings = p.mappings as CoinbaseMarketMapping[];
-    // Constructor verifies the full persisted mapping digest and methodology.
-    new CoinbaseMarketClient({ mappings });
-    if (p.manager.toLowerCase() !== manifest.contracts.manager.toLowerCase()
-      || p.implementation.toLowerCase() !== manifest.contracts.implementation.toLowerCase()
-      || p.executorAddress !== terms.executor || terms.quoteToken.toLowerCase() !== manifest.contracts.quoteToken.toLowerCase()
+    const p = schema.parse(value), terms = parseCowPolicyTerms(p.terms), network = cowNetwork(terms.chainId);
+    const mappings = validateCowMarketMappings(terms.chainId, p.mappings);
+    if (p.manager.toLowerCase() !== network.contracts.manager.toLowerCase()
+      || p.implementation.toLowerCase() !== network.contracts.implementation.toLowerCase()
+      || p.executorAddress !== terms.executor || terms.quoteToken.toLowerCase() !== network.contracts.quoteToken.toLowerCase()
       || mappings.length !== terms.markets.length || mappings.some(m => !terms.markets.some(t => t.baseToken.toLowerCase() === m.tokenAddress.toLowerCase()))
       || [terms.quoteToken, ...terms.markets.map(m => m.baseToken)].some(t => !p.tokenCodeHashes[t.toLowerCase()])
       || BigInt(p.gasLimits.maxPriorityFeePerGasWei) > BigInt(p.gasLimits.maxFeePerGasWei)) throw new Error();
@@ -67,16 +69,17 @@ export async function cowExecutor(create = false) {
   });
 }
 export function runtimeMatchesProfile(config: CowRuntimeConfig, p: import('./strategy-profile').LoadedStrategyProfile) {
-  const profile = p.profile, scope = profile.authority.scope;
+  const profile = p.profile, scope = profile.authority.scope, network = cowNetwork(config.terms.chainId);
+  const conversion = cowProfileConversion(config.terms.chainId);
   const sameSet = (actual: string[], expected: string[]) => actual.length === expected.length && new Set(actual).size === actual.length
     && expected.every(v => actual.includes(v));
   return config.profileRevision === p.revision && profile.owner === config.terms.owner.toLowerCase()
-    && profile.executor === config.executorAddress.toLowerCase() && profile.chainId === 1
+    && profile.executor === config.executorAddress.toLowerCase() && profile.chainId === config.terms.chainId
     && profile.quoteToken === config.terms.quoteToken.toLowerCase() && profile.quoteDecimals === 6
-    && profile.accountingCurrency === 'EUR' && Object.entries(COW_PROFILE_CONVERSION).every(([key, value]) => profile.conversion[key as keyof typeof COW_PROFILE_CONVERSION] === value)
+    && profile.accountingCurrency === 'EUR' && Object.entries(conversion).every(([key, value]) => profile.conversion[key as keyof typeof conversion] === value)
     && profile.authority.startsAt === config.terms.startsAt && profile.authority.expiresAt === config.terms.expiresAt
     && scope.recipient === config.terms.owner.toLowerCase()
-    && sameSet(scope.contracts, [config.manager, config.enforcer, manifest.contracts.settlement, manifest.contracts.vaultRelayer].map(v => v.toLowerCase()))
+    && sameSet(scope.contracts, [config.manager, config.enforcer, network.contracts.settlement, network.contracts.vaultRelayer].map(v => v.toLowerCase()))
     && sameSet(scope.tokens, [config.terms.quoteToken, ...config.terms.markets.map(m => m.baseToken)].map(v => v.toLowerCase()))
     && sameSet(scope.actions, ['limit-entry', 'cancel-remainder', 'managed-exit'])
     && profile.implementation.kind === 'cow-candidate' && profile.implementation.version === 'cow-wallet-v1' && profile.implementation.status === 'inactive'

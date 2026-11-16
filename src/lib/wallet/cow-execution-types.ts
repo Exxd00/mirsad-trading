@@ -1,7 +1,7 @@
 import type { Address, Hex } from 'viem';
 import type { Intent, QuoteConversion } from '../execution/v1/model';
 import type { Lease } from '../execution/v1/journal';
-import type { CowOrder } from './cow-order';
+import type { CowOrder, CowOrderChainId } from './cow-order';
 import type { CowPolicyDraft } from './cow-policy';
 
 export class CowExecutionError extends Error {
@@ -29,6 +29,8 @@ export type CowTxRecord = { version: 1; revision: number; uid: Hex; phase: CowTx
 export type CowTxState = { status: 'pending' | 'mined' | 'finalized' | 'reverted' | 'conflict';
   hash: Hex; receipt?: CowReceipt; canonicalBlock?: CowBlock; finalizedHead?: CowBlock; actualGasWei?: string };
 export type CowOrderRecord = { version: 1; revision: number; bindingId: string; clientOrderId: string; decisionKey: string;
+  /** Historical records without this field belong to Ethereum only. */
+  chainId?: CowOrderChainId;
   owner: Address; intent: Intent; uid: Hex; order: CowOrder; fullAppData: string; conversion: CowConversion;
   createdAt: number; createdBlock: string; cancelAt: number | null; postState: 'not-posted' | 'unknown' | 'accepted' | 'rejected';
   cancelRequested: boolean; lastError: string | null;

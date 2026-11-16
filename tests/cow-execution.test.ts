@@ -248,10 +248,12 @@ describe('persistent CoW order lifecycle under the existing financial lease', ()
   });
   it('cannot silently reprice or replace a frozen intent after its raw transaction was prepared', async () => {
     const f = await fixture(), first = await f.execution.submitOrder(f.input, { lease: f.lease, intent: f.intent });
+    const publications = vi.mocked(f.api.post).mock.calls.length;
     await query('UPDATE app_settings SET value=jsonb_set(value,\'{order,sellAmount}\',to_jsonb(\'999999999\'::text)) WHERE key=$1',
       [`wallet:cow:v1:${f.a.draft.delegationHash.toLowerCase()}:order:${f.id}`]);
-    await expect(f.execution.resumeExecution(f.lease, { entriesEnabled: true })).rejects.toThrow('cow_order_identity_invalid');
+    await expect(f.execution.resumeExecution(f.lease, { entriesEnabled: true })).rejects.toThrow('cow_journal_corrupt');
     expect(f.rpc.prepare).toHaveBeenCalledOnce(); expect(f.rpc.broadcast).toHaveBeenCalledOnce(); expect(first.record.order.sellAmount).not.toBe('999999999');
+    expect(f.api.post).toHaveBeenCalledTimes(publications);
     await f.root.release(f.lease);
   });
   it('keeps inspection read-only and makes missing/stale actual FX rounds a genuine pre-send blocker', async () => {

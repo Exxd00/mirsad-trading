@@ -3,26 +3,31 @@ import { isDeepStrictEqual } from 'node:util';
 import { keccak256, stringToHex, type Hex, type PublicClient } from 'viem';
 import { CONFIG, decimal, fresh, type BuyIntent, type Costs, type QuoteConversion } from '../execution/v1/model';
 import { validateQuoteConversion } from '../execution/v1/readiness';
-import { COW_SETTLEMENT, normalizeCowAddress, type CowOrder } from './cow-order';
+import { COW_SETTLEMENT, normalizeCowAddress, type CowOrder, type CowOrderChainId } from './cow-order';
 import { cowPolicyOrderAppData, createCowPolicyDraft, type CowPolicyDraft } from './cow-policy';
 import { cowFail, type CowExecutionMarket, type CowGasLimits } from './cow-execution-types';
 import type { CowQuoteEvidence } from './cow-api';
 import manifest from './generated/mainnet-contracts.json';
 import tokenPolicy from './generated/cow-token-behavior.json';
 import { cowGasWeiPerLeg, normalizeCowGasLimits } from './cow-gas-limits';
+import { cowNetwork } from './cow-network';
+import { validateGnosisStandardTokenEvidence, type GnosisStandardTokenEvidence } from './gnosis-token-evidence';
 
 const METHOD = 'gpv2-partial-net-limit-admission-v1' as const;
 const invalid = (): never => cowFail('wallet_net_limit_proof_invalid');
 const raw = (v: string) => typeof v === 'string' && /^(0|[1-9]\d{0,77})$/.test(v) && BigInt(v) < (1n << 256n) ? BigInt(v) : invalid();
 const same = (a: string, b: string) => normalizeCowAddress(a) === normalizeCowAddress(b);
-export type CowNetLimitGasEvidence = { limits: CowGasLimits; ethEurAsk: string; sourceAt: number; readAt: number; sourceId: string };
+export type CowNetLimitGasEvidence = { limits: CowGasLimits; sourceAt: number; readAt: number; sourceId: string }
+  & ({ ethEurAsk: string; nativeCurrency?: undefined; nativeEurAsk?: undefined }
+    | { nativeCurrency: 'XDAI'; nativeEurAsk: string; ethEurAsk?: undefined });
 export type CowStandardTokenEvidence = { chainId: 1; block: { number: string; hash: Hex; timestamp: number }; readAt: number;
   usdc: { proxy: string; proxyCodeHash: string; implementation: string; implementationCodeHash: string };
   weth9: { address: string; codeHash: string }; governanceAssumption: 'reviewed-code-at-admission-no-future-upgrade-guarantee' };
+export type CowTokenEvidence = CowStandardTokenEvidence | GnosisStandardTokenEvidence;
 export type CowNetLimitProofInput = { policy: Pick<CowPolicyDraft, 'terms' | 'manager' | 'enforcer'>; market: CowExecutionMarket;
-  costs: Costs; gas: CowNetLimitGasEvidence; tokens: CowStandardTokenEvidence; references: { buy: CowQuoteEvidence; sell: CowQuoteEvidence } };
+  costs: Costs; gas: CowNetLimitGasEvidence; tokens: CowTokenEvidence; references: { buy: CowQuoteEvidence; sell: CowQuoteEvidence } };
 export type CowNetLimitProof = CowNetLimitProofInput & { version: 1; method: typeof METHOD; issuedAt: number;
-  runtime: { chainId: 1; settlement: typeof COW_SETTLEMENT; codeHash: string };
+  runtime: { chainId: CowOrderChainId; settlement: typeof COW_SETTLEMENT; codeHash: string };
   decision: { key: string; symbol: string; quantity: string; limitPrice: string; budgetEur: string;
     expectedEntryFeeEur: string; estimatedCostEur: string; estimatedCostFraction: string;
     allocation: string; allocationReason: string; expiresAt: number; stopFraction: string; targetFraction: string; signal: BuyIntent['signal'] };
@@ -32,7 +37,10 @@ export type CowNetLimitProof = CowNetLimitProofInput & { version: 1; method: typ
     expectedAdmissionFraction: string; scope: 'expected-intended-size-at-frozen-reference'; actualExpenses: 'not-certified' };
   digest: Hex };
 
-function tokenEvidence(t: CowStandardTokenEvidence, now: number): CowStandardTokenEvidence {
+function tokenEvidence(t: CowStandardTokenEvidence, owner: string, now: number): CowStandardTokenEvidence;
+function tokenEvidence(t: CowTokenEvidence, owner: string, now: number): CowTokenEvidence;
+function tokenEvidence(t: CowTokenEvidence, owner: string, now: number): CowTokenEvidence {
+  if (t.chainId === 100) return validateGnosisStandardTokenEvidence(t, owner, now);
   if (t.chainId !== 1 || !fresh(t.readAt, now, CONFIG.quoteMaxAgeSeconds) || !fresh(t.block.timestamp, now, 60)
     || !raw(t.block.number) || !/^0x[0-9a-f]{64}$/.test(t.block.hash)
     || !same(t.usdc.proxy, tokenPolicy.usdc.proxy) || t.usdc.proxyCodeHash !== tokenPolicy.usdc.proxyCodeHash
@@ -64,30 +72,33 @@ export async function readCowStandardTokenEvidence(client: Pick<PublicClient, 'g
     if (!code || check.hash !== block.hash || check.timestamp !== block.timestamp) return invalid();
     return tokenEvidence({ chainId: 1, block: { number: block.number.toString(), hash: block.hash, timestamp: Number(block.timestamp) }, readAt: clock(),
       usdc: { proxy: tokenPolicy.usdc.proxy, proxyCodeHash: keccak256(proxy), implementation, implementationCodeHash: keccak256(code) },
-      weth9: { address: tokenPolicy.weth9.address, codeHash: keccak256(weth) }, governanceAssumption: 'reviewed-code-at-admission-no-future-upgrade-guarantee' }, clock());
+      weth9: { address: tokenPolicy.weth9.address, codeHash: keccak256(weth) }, governanceAssumption: 'reviewed-code-at-admission-no-future-upgrade-guarantee' }, '', clock());
   } catch { return invalid(); }
 }
 
 function gasEvidence(g: CowNetLimitGasEvidence, now: number): CowNetLimitGasEvidence {
   const l = normalizeCowGasLimits(g.limits);
+  const native = g.nativeCurrency === 'XDAI', price = native ? g.nativeEurAsk : g.ethEurAsk;
   if (!fresh(g.sourceAt, now, CONFIG.quoteMaxAgeSeconds) || !fresh(g.readAt, now, CONFIG.quoteMaxAgeSeconds)
-    || !g.sourceId || g.sourceId.length > 256 || !decimal(g.ethEurAsk).gt(0)
+    || !g.sourceId || g.sourceId.length > 256 || !price || !decimal(price).gt(0)
+    || (native ? g.ethEurAsk !== undefined : g.nativeCurrency !== undefined || g.nativeEurAsk !== undefined)
     || !raw(l.maxGas) || !raw(l.maxFeePerGasWei) || !raw(l.maxTransactionCostWei)
     || raw(l.maxPriorityFeePerGasWei) > raw(l.maxFeePerGasWei)) return invalid();
   return { limits: { maxGas: l.maxGas, maxFeePerGasWei: l.maxFeePerGasWei,
     maxPriorityFeePerGasWei: l.maxPriorityFeePerGasWei, maxTransactionCostWei: l.maxTransactionCostWei,
     ...(l.phaseMaxGas ? { phaseMaxGas: { presign: l.phaseMaxGas.presign, cancel: l.phaseMaxGas.cancel, 'clear-presign': l.phaseMaxGas['clear-presign'] } } : {}) },
-    ethEurAsk: decimal(g.ethEurAsk).toFixed(), sourceAt: g.sourceAt, readAt: g.readAt, sourceId: g.sourceId };
+    ...(native ? { nativeCurrency: 'XDAI' as const, nativeEurAsk: decimal(price).toFixed() } : { ethEurAsk: decimal(price).toFixed() }),
+    sourceAt: g.sourceAt, readAt: g.readAt, sourceId: g.sourceId };
 }
 export function cowNetLimitGasUpper(g: CowNetLimitGasEvidence, now: number) {
   const gas = gasEvidence(g, now), wei = cowGasWeiPerLeg(gas.limits);
-  return { wei: wei.toString(), eur: decimal(wei.toString()).div('1000000000000000000').mul(gas.ethEurAsk).toFixed() };
+  return { wei: wei.toString(), eur: decimal(wei.toString()).div('1000000000000000000').mul(gas.nativeCurrency === 'XDAI' ? gas.nativeEurAsk : gas.ethEurAsk).toFixed() };
 }
 function reference(q: CowQuoteEvidence, side: 'buy' | 'sell', intent: BuyIntent, m: CowExecutionMarket,
-  owner: string, hash: Hex, base: bigint, now: number): CowQuoteEvidence {
+  owner: string, hash: Hex, base: bigint, now: number, chainId: CowOrderChainId): CowQuoteEvidence {
   if (!same(q.owner, owner) || !same(q.receiver, owner) || q.kind !== side || q.signingScheme !== 'presign'
     || !same(q.sellToken, side === 'buy' ? m.quoteToken : m.baseToken) || !same(q.buyToken, side === 'buy' ? m.baseToken : m.quoteToken)
-    || typeof q.partiallyFillable !== 'boolean' || q.verified !== true || q.appDataHash !== hash
+    || (q.chainId ?? 1) !== chainId || typeof q.partiallyFillable !== 'boolean' || q.verified !== true || q.appDataHash !== hash
     || !Number.isSafeInteger(q.validTo) || q.validTo < now + 60 || !fresh(Math.floor(q.readAt / 1000), now, CONFIG.quoteMaxAgeSeconds)
     || !Number.isFinite(Date.parse(q.expiration)) || Date.parse(q.expiration) <= now * 1000
     || (q.quoteId !== null && (!Number.isSafeInteger(q.quoteId) || q.quoteId < 0))) return invalid();
@@ -96,7 +107,7 @@ function reference(q: CowQuoteEvidence, side: 'buy' | 'sell', intent: BuyIntent,
   return { owner: normalizeCowAddress(q.owner), sellToken: normalizeCowAddress(q.sellToken), buyToken: normalizeCowAddress(q.buyToken),
     receiver: normalizeCowAddress(q.receiver), kind: side, validTo: q.validTo, sellAmount: sold.toString(), buyAmount: bought.toString(),
     quotedFeeAmount: fee.toString(), partiallyFillable: q.partiallyFillable, signingScheme: 'presign', expiration: q.expiration,
-    quoteId: q.quoteId, verified: true, readAt: q.readAt, appDataHash: hash };
+    quoteId: q.quoteId, verified: true, readAt: q.readAt, appDataHash: hash, ...(chainId === 100 ? { chainId: 100 as const } : {}) };
 }
 
 /** A deterministic EXPECTED admission certificate, not a quote-API capability
@@ -109,9 +120,9 @@ export function createCowNetLimitProof(intent: BuyIntent, input: CowNetLimitProo
   try {
     if (!Number.isSafeInteger(now) || now < 0 || !/^[0-9a-f]{64}$/.test(intent.key)) return invalid();
     const draft = createCowPolicyDraft(input.policy.terms, { manager: input.policy.manager, enforcer: input.policy.enforcer });
-    const p = draft.terms, m = input.market, q = intent.quote, c = q.conversion;
-    if (p.chainId !== 1 || m.symbol !== intent.symbol || !same(m.quoteToken, p.quoteToken) || m.quoteDecimals !== 6
-      || !same(m.quoteToken, tokenPolicy.usdc.proxy) || !same(m.baseToken, tokenPolicy.weth9.address) || m.baseDecimals !== 18
+    const p = draft.terms, m = input.market, q = intent.quote, c = q.conversion, network = cowNetwork(p.chainId);
+    if (m.symbol !== intent.symbol || !same(m.quoteToken, p.quoteToken) || m.quoteDecimals !== 6
+      || !same(m.quoteToken, network.contracts.quoteToken) || !same(m.baseToken, network.contracts.baseToken) || m.baseDecimals !== 18
       || !Number.isSafeInteger(m.baseDecimals) || m.baseDecimals < 0 || m.baseDecimals > 36 || m.quoteCurrency !== c?.currency
       || !p.markets.some(x => same(x.baseToken, m.baseToken)) || p.startsAt > now || p.expiresAt <= now
       || !fresh(q.sourceAt, now, CONFIG.quoteMaxAgeSeconds) || !fresh(q.readAt, now, CONFIG.quoteMaxAgeSeconds)) return invalid();
@@ -128,10 +139,10 @@ export function createCowNetLimitProof(intent: BuyIntent, input: CowNetLimitProo
     const limit = decimal(intent.limitPrice), notional = decimal(intent.quantity).mul(limit);
     const maximum = raw(notional.div(rate).mul(scale).floor().toFixed(0));
     const scope = p.markets.find(x => same(x.baseToken, m.baseToken))!;
-    const buy = reference(input.references.buy, 'buy', intent, m, p.owner, appDataHash, base, now);
-    const sell = reference(input.references.sell, 'sell', intent, m, p.owner, appDataHash, base, now);
+    const buy = reference(input.references.buy, 'buy', intent, m, p.owner, appDataHash, base, now, p.chainId);
+    const sell = reference(input.references.sell, 'sell', intent, m, p.owner, appDataHash, base, now, p.chainId);
     const e = q.exactSize;
-    if (!e || e.provider !== 'cow-mainnet-v1' || e.quantity !== intent.quantity || e.buyQuoteId !== buy.quoteId || e.sellQuoteId !== sell.quoteId
+    if (!e || e.provider !== (p.chainId === 1 ? 'cow-mainnet-v1' : 'cow-gnosis-v1') || e.quantity !== intent.quantity || e.buyQuoteId !== buy.quoteId || e.sellQuoteId !== sell.quoteId
       || e.buySellAmount !== buy.sellAmount || e.buyBuyAmount !== buy.buyAmount || e.buyFeeAmount !== buy.quotedFeeAmount
       || e.sellSellAmount !== sell.sellAmount || e.sellBuyAmount !== sell.buyAmount || e.sellFeeAmount !== sell.quotedFeeAmount
       || e.buyExpiration !== Math.floor(Date.parse(buy.expiration) / 1000) || e.sellExpiration !== Math.floor(Date.parse(sell.expiration) / 1000)
@@ -150,8 +161,9 @@ export function createCowNetLimitProof(intent: BuyIntent, input: CowNetLimitProo
     // Conservative price-grid rounding may worsen either reference price;
     // it must never improve the admission estimate relative to raw evidence.
     if (ask.lt(referenceAsk) || bid.gt(referenceBid) || bid.gt(ask) || !bid.gt(0) || limit.lt(ask)) return invalid();
-    const tokens = tokenEvidence(input.tokens, now), gas = gasEvidence(input.gas, now), gasWei = cowGasWeiPerLeg(gas.limits);
-    const gasEur = decimal(gasWei.toString()).div('1000000000000000000').mul(gas.ethEurAsk);
+    const tokens = tokenEvidence(input.tokens, p.owner, now), gas = gasEvidence(input.gas, now), gasWei = cowGasWeiPerLeg(gas.limits);
+    if (tokens.chainId !== p.chainId || (p.chainId === 100) !== (gas.nativeCurrency === 'XDAI') || c!.currency !== network.quoteCurrency) return invalid();
+    const gasEur = decimal(gasWei.toString()).div('1000000000000000000').mul(gas.nativeCurrency === 'XDAI' ? gas.nativeEurAsk : gas.ethEurAsk);
     const v = input.costs;
     if (!v.source || !fresh(v.observedAt, now, CONFIG.quoteMaxAgeSeconds)
       || (v.depthRequired !== undefined && typeof v.depthRequired !== 'boolean')) return invalid();
@@ -170,7 +182,7 @@ export function createCowNetLimitProof(intent: BuyIntent, input: CowNetLimitProo
       || fraction.toFixed() !== intent.estimatedCostFraction || fraction.gt(CONFIG.maximumRoundTripCost)
       || notional.add(entryFee).gt(intent.budgetEur)) return invalid();
     const value = { version: 1 as const, method: METHOD, issuedAt: now,
-      runtime: { chainId: 1 as const, settlement: COW_SETTLEMENT, codeHash: manifest.codeHashes.settlement },
+      runtime: { chainId: p.chainId, settlement: COW_SETTLEMENT, codeHash: network.codeHashes.settlement },
       policy: { terms: draft.terms, manager: draft.manager, enforcer: draft.enforcer },
       market: { symbol: m.symbol, baseToken: normalizeCowAddress(m.baseToken), baseDecimals: m.baseDecimals,
         quoteToken: normalizeCowAddress(m.quoteToken), quoteDecimals: m.quoteDecimals, quoteCurrency: m.quoteCurrency },
@@ -210,7 +222,7 @@ export function verifyCowNetLimitProof(intent: BuyIntent, expectedAppDataHash: s
       || proof.market.symbol !== market.symbol || proof.market.quoteCurrency !== market.quoteCurrency)) return invalid();
     validateQuoteConversion(proof.quote.conversion, now);
     gasEvidence(proof.gas, now);
-    tokenEvidence(proof.tokens, now);
+    tokenEvidence(proof.tokens, proof.policy.terms.owner, now);
     for (const r of [proof.references.buy, proof.references.sell]) if (!fresh(Math.floor(r.readAt / 1000), now, CONFIG.quoteMaxAgeSeconds)
       || Date.parse(r.expiration) <= now * 1000) return invalid();
     if (order && (order.kind !== 'buy' || !order.partiallyFillable || order.feeAmount !== '0' || order.sellTokenBalance !== 'erc20'

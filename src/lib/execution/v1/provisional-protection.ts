@@ -20,7 +20,9 @@ const hex = (v: string) => typeof v === 'string' && /^0x[0-9a-f]{64}$/.test(v);
 const uint = (v: string) => typeof v === 'string' && /^(0|[1-9]\d{0,77})$/.test(v) && BigInt(v) < 1n << 256n;
 const fingerprint = (f: CanonicalProtectionFill) => hash([f.id, f.transactionHash, f.logIndex,
   f.block.number, f.block.hash, f.block.timestamp, f.baseRaw, f.quoteRaw, f.quantity, f.priceEur,
-  f.fx.currency, f.fx.eurPerUnit, f.fx.minuteAt, f.fx.sourceId]);
+  f.fx.currency, f.fx.eurPerUnit, f.fx.minuteAt, f.fx.sourceId,
+  ...(f.fx.provisionalBasis ? [[f.fx.provisionalBasis.block.number, f.fx.provisionalBasis.block.hash,
+    f.fx.provisionalBasis.block.timestamp, f.fx.provisionalBasis.provenanceId]] : [])]);
 function block(b: ProtectionBlock, now: number) {
   if (!b || !uint(b.number) || !hex(b.hash) || !Number.isSafeInteger(b.timestamp) || b.timestamp < 0 || b.timestamp > now) invalid();
 }
@@ -75,11 +77,18 @@ export function validateEntryProtectionEvidence(e: EntryProtectionEvidence, orde
       || (f.finality !== 'mined' && f.finality !== 'finalized')
       || (f.finality === 'finalized') !== (BigInt(f.block.number) <= BigInt(e.finalizedHead.number))
       || (blockHashes.has(f.block.number) && blockHashes.get(f.block.number) !== f.block.hash)
-      || f.fx.currency !== (binding.quoteUnit ?? 'EUR') || f.fx.sourceId !== 'coinbase-exchange-completed-1m-eur-v1'
+      || f.fx.currency !== (binding.quoteUnit ?? 'EUR') || f.fx.sourceId !== (binding.chainId === 100 ? 'gnosis-canonical-state-eur-reference-v1' : 'coinbase-exchange-completed-1m-eur-v1')
       || f.fx.minuteAt !== Math.floor(f.block.timestamp / 60) * 60 || !decimal(f.fx.eurPerUnit).gt(0)
       || !decimal(f.quantity).eq(decimal(f.baseRaw).div(new D(10).pow(e.baseDecimals)))
       || !decimal(f.priceEur).eq(decimal(f.quoteRaw).div(new D(10).pow(e.quoteDecimals)).mul(f.fx.eurPerUnit).div(f.quantity))) invalid();
     ids.add(f.id); blockHashes.set(f.block.number, f.block.hash); total = total.add(f.quantity);
+    const basis = f.fx.provisionalBasis;
+    if (binding.chainId === 100 && f.finality === 'mined' && !basis) invalid();
+    if (basis) {
+      block(basis.block, now);
+      if (binding.chainId !== 100 || !hex(basis.provenanceId) || basis.block.timestamp >= f.fx.minuteAt
+        || BigInt(basis.block.number) >= BigInt(f.block.number)) invalid();
+    }
     if (f.finality === 'finalized') finalized = finalized.add(f.quantity); else unconfirmed = unconfirmed.add(f.quantity);
   }
   if (total.gt(decision.intent.quantity) || !finalized.eq(order.filledQuantity)

@@ -1,11 +1,13 @@
 import 'server-only';
+import { isDeepStrictEqual } from 'node:util';
 import { assertCowEntryQuote } from './cow-entry-quote';
 import { keccak256, stringToHex } from 'viem';
 import { CowReadClient, COW_API_ORIGIN } from './cow-api';
-import { assertCowOrderUid, normalizeCowOrder, normalizeCowUid } from './cow-order';
+import { assertCowOrderUid, normalizeCowOrder, normalizeCowUid, type CowOrderChainId } from './cow-order';
 import { cowFail, type CowExecutionApi, type CowOrderRecord, type CowGasLimits } from './cow-execution-types';
 
 export type CowSubmitApiOptions = { fetcher?: typeof fetch; clock?: () => number;
+  chainId?: CowOrderChainId;
   gasLimits?: CowGasLimits;
   /** Trusted server authority verifier, not a browser/persisted proof flag. */
   authorize?: (record: CowOrderRecord) => Promise<void> };
@@ -32,35 +34,44 @@ async function readJson(response: Response): Promise<unknown> {
 /** Exact-order POST only. No cancellation-by-HTTP, replacement metadata,
  * interactions, arbitrary URL, retries, signing or implicit authority. */
 export class CowSubmitApi implements CowExecutionApi {
+  private readonly chainId: CowOrderChainId;
   private readonly fetcher: typeof fetch;
   private readonly reads: CowReadClient;
   constructor(private readonly options: CowSubmitApiOptions = {}) {
-    this.fetcher = options.fetcher ?? fetch; this.reads = new CowReadClient({ fetcher: this.fetcher, clock: options.clock });
+    this.fetcher = options.fetcher ?? fetch; this.reads = new CowReadClient({ fetcher: this.fetcher, clock: options.clock, chainId: options.chainId });
+    this.chainId = this.reads.chainId;
   }
   async post(record: CowOrderRecord): Promise<'accepted' | 'rejected' | 'unknown'> {
+    const snapshot = structuredClone(record);
     const order = normalizeCowOrder(record.order);
-    assertCowOrderUid(record.uid, order, record.owner);
+    if ((record.chainId ?? 1) !== this.chainId) return cowFail('cow_order_identity_invalid');
+    assertCowOrderUid(record.uid, order, record.owner, this.chainId);
     if (record.intent.side !== order.kind || !order.partiallyFillable || order.receiver.toLowerCase() !== record.owner.toLowerCase()
       || keccak256(stringToHex(record.fullAppData)) !== order.appData || new TextEncoder().encode(record.fullAppData).length > 1000) return cowFail('cow_order_identity_invalid');
     if (!this.options.authorize) return cowFail('cow_authority_unavailable');
     await this.options.authorize(record);
+    // Authorization may await current authority/network evidence. No mutable
+    // caller record field can be substituted into the already-reviewed order.
+    if (!isDeepStrictEqual(record, snapshot)) return cowFail('cow_order_identity_invalid');
+    if ((record.chainId ?? 1) !== this.chainId) return cowFail('cow_order_identity_invalid');
+    assertCowOrderUid(record.uid, order, record.owner, this.chainId);
     if (record.intent.side !== order.kind) return cowFail('cow_order_identity_invalid');
     assertCowEntryQuote(record.intent, order.appData, Math.floor((this.options.clock ?? Date.now)() / 1000), this.options.gasLimits, order);
     const controller = new AbortController(); let timeout: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<never>((_, reject) => { timeout = setTimeout(() => { controller.abort(); reject(new Error('timeout')); }, 5000); });
     try {
       const result = await Promise.race([expired, (async () => {
-        const response = await this.fetcher(COW_API_ORIGIN + '/mainnet/api/v1/orders', {
+        const response = await this.fetcher(COW_API_ORIGIN + (this.chainId === 1 ? '/mainnet' : '/xdai') + '/api/v1/orders', {
           method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...order, appData: record.fullAppData, appDataHash: order.appData,
-            from: record.owner, signingScheme: 'presign', signature: '0x', fullBalanceCheck: true }),
+          body: JSON.stringify({ ...order, appData: snapshot.fullAppData, appDataHash: order.appData,
+            from: snapshot.owner, signingScheme: 'presign', signature: '0x', fullBalanceCheck: true }),
           cache: 'no-store', credentials: 'omit', redirect: 'error', signal: controller.signal,
         });
         const body = await readJson(response);
-        if (response.status === 201) return normalizeCowUid(body) === record.uid ? 'accepted' as const : 'unknown' as const;
+        if (response.status === 201) return normalizeCowUid(body) === snapshot.uid ? 'accepted' as const : 'unknown' as const;
         const error = body !== null && typeof body === 'object' && 'errorType' in body ? String(body.errorType) : '';
         if (response.status === 400 && error === 'DuplicatedOrder') {
-          const found = await this.reads.getOrder({ uid: record.uid, order, owner: record.owner });
+          const found = await this.reads.getOrder({ uid: snapshot.uid, order, owner: snapshot.owner });
           return found.status === 'found' ? 'accepted' as const : 'unknown' as const;
         }
         return response.status === 400 && knownRejected.has(error) ? 'rejected' as const : 'unknown' as const;

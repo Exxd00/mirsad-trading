@@ -2,22 +2,26 @@ import 'server-only';
 import type { Address, Hex } from 'viem';
 import { CONFIG, D, decimal } from '../execution/v1/model';
 import { SourceApiError, SourceUnknownOutcomeError, type SourceBalance, type SourceCancellation,
-  type SourceClient, type ReportedFill, type ReportedOrder, type ExternalExpenseEvidence, type EntryProtectionEvidence } from '../execution/v1/source-model';
+  type SourceClient, type ReportedFill, type ReportedOrder, type ExternalExpenseEvidence, type EntryProtectionEvidence, type CanonicalProtectionFill } from '../execution/v1/source-model';
 import type { CowExecution } from './cow-execution';
 import type { CowExecutionJournal } from './cow-execution-journal';
 import type { CowExecutionMarket, CowFinalizedTrade, CowOrderInspection } from './cow-execution-types';
 import type { CowReadClient, CowOrderEvidence, CowTradeEvidence } from './cow-api';
 import type { CowWalletHistory, CowBalanceSnapshot } from './cow-history';
 import type { CowMarketQuotes } from './cow-market-quotes';
-import type { CoinbaseMarketClient } from './coinbase-market';
+import type { CowMarketPort } from './cow-market-port';
+import { cowNetwork } from './cow-network';
+import type { CowOrderChainId } from './cow-order';
+import type { GnosisProvisionalConversion } from './gnosis-market';
 
 export type CowSourceClientOptions = {
+  chainId?: CowOrderChainId;
   owner: Address; markets: readonly CowExecutionMarket[];
   execution: Pick<CowExecution, 'getRecord' | 'inspectOrder' | 'submitOrder' | 'cancelOrder' | 'resumeExecution'>;
   journal: Pick<CowExecutionJournal, 'records'>;
   history: Pick<CowWalletHistory, 'balanceSnapshot' | 'getTransactionsPage' | 'getTransaction'>;
-  quotes: Pick<CowMarketQuotes, 'getOrderBook' | 'getFunding' | 'conversionAt'>;
-  market: Pick<CoinbaseMarketClient, 'valuationCandles'>;
+  quotes: Pick<CowMarketQuotes, 'getOrderBook' | 'getFunding' | 'conversionAt'> & Partial<Pick<CowMarketQuotes, 'provisionalConversionAt'>>;
+  market: Pick<CowMarketPort, 'valuationCandles'>;
   api: Pick<CowReadClient, 'getAccountOrders' | 'getTrades' | 'getOrder' | 'getVersion'>;
   expenses?: () => Promise<ExternalExpenseEvidence>;
   orderGasEur?: (uid: Hex) => Promise<{ amountEur: string; complete: boolean }>;
@@ -44,8 +48,10 @@ export const COW_FEE_API_VERSIONS: readonly string[] = Object.freeze([COW_FEE_AP
 export class CowSourceClient implements SourceClient {
   private readonly clock: () => number;
   private readonly tokens: { address: Address; currency: string; decimals: number }[];
+  private readonly chainId: CowOrderChainId;
   private feeVersion: { at: number; known: boolean } | null = null;
   constructor(private readonly options: CowSourceClientOptions) {
+    this.chainId = cowNetwork(options.chainId).chainId;
     this.clock = options.clock ?? (() => Math.floor(Date.now() / 1000));
     const first = options.markets[0], seen = new Set<string>();
     if (!first || !/^0x[0-9a-f]{40}$/i.test(options.owner) || /^0x0{40}$/i.test(options.owner)) fail('cow_source_identity_invalid');
@@ -74,7 +80,7 @@ export class CowSourceClient implements SourceClient {
       if (pages >= 100) fail('cow_order_coverage_incomplete');
       const page = await this.options.api.getAccountOrders(this.options.owner, offset, 100);
       for (const o of page.orders) {
-        if (!same(o.owner, this.options.owner) || rows.has(o.uid)) fail('cow_order_identity_invalid');
+        if ((o.chainId ?? 1) !== this.chainId || !same(o.owner, this.options.owner) || rows.has(o.uid)) fail('cow_order_identity_invalid');
         rows.set(o.uid, o);
       }
       if (page.nextOffset !== null && page.nextOffset <= offset) fail('cow_order_coverage_incomplete');
@@ -147,25 +153,49 @@ export class CowSourceClient implements SourceClient {
         createdAt: iso(t.block.timestamp), maker: false } };
     }));
   }
-  private async protectionEvidence(i: CowOrderInspection, finalized: PricedFill[]): Promise<EntryProtectionEvidence | undefined> {
+  private async protectionEvidence(i: CowOrderInspection, finalized: PricedFill[], previous: CanonicalProtectionFill[] = []): Promise<EntryProtectionEvidence | undefined> {
+    if ((i.record.chainId ?? 1) !== this.chainId) fail('cow_source_identity_invalid');
     if (i.record.intent.side !== 'buy' || !i.minedTrades || !i.canonicalHead || !i.finalizedHead) return undefined;
     const market = this.options.markets.find(m => m.symbol === i.record.intent.symbol)!;
     const trades = [...i.finalizedTrades, ...i.minedTrades];
     if (trades.length > 2048) fail('cow_protection_evidence_unavailable');
-    const fills: EntryProtectionEvidence['fills'] = [], rates = new Map<number, string>(), started = performance.now();
+    if (previous.length > 2048) fail('cow_protection_evidence_unavailable');
+    const fills: EntryProtectionEvidence['fills'] = [], rates = new Map<number, string>(), points = new Map<number, GnosisProvisionalConversion>(), started = performance.now();
+    const read = async <T>(work: () => Promise<T>): Promise<T> => {
+      const remaining = 20000 - (performance.now() - started);
+      if (remaining <= 0) fail('cow_protection_evidence_unavailable');
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try { return await Promise.race([work(), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('cow_protection_evidence_unavailable')), remaining);
+      })]); } finally { if (timer !== undefined) clearTimeout(timer); }
+    };
     for (let index = 0; index < trades.length; index++) {
       const t = trades[index];
       if (!Number.isSafeInteger(t.block.timestamp) || t.block.timestamp < i.record.createdAt || t.block.timestamp > this.clock()) fail('cow_fill_timestamp_invalid');
       const mined = index >= i.finalizedTrades.length, quantity = this.units(t.buyAmount, market.baseToken);
       const minute = Math.floor(t.block.timestamp / 60) * 60;
       let rate = mined ? rates.get(minute) : finalized[index].eurPerUnit;
+      let point: GnosisProvisionalConversion | undefined;
       if (performance.now() - started >= 20000) fail('cow_protection_evidence_unavailable');
+      const prior = previous.find(f => f.id === `${t.transactionHash}:${t.logIndex}` && f.fx.minuteAt === minute);
+      if (this.chainId === 100 && (mined || prior?.fx.provisionalBasis)) {
+        if (!this.options.quotes.provisionalConversionAt) fail('cow_protection_evidence_unavailable');
+        point = points.get(minute);
+        if (!point) {
+          const basis = prior?.fx.provisionalBasis;
+          const old: GnosisProvisionalConversion | undefined = basis ? { price: prior!.fx.eurPerUnit, at: minute,
+            sourceId: 'gnosis-canonical-state-eur-reference-v1', fxBlock: { ...basis.block, hash: basis.block.hash as Hex },
+            provenanceId: basis.provenanceId as Hex, referenceOnly: true, finality: 'canonical' } : undefined;
+          point = await read(() => this.options.quotes.provisionalConversionAt!(market.quoteCurrency, t.block.timestamp, old));
+          if (point.at !== minute || point.sourceId !== 'gnosis-canonical-state-eur-reference-v1'
+            || point.finality !== 'canonical' || point.referenceOnly !== true || point.fxBlock.timestamp >= minute) fail('cow_protection_evidence_unavailable');
+          points.set(minute, point);
+        }
+        if (!mined && !decimal(finalized[index].eurPerUnit).eq(point.price)) fail('cow_protection_evidence_unavailable');
+        rate = point.price;
+      }
       if (rate === undefined) {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          rate = await Promise.race([this.options.quotes.conversionAt(market.quoteCurrency, t.block.timestamp),
-            new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('cow_protection_evidence_unavailable')), 20000 - (performance.now() - started)); })]);
-        } finally { if (timer !== undefined) clearTimeout(timer); }
+        rate = await read(() => this.options.quotes.conversionAt(market.quoteCurrency, t.block.timestamp));
         rates.set(minute, rate);
       }
       if (!decimal(rate).gt(0)) fail('cow_historical_conversion_missing');
@@ -174,10 +204,12 @@ export class CowSourceClient implements SourceClient {
         block: { number: t.block.number, hash: t.block.hash, timestamp: t.block.timestamp },
         finality: mined ? 'mined' as const : 'finalized' as const, baseRaw: t.buyAmount, quoteRaw: t.sellAmount,
         quantity: quantity.toFixed(), priceEur: price, fx: { currency: market.quoteCurrency, eurPerUnit: rate,
-          minuteAt: minute, sourceId: 'coinbase-exchange-completed-1m-eur-v1' as const } });
+          minuteAt: minute, sourceId: this.chainId === 100 ? 'gnosis-canonical-state-eur-reference-v1' : 'coinbase-exchange-completed-1m-eur-v1',
+          ...(point ? { provisionalBasis: { block: point.fxBlock, provenanceId: point.provenanceId } } : {}) } });
     }
+    if (performance.now() - started >= 20000) fail('cow_protection_evidence_unavailable');
     return { version: 1, scope: 'canonical-entry-fills-protection-only', orderId: i.record.uid,
-      clientOrderId: i.record.clientOrderId, accountId: CONFIG.accountId, symbol: market.symbol, chainId: 1, owner: i.record.owner,
+      clientOrderId: i.record.clientOrderId, accountId: CONFIG.accountId, symbol: market.symbol, chainId: this.chainId, owner: i.record.owner,
       baseToken: market.baseToken, quoteToken: market.quoteToken, baseDecimals: market.baseDecimals, quoteDecimals: market.quoteDecimals,
       sourceAt: this.clock(), canonicalHead: { number: i.canonicalHead.number, hash: i.canonicalHead.hash, timestamp: i.canonicalHead.timestamp },
       finalizedHead: { number: i.finalizedHead.number, hash: i.finalizedHead.hash, timestamp: i.finalizedHead.timestamp }, fills };
@@ -227,10 +259,11 @@ export class CowSourceClient implements SourceClient {
       // cash PnL still uses each actual canonical owner delta and its own FX.
       return { amountEur: this.units(evidence.executedFee.amount, token.address).mul(rate).toFixed(),
         recognition: { method: 'cow-api-total-at-finalized-last-fill-v1', token: token.address, rawAmount: evidence.executedFee.amount,
-          recognitionAt, eurPerToken: rate, sourceId: 'coinbase-exchange-completed-1m-eur-v1' } };
+          recognitionAt, eurPerToken: rate, sourceId: this.chainId === 100 ? 'gnosis-canonical-state-eur-reference-v1' : 'coinbase-exchange-completed-1m-eur-v1' } };
     } catch { return null; }
   }
   private async details(i: CowOrderInspection): Promise<{ order: ReportedOrder; fills: ReportedFill[] }> {
+    if ((i.record.chainId ?? 1) !== this.chainId) fail('cow_source_identity_invalid');
     const priced = await this.pricedFills(i), quantity = priced.reduce((n, f) => n.add(f.fill.quantity), new D(0));
     // Historical FX missing for a mined fill blocks its shadow monitoring, not
     // older finalized holdings or their existing protective exit path.
@@ -263,6 +296,19 @@ export class CowSourceClient implements SourceClient {
         transactionHashes: [...new Set([...i.finalizedTrades.map(t => t.transactionHash), ...i.transactions.map(t => t.state.hash)])] } } };
   }
   async getOrder(id: string): Promise<ReportedOrder> { return this.safe(async () => (await this.details(await this.options.execution.inspectOrder(id))).order); }
+  async getEntryProtectionEvidence(id: string, previous: CanonicalProtectionFill[] = []): Promise<EntryProtectionEvidence> {
+    return this.safe(async () => {
+      try {
+        const i = await this.options.execution.inspectOrder(id);
+        if (i.record.intent.side !== 'buy' || !same(i.record.owner, this.options.owner)) fail('cow_source_identity_invalid');
+        const value = await this.protectionEvidence(i, await this.pricedFills(i), previous);
+        return value ?? fail('cow_protection_evidence_unavailable');
+      } catch (error) {
+        if ((error as { code?: unknown })?.code === 'gnosis_provisional_fx_reorganized') fail('provisional_protection_basis_changed');
+        throw error;
+      }
+    });
+  }
   private async manualOrders(s: CowBalanceSnapshot, indexed: CowOrderEvidence[], own: Set<string>) {
     const orders: ReportedOrder[] = [];
     for (const o of indexed) {

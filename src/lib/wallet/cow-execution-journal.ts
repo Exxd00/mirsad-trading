@@ -5,6 +5,8 @@ import type { SqlExecutor } from '../db';
 import { CONFIG, type Intent } from '../execution/v1/model';
 import type { DecisionRecord, Lease, RuntimeState, SourceWrite } from '../execution/v1/journal';
 import { cowFail, type CowFinalizedArchive, type CowOrderRecord, type CowPreparedTx, type CowTxPhase, type CowTxRecord } from './cow-execution-types';
+import { cowOrderUid } from './cow-order';
+import { cowNetwork } from './cow-network';
 
 export type CowJournalOptions = { bindingId: string; chainId: number; executor: Address; query: SqlExecutor['query'];
   transaction<T>(work: (tx: SqlExecutor) => Promise<T>): Promise<T>;
@@ -20,7 +22,7 @@ export class CowExecutionJournal {
   readonly bindingId: string;
   private readonly prefix: string;
   constructor(private readonly options: CowJournalOptions) {
-    if (!hash.test(options.bindingId) || options.chainId !== 1 || !/^0x[0-9a-f]{40}$/i.test(options.executor)
+    if (!hash.test(options.bindingId) || ![1, 100].includes(options.chainId) || !/^0x[0-9a-f]{40}$/i.test(options.executor)
       || /^0x0{40}$/i.test(options.executor) || !options.codec) cowFail('cow_journal_configuration_invalid');
     this.bindingId = options.bindingId.toLowerCase(); this.prefix = `wallet:cow:v1:${this.bindingId}:`;
   }
@@ -61,6 +63,8 @@ export class CowExecutionJournal {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return cowFail('cow_journal_corrupt');
     const record = value as CowOrderRecord;
     if (record.version !== 1 || record.bindingId !== this.bindingId || !uuid.test(record.clientOrderId) || !uid.test(record.uid)
+      || (record.chainId ?? 1) !== this.options.chainId
+      || cowOrderUid(record.order, record.owner, cowNetwork(this.options.chainId).chainId) !== record.uid
       || (key !== undefined && key !== this.orderKey(record.clientOrderId))) return cowFail('cow_journal_corrupt');
     return record;
   }
@@ -78,7 +82,9 @@ export class CowExecutionJournal {
   async createOrder(lease: Lease, record: Omit<CowOrderRecord, 'version' | 'revision' | 'bindingId'>): Promise<CowOrderRecord> {
     return this.options.transaction(async tx => {
       const decision = await this.fenced(tx, lease, record.decisionKey, record.intent);
-      if (decision.sourceIdentity!.clientOrderId !== record.clientOrderId || !uid.test(record.uid)) cowFail('source_intent_mismatch');
+      if (decision.sourceIdentity!.clientOrderId !== record.clientOrderId || !uid.test(record.uid)
+        || (record.chainId ?? 1) !== this.options.chainId
+        || cowOrderUid(record.order, record.owner, cowNetwork(this.options.chainId).chainId) !== record.uid) cowFail('source_intent_mismatch');
       const root = `execution:v1:${CONFIG.accountId}`;
       const claim = await tx.query<{ value: SourceWrite }>('SELECT value FROM app_settings WHERE key=$1', [root + ':write:submit:' + record.decisionKey]);
       if (claim.rows[0]?.value.decisionKey !== record.decisionKey || claim.rows[0].value.symbol !== record.intent.symbol
