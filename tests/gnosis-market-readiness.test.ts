@@ -47,7 +47,7 @@ describe('Gnosis reference-only preflight with no execution prerequisites', () =
     expect(result).toMatchObject({ status: 'ready', chainId: 100, referenceOnly: true, financialReadiness: 'not-certified', createdExecutionState: false,
       history: { completedCandles: 1000, contiguousCandles: 1000, complete: true, firstCloseTime: CLOSE - 999 * 900, lastCloseTime: CLOSE },
       current: { status: 'ready', block: { number: '49300370' }, sourceAt: NOW, readAt: NOW, usdceEur: '0.92', xdaiEur: '0.91' }, errors: [] });
-    expect(result.retryAt).toBe(NOW + 300); expect(f.history).toHaveBeenCalledExactlyOnceWith(NOW, null);
+    expect(result.retryAt).toBe(NOW + 300); expect(result.providerRetryAt).toBeNull(); expect(f.history).toHaveBeenCalledExactlyOnceWith(NOW, null);
     expect(f.store.save).not.toHaveBeenCalled(); expect(f.store.load).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toMatch(/executor|signature|balance|grant|privateKey|executionArmed/);
   });
@@ -125,7 +125,7 @@ describe('Gnosis reference-only preflight with no execution prerequisites', () =
   it('honors provider cooldown across the independent current phase instead of issuing a fresh class request', async () => {
     const f = fixture(); f.history.mockRejectedValue({ code: 'gnosis_market_provider_cooldown', retryAt: NOW + 1800 });
     f.store.load.mockResolvedValue(chunks(series(200))); const result = await auditGnosisMarketReadiness(f.deps);
-    expect(result).toMatchObject({ retryAt: NOW + 1800, current: { status: 'unavailable' }, history: { completedCandles: 200 } });
+    expect(result).toMatchObject({ retryAt: NOW + 1800, providerRetryAt: NOW + 1800, current: { status: 'unavailable' }, history: { completedCandles: 200 } });
     expect(result.errors).toEqual(['gnosis_market_provider_cooldown']); expect(f.current).not.toHaveBeenCalled();
     expect(f.createMarket).toHaveBeenCalledOnce();
   });

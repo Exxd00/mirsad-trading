@@ -13,6 +13,8 @@ export type GnosisMarketReadinessDependencies = { store?: GnosisEurStateStore; c
 export type GnosisMarketReadiness = {
   version: 1; chainId: 100; referenceOnly: true; createdExecutionState: false; financialReadiness: 'not-certified';
   status: 'ready' | 'warming' | 'unavailable'; readAt: number; retryAt: number; errors: string[];
+  /** Provider-directed hold only; retryAt remains advisory for owner UI. */
+  providerRetryAt?: number | null;
   history: { requiredCandles: 1000; completedCandles: number | null; contiguousCandles: number | null;
     targetCloseTime: number; firstCloseTime: number | null; lastCloseTime: number | null; provenanceIds: string[]; complete: boolean };
   current: { status: 'ready' | 'unavailable'; block: CurrentReference['block'] | null; sourceAt: number | null; readAt: number | null;
@@ -148,7 +150,8 @@ async function runWithin(deps: GnosisMarketReadinessDependencies, parent: AbortS
   if (reference && !currentValid(reference, readAt)) { reference = null; errors.push('wallet_market_readiness_reference_stale'); }
   return { version: 1, chainId: 100, referenceOnly: true, createdExecutionState: false, financialReadiness: 'not-certified',
     status: history.complete && reference && !errors.length ? 'ready' : history.completedCandles === null ? 'unavailable' : 'warming',
-    readAt, retryAt: Math.max(readAt + 300, providerRetryAt), errors: [...new Set(errors)], history,
+    readAt, retryAt: Math.max(readAt + 300, providerRetryAt), providerRetryAt: providerRetryAt > readAt ? providerRetryAt : null,
+    errors: [...new Set(errors)], history,
     current: reference ? { status: 'ready', block: reference.block, sourceAt: reference.block.timestamp, readAt: reference.readAt,
       wethEur: reference.wethEur, usdceEur: reference.usdceEur, xdaiEur: reference.xdaiEur, sourceId: reference.sourceId }
       : { status: 'unavailable', block: null, sourceAt: null, readAt: null, wethEur: null, usdceEur: null, xdaiEur: null, sourceId: null } };

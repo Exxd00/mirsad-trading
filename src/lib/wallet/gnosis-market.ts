@@ -285,7 +285,7 @@ export class GnosisMarketClient {
     [...cached,...this.chunks.values()].forEach(s=>{if(s.intervalSeconds===interval)include(s);});
     const windows:{close:number;count:number}[]=[];
     for(let at=start+interval;at<=close;){if(records.has(at)){at+=interval;continue;}
-      let n=0;while(at<=close&&!records.has(at)&&n<25){n++;at+=interval;}windows.push({close:at-interval,count:n});}
+      let n=0;while(at<=close&&!records.has(at)&&n<10){n++;at+=interval;}windows.push({close:at-interval,count:n});}
     let next=0;const worker=async()=>{for(;;){ensureActive();const index=next++;if(index>=windows.length)return;const w=windows[index];
       const series=await this.historyChunk(w.close,w.count,interval,fetcher);ensureActive();include(series);
       if(this.historyStore){ensureActive();await this.historyStore.save(series);ensureActive();}

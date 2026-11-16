@@ -361,8 +361,14 @@ The authenticated, CSRF-protected chain-100 market-readiness POST starts or
 resumes a separate data-only job. GET reads stored state only. The existing
 five-minute tick may resume an explicitly requested job while the financial
 profile is missing; protection ticks never warm 1,000 bars. A 65-second SQL
-lease, 300-second cooldown, six-hour/72-attempt cap and owner fence prevent
-parallel work and late writes. Each attempt budgets 40 seconds for history,
+lease, 300-second claim cadence and owner fence prevent parallel work and late
+writes. New jobs have a twelve-hour/144-attempt cap so bounded ten-bar chunks
+can cover 1,000 bars plus the advancing window. Existing six-hour/72-attempt
+jobs retain their limits on GET/scheduler reads; only an explicit POST upgrades
+their policy, preserving the original ID, start, attempts, report, lease and
+cooldown. The job schedules its next normal attempt from claim start, not report
+completion. An actual provider Retry-After extends that deadline and persists
+across restart and policy upgrade. Each attempt budgets 40 seconds for history,
 three for stored progress and eight for a fresh current reference. Small
 verified chunks survive an incomplete attempt. The UI preserves observation
 times and expires freshness locally; reference completeness is expressly not
