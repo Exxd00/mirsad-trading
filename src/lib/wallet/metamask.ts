@@ -3,7 +3,7 @@ import type { AuthorityCloseReview, AuthorityReview } from './authority';
 // Connection and refresh only read the wallet. The separate owner action below is
 // restricted to a locally reconstructed Base Sepolia grant or its revocation.
 type Method = 'eth_requestAccounts' | 'eth_accounts' | 'eth_chainId' | 'eth_getBalance' | 'eth_getTransactionCount' | 'eth_signTypedData_v4' | 'eth_sendTransaction'
-  | 'wallet_getCapabilities' | 'wallet_sendCalls' | 'wallet_getCallsStatus';
+  | 'wallet_getCapabilities' | 'wallet_sendCalls' | 'wallet_getCallsStatus' | 'wallet_switchEthereumChain' | 'wallet_addEthereumChain';
 type WalletEvent = 'accountsChanged' | 'chainChanged' | 'connect' | 'disconnect';
 type Listener = (...args: unknown[]) => void;
 export interface WalletProvider {
@@ -53,6 +53,7 @@ export async function readWallet(provider: WalletProvider): Promise<Snapshot | n
 
 const networks: Record<string, readonly [string, string]> = {
   '1': ['Ethereum', 'ETH'], '10': ['OP Mainnet', 'ETH'], '56': ['BNB Smart Chain', 'BNB'],
+  '100': ['Gnosis', 'xDAI'],
   '137': ['Polygon PoS', 'POL'], '8453': ['Base', 'ETH'], '42161': ['Arbitrum One', 'ETH'],
   '11155111': ['Ethereum Sepolia (testnet)', 'ETH'],
 };
@@ -162,26 +163,38 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
   return {
     /** Production strategy actions are always explicit owner clicks. No call
      * originates from passive restoration, focus, page load or provider events. */
-    async authorityAction(review: AuthorityReview, action: 'deploy' | 'bootstrap' | 'sign' | 'close', close?: AuthorityCloseReview) {
+    async authorityAction(inputReview: AuthorityReview, action: 'deploy' | 'bootstrap' | 'sign' | 'close', inputClose?: AuthorityCloseReview) {
+      // Snapshot before any await: callers cannot change the reviewed request
+      // while an account read, lazy import or wallet prompt is pending.
+      const review = structuredClone(inputReview), close = inputClose ? structuredClone(inputClose) : undefined;
       const provider = current, epoch = session;
-      if (!alive || !provider || !requested || asking || ownerRequests.has(provider) || review.chainId !== 1) throw new Error('راجع اتصال محفظة الاستراتيجية.');
+      if (!alive || !provider || !requested || asking || ownerRequests.has(provider) || ![1, 100].includes(review.chainId)) throw new Error('راجع اتصال محفظة الاستراتيجية.');
+      const chainId = String(review.chainId), chainHex = review.chainId === 100 ? '0x64' : '0x1';
       ownerRequests.add(provider);
       const assertOwner = async () => {
         const bound = await binding(provider);
-        if (!alive || current !== provider || session !== epoch || !requested || bound.chainId !== '1'
+        if (!alive || current !== provider || session !== epoch || !requested || bound.chainId !== chainId
           || bound.address?.toLowerCase() !== review.owner.toLowerCase()) throw new Error('تغيّر الحساب أو الشبكة. أنشئ مراجعة جديدة.');
+      };
+      const assertFresh = () => {
+        const now = Math.floor(Date.now() / 1000);
+        if (action === 'close') {
+          if (!close || now >= close.reviewExpiresAt) throw new Error('حدّث مراجعة الإغلاق أولاً.');
+        } else if (now >= review.reviewExpiresAt) throw new Error('انتهت صلاحية المراجعة. حدّثها قبل المتابعة.');
+        if (action === 'sign' && (now < review.terms.startsAt || now >= review.terms.expiresAt)) throw new Error('انتهت نافذة التفويض. حدّث المراجعة.');
       };
       try {
         const { authorityDigest, authoritySignatureValid, createAuthorityCloseReview, parseAuthorityReview } = await import('./authority');
         parseAuthorityReview(review);
         const now = Math.floor(Date.now() / 1000);
-        if (action !== 'close' && now >= review.reviewExpiresAt) throw new Error('انتهت صلاحية المراجعة. حدّثها قبل المتابعة.');
+        assertFresh();
         await assertOwner();
         if (action === 'sign') {
           if (review.blockers.length || review.deploymentStep || now < review.terms.startsAt || now >= review.terms.expiresAt) throw new Error('أكمل التحقق من العقود والموافقات أولاً.');
           const { getTypesForEIP712Domain, serializeTypedData } = await import('viem');
           const typed = review.delegation.typed;
           const document = serializeTypedData({ ...typed, types: { EIP712Domain: getTypesForEIP712Domain({ domain: typed.domain }), ...typed.types } });
+          await assertOwner(); assertFresh();
           const signature = await provider.request({ method: 'eth_signTypedData_v4', params: [review.owner, document] });
           await assertOwner();
           if (!authoritySignatureValid(signature)) throw new Error('تعذّر التحقق من رد المحفظة.');
@@ -193,8 +206,9 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
           const nonce = quantity(await provider.request({ method: 'eth_getTransactionCount', params: [review.owner, 'pending'] }));
           await assertOwner();
           if (nonce !== BigInt(deployment.transaction.nonce)) throw new Error('تغيّر ترتيب معاملات الحساب. أنشئ مراجعة نشر جديدة.');
+          assertFresh();
           const hash = await provider.request({ method: 'eth_sendTransaction', params: [{ from: review.owner,
-            data: deployment.transaction.data, value: '0x0', nonce: deployment.transaction.nonce }] });
+            chainId: chainHex, data: deployment.transaction.data, value: '0x0', nonce: deployment.transaction.nonce }] });
           await assertOwner();
           if (typeof hash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(hash)) throw new Error('تعذّر التحقق من رد المحفظة.');
           return { kind: 'transaction' as const, value: hash };
@@ -210,17 +224,47 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
         } else if (review.blockers.length || review.deploymentStep) throw new Error('أكمل نشر عقد الحماية والتحقق منه أولاً.');
         if (!calls.length) throw new Error('لا توجد معاملات للمراجعة؛ تحقق من حالة السلسلة.');
         // EIP-5792 capability is mandatory; never fall back to sequential sends.
-        const result = await provider.request({ method: 'wallet_getCapabilities', params: [review.owner, ['0x1']] });
+        const result = await provider.request({ method: 'wallet_getCapabilities', params: [review.owner, [chainHex]] });
         await assertOwner();
-        const capability = (result as Record<string, { atomic?: { status?: unknown } }> | null)?.['0x1']?.atomic?.status;
+        const capability = (result as Record<string, { atomic?: { status?: unknown } }> | null)?.[chainHex]?.atomic?.status;
         if (capability !== 'supported' && capability !== 'ready') throw new Error('المحفظة لا تؤكد دعم المعاملة الذرّية المطلوبة.');
-        const sent = await provider.request({ method: 'wallet_sendCalls', params: [{ version: '2.0.0', chainId: '0x1',
+        assertFresh();
+        const sent = await provider.request({ method: 'wallet_sendCalls', params: [{ version: '2.0.0', chainId: chainHex,
           from: review.owner, atomicRequired: true, calls }] });
         await assertOwner();
         const id = typeof sent === 'string' ? sent : (sent as { id?: unknown } | null)?.id;
         if (typeof id !== 'string' || !/^0x[0-9a-fA-F]{1,256}$/.test(id)) throw new Error('تعذّر التحقق من معرّف العملية.');
         return { kind: 'batch' as const, value: id };
       } finally { ownerRequests.delete(provider); if (queued) scheduleRefresh(); }
+    },
+    /** Explicit owner button only. Passive restoration never switches or adds a
+     * network. Fixed Gnosis metadata is the sole add-chain fallback. */
+    async switchNetwork(chainId: 1 | 100) {
+      const provider = current, address = snapshot?.address;
+      if (![1, 100].includes(chainId) || !alive || !provider || !address || !requested || asking || ownerRequests.has(provider)) throw new Error('راجع اتصال المحفظة أولاً.');
+      ownerRequests.add(provider);
+      const assertAccount = async () => {
+        const bound = await binding(provider);
+        if (!alive || current !== provider || bound.address?.toLowerCase() !== address.toLowerCase()) throw new Error('تغيّر حساب المحفظة. أعد القراءة.');
+        return bound;
+      };
+      const hex = chainId === 100 ? '0x64' : '0x1';
+      try {
+        await assertAccount();
+        try { await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: hex }] }); }
+        catch (error) {
+          if (chainId !== 100 || (error as { code?: unknown } | null)?.code !== 4902) throw error;
+          await assertAccount();
+          await provider.request({ method: 'wallet_addEthereumChain', params: [{ chainId: '0x64', chainName: 'Gnosis',
+            nativeCurrency: { name: 'xDAI', symbol: 'xDAI', decimals: 18 }, rpcUrls: ['https://rpc.gnosischain.com'],
+            blockExplorerUrls: ['https://gnosisscan.io'] }] });
+          await assertAccount();
+          await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: hex }] });
+        }
+        const bound = await assertAccount();
+        if (bound.chainId !== String(chainId)) throw new Error('لم تؤكد المحفظة الشبكة المطلوبة. أعد القراءة.');
+        await refresh();
+      } finally { ownerRequests.delete(provider); scheduleRefresh(); }
     },
     async authorityCallsStatus(id: string) {
       const provider = current, epoch = session;

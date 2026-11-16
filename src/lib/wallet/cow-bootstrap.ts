@@ -16,7 +16,7 @@ import { cowBinding } from './cow-setup';
 import { createCowPolicyDraft } from './cow-policy';
 import { expectedCowEnforcerRuntime } from './cow-artifact';
 import { CowReadClient } from './cow-api';
-import { CoinbaseMarketClient } from './coinbase-market';
+import { createCowMarketClient } from './cow-market-port';
 import { sqlCoinbasePriceStore } from './cow-price-store';
 import { CowExecutionJournal } from './cow-execution-journal';
 import { CowExecution } from './cow-execution';
@@ -28,7 +28,7 @@ import { CowExpenseLedger } from './cow-expenses';
 import { CowWalletHistory, createHistoryRpc, type CowHistoryStore, type CowHistoryState } from './cow-history';
 import { CowSourceClient } from './cow-source-client';
 import { installWalletExecutionSource, walletExecutionSource, walletBindingIdentity } from './execution-connection';
-import manifest from './generated/mainnet-contracts.json';
+import { cowNetwork } from './cow-network';
 import { keccak256 } from 'viem';
 
 export const sqlCowHistoryStore: CowHistoryStore = {
@@ -64,15 +64,16 @@ async function build(): Promise<WalletVenueSource | null> {
   if (!runtimeMatchesProfile(config, profile)) throw new Error('wallet_cow_runtime_invalid');
   const key = `${keccak256(stringToHex(JSON.stringify(config)))}:${record?.revision ?? 0}`;
   if (cached?.key === key) { installWalletExecutionSource(cached.source); return cached.source; }
-  const reader = productionCowClient() as PublicClient, signer = await cowExecutor(), mainJournal = new SqlJournal();
+  const network = cowNetwork(config.terms.chainId), manifest = network;
+  const reader = productionCowClient(network.chainId) as PublicClient, signer = await cowExecutor(), mainJournal = new SqlJournal();
   if (signer && signer.address.toLowerCase() !== config.executorAddress.toLowerCase()) throw new Error('wallet_executor_unavailable');
   const draft = createCowPolicyDraft(config.terms, { manager: config.manager, enforcer: config.enforcer });
   const signature: Hex = record?.review.delegation.delegationHash === draft.delegationHash && record.signatureCiphertext
     ? openAuthoritySignature(record) : '0x';
   const authority = { draft, signature, ownerImplementation: config.implementation,
-    codeHashes: { manager: manifest.codeHashes.manager as Hex, enforcer: keccak256(expectedCowEnforcerRuntime(config.manager)),
+    codeHashes: { manager: manifest.codeHashes.manager as Hex, enforcer: keccak256(expectedCowEnforcerRuntime(config.manager, network.chainId)),
       ownerImplementation: manifest.codeHashes.implementation as Hex, settlement: manifest.codeHashes.settlement as Hex } };
-  const env = createAuthorityEnvironment({ client: reader, query, transaction, loadRuntime: loadCowRuntime });
+  const env = createAuthorityEnvironment({ chainId: network.chainId, client: reader, query, transaction, loadRuntime: loadCowRuntime });
   const verify = async () => {
     const [current, p, currentSigner] = await Promise.all([loadVerifiedAuthorityForRuntime(sql), loadStrategyProfile(sql), cowExecutor()]);
     if (!current || !p || !runtimeMatchesProfile(config, p) || current.review.delegation.delegationHash !== draft.delegationHash) return false;
@@ -89,28 +90,31 @@ async function build(): Promise<WalletVenueSource | null> {
       && latest.review.delegation.delegationHash === draft.delegationHash
       && latestSigner.address.toLowerCase() === config.executorAddress.toLowerCase());
   };
-  const protocolJournal = new CowExecutionJournal({ bindingId: draft.delegationHash, chainId: 1, executor: config.executorAddress,
+  const protocolJournal = new CowExecutionJournal({ bindingId: draft.delegationHash, chainId: network.chainId, executor: config.executorAddress,
     query, transaction, codec: { seal: encryptSecret, open: decryptSecret } });
   const rpc = new CowRpcTransport({ client: reader, signer: signer ?? undefined, authority, gasLimits: config.gasLimits,
     finalizedArchive: { load: r => protocolJournal.getFinalizedArchive(r.uid) },
     authorizeWrite: async () => {
       if (!await verify()) throw new Error('cow_authority_unavailable');
-      const state = await query<{ value: { executionArmed?: boolean } }>('SELECT value FROM app_settings WHERE key=$1', [`execution:v1:${CONFIG.accountId}:state`]);
+      const state = await query<{ value: { executionArmed?: boolean; walletIdentity?: string } }>('SELECT value FROM app_settings WHERE key=$1', [`execution:v1:${CONFIG.accountId}:state`]);
       if (state.rows[0]?.value.executionArmed !== true) throw new Error('execution_not_armed');
+      if (state.rows[0].value.walletIdentity && state.rows[0].value.walletIdentity !== walletBindingIdentity(cowBinding(config))) throw new Error('wallet_account_changed');
     } });
   const markets = config.mappings.map(m => ({ symbol: m.symbol, baseToken: m.tokenAddress, baseDecimals: m.tokenDecimals,
-    quoteToken: config.terms.quoteToken, quoteDecimals: 6, quoteCurrency: 'USDC' }));
+    quoteToken: config.terms.quoteToken, quoteDecimals: 6, quoteCurrency: network.quoteCurrency }));
   const authorizePublish = async (r: CowOrderRecord) => {
     if (r.bindingId.toLowerCase() !== draft.delegationHash.toLowerCase()
+      || (r.chainId ?? 1) !== network.chainId
       || r.owner.toLowerCase() !== config.terms.owner.toLowerCase()) throw new Error('cow_order_identity_invalid');
     if (!await verify()) throw new Error('cow_authority_unavailable');
-    const state = await query<{ value: { executionArmed?: boolean; entriesEnabled?: boolean } }>('SELECT value FROM app_settings WHERE key=$1', [`execution:v1:${CONFIG.accountId}:state`]);
+    const state = await query<{ value: { executionArmed?: boolean; entriesEnabled?: boolean; walletIdentity?: string } }>('SELECT value FROM app_settings WHERE key=$1', [`execution:v1:${CONFIG.accountId}:state`]);
     const at = Math.floor(Date.now() / 1000);
     if (state.rows[0]?.value.executionArmed !== true || (r.intent.side === 'buy' && (state.rows[0].value.entriesEnabled !== true
       || r.cancelAt === null || at >= r.cancelAt)) || r.order.validTo < at + 60) throw new Error('cow_publication_fenced');
+    if (state.rows[0].value.walletIdentity && state.rows[0].value.walletIdentity !== walletBindingIdentity(cowBinding(config))) throw new Error('wallet_account_changed');
   };
   const execution = new CowExecution({ journal: protocolJournal, rpc,
-    api: new CowSubmitApi({ authorize: authorizePublish, gasLimits: config.gasLimits }), authority, markets, gasLimits: config.gasLimits,
+    api: new CowSubmitApi({ chainId: network.chainId, authorize: authorizePublish, gasLimits: config.gasLimits }), authority, markets, gasLimits: config.gasLimits,
     armCancellation: scheduleCancellation, authorizePublish });
   const readers: { journal: CowExecutionJournal; execution: CowExecution }[] = [{ journal: protocolJournal, execution }];
   const archives = await query<{ key: string; value: unknown }>("SELECT key,value FROM app_settings WHERE key LIKE 'wallet:strategy:cow-runtime-archive:v1:%' ORDER BY key LIMIT 257");
@@ -121,7 +125,7 @@ async function build(): Promise<WalletVenueSource | null> {
     if (previousDraft.delegationHash === draft.delegationHash) continue;
     if (walletBindingIdentity(cowBinding(previous)) !== walletBindingIdentity(cowBinding(config))
       || previous.executorAddress !== config.executorAddress) continue;
-    const journal = new CowExecutionJournal({ bindingId: previousDraft.delegationHash, chainId: 1, executor: previous.executorAddress,
+    const journal = new CowExecutionJournal({ bindingId: previousDraft.delegationHash, chainId: previous.terms.chainId, executor: previous.executorAddress,
       query, transaction, codec: { seal: encryptSecret, open: decryptSecret } });
     // Old grants supply identity/history only. They have neither signer nor
     // publish authorization and can never become a new execution authority.
@@ -143,18 +147,20 @@ async function build(): Promise<WalletVenueSource | null> {
     submitOrder: execution.submitOrder.bind(execution), cancelOrder: execution.cancelOrder.bind(execution), resumeExecution: execution.resumeExecution.bind(execution),
   };
   const readJournal = { records: async () => (await Promise.all(readers.map(r => r.journal.records()))).flat() };
-  const history = new CowWalletHistory({ rpc: createHistoryRpc(reader), store: sqlCowHistoryStore,
+  const history = new CowWalletHistory({ chainId: network.chainId, rpc: createHistoryRpc(reader), store: sqlCowHistoryStore,
     owner: config.terms.owner, quoteToken: config.terms.quoteToken, startAt: Math.max(0, berlinBounds(config.createdAt).start - 86400),
-    tokens: [{ address: config.terms.quoteToken, currency: 'USDC', decimals: 6, kind: 'erc20' }, ...config.mappings.map(m => ({
+    tokens: [{ address: config.terms.quoteToken, currency: network.quoteCurrency, decimals: 6, kind: 'erc20' }, ...config.mappings.map(m => ({
       address: m.tokenAddress, currency: m.currency, decimals: m.tokenDecimals,
       kind: m.method === 'weth9-native-redemption-reference-v1' ? 'weth9' as const : 'erc20' as const }))] });
-  const market = new CoinbaseMarketClient({ mappings: config.mappings, priceStore: sqlCoinbasePriceStore }), api = new CowReadClient();
+  const market = createCowMarketClient(network.chainId, config.mappings, { priceStore: sqlCoinbasePriceStore }), api = new CowReadClient({ chainId: network.chainId });
   let client: CowSourceClient;
   const quotes = new CowMarketQuotes({ config, client: reader, market, api, balances: () => client.getBalances() });
   const expenses = new CowExpenseLedger({ config, client: reader, marketQuotes: quotes, query, transaction });
-  client = new CowSourceClient({ owner: config.terms.owner, markets, execution: readExecution, journal: readJournal, history, quotes, market, api,
+  client = new CowSourceClient({ chainId: network.chainId, owner: config.terms.owner, markets, execution: readExecution, journal: readJournal, history, quotes, market, api,
     expenses: () => expenses.getExpenses(), orderGasEur: id => expenses.orderGasEur(id) });
   const source: WalletVenueSource = { client, journal: mainJournal, binding: cowBinding(config), gasCostsIncluded: true,
+    candleSourceIdentity: 'wallet-candles:v1:' + keccak256(stringToHex(JSON.stringify([walletBindingIdentity(cowBinding(config)),
+      [...config.mappings].sort((a, b) => a.symbol.localeCompare(b.symbol)).map(m => [m.chainId, m.symbol, m.tokenAddress.toLowerCase(), m.provider, m.method, m.sourceId])]))),
     // Quotes remain non-partial market references. New entries must carry the
     // separately reviewed signed-net-limit certificate through every write.
     entryBlocker: () => client.entryBlocker(), entryPlan: async (...args) => {

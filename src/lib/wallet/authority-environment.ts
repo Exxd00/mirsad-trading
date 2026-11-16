@@ -11,16 +11,18 @@ import { AuthorityError, authorityBlockCurrent, authorityDigest, parseAuthorityR
   type AuthorityPreparation, type AuthorityReview, type AuthorityVerification } from './authority';
 import type { AuthorityEnvironment } from './authority-service';
 import { loadStrategyProfile, type LoadedStrategyProfile } from './strategy-profile';
-import { COW_DOMAIN, COW_SETTLEMENT, COW_VAULT_RELAYER, cowOrderUid } from './cow-order';
+import { cowOrderDomain, COW_SETTLEMENT, COW_VAULT_RELAYER, cowOrderUid, type CowOrderChainId } from './cow-order';
 import { createCowPolicyDraft } from './cow-policy';
 import { COW_ENFORCER_ARTIFACT, COW_ENFORCER_RELEASE, cowEnforcerDeployment, expectedCowEnforcerRuntime } from './cow-artifact';
 import { loadCowRuntime, productionCowClient, runtimeMatchesProfile, type CowRuntimeConfig } from './cow-runtime-config';
 import type { CowOrderRecord } from './cow-execution-types';
-import published from './generated/mainnet-contracts.json';
+import { cowNetwork } from './cow-network';
+import { readGnosisStandardTokenEvidence } from './gnosis-token-evidence';
 
 type Manifest = { release: string; contracts: { manager: string; implementation: string; settlement: string; vaultRelayer: string };
   codeHashes: { manager: string; implementation: string; settlement: string; vaultRelayer: string } };
 export interface AuthorityEnvironmentDependencies {
+  chainId?: CowOrderChainId;
   client: PublicClient; query: SqlExecutor['query']; transaction<T>(work: (tx: SqlExecutor) => Promise<T>): Promise<T>;
   loadRuntime(tx: SqlExecutor): Promise<CowRuntimeConfig | null>;
   /** Test/server dependency only; the production factory always pins published. */
@@ -35,19 +37,20 @@ const settlementAbi = parseAbi(['function domainSeparator() view returns(bytes32
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const address = (a: string) => getAddress(a.toLowerCase());
 const MAX = (1n << 256n) - 1n;
-const feePrefix = (owner: string) => `wallet:cow:v1:owner-setup-fee:${owner.toLowerCase()}:`;
+const feePrefix = (owner: string, chainId: CowOrderChainId = 1) => `wallet:cow:v1:owner-setup-fee:${chainId === 1 ? '' : '100:'}${owner.toLowerCase()}:`;
 export interface AuthoritySetupFeeEvidence {
-  version: 1; chainId: 1; owner: string; transactionHash: Hex; blockNumber: string; blockHash: Hex;
+  version: 1; chainId: CowOrderChainId; owner: string; transactionHash: Hex; blockNumber: string; blockHash: Hex;
   from: string; to: string | null; nonce: number; inputHash: Hex; gasUsed: string; effectiveGasPriceWei: string;
   actualGasWei: string; status: 'success' | 'reverted'; verifiedAt: number; authorityDigest: Hex;
   purpose: 'setup' | 'closure';
 }
 /** Canonical receipt evidence only; no guessed gas, EUR conversion or zero-cost
  * inference is supplied. Source accounting owns conversion and attribution. */
-export async function loadAuthoritySetupFeeEvidence(tx: SqlExecutor, owner: string): Promise<AuthoritySetupFeeEvidence[]> {
-  const result = await tx.query<{ value: AuthoritySetupFeeEvidence }>('SELECT value FROM app_settings WHERE key LIKE $1 ORDER BY key LIMIT 4097', [feePrefix(address(owner)) + '%']);
+export async function loadAuthoritySetupFeeEvidence(tx: SqlExecutor, owner: string, chainId: CowOrderChainId = 1): Promise<AuthoritySetupFeeEvidence[]> {
+  cowNetwork(chainId);
+  const result = await tx.query<{ value: AuthoritySetupFeeEvidence }>('SELECT value FROM app_settings WHERE key LIKE $1 ORDER BY key LIMIT 4097', [feePrefix(address(owner), chainId) + '%']);
   if (result.rows.length > 4096) throw new AuthorityError('wallet_authority_cost_history_limit');
-  for (const { value: v } of result.rows) if (v.version !== 1 || v.chainId !== 1 || !same(v.owner, owner) || !same(v.from, owner)
+  for (const { value: v } of result.rows) if (v.version !== 1 || v.chainId !== chainId || !same(v.owner, owner) || !same(v.from, owner)
     || !/^0x[0-9a-f]{64}$/i.test(v.transactionHash) || !/^[0-9]+$/.test(v.gasUsed) || !/^[0-9]+$/.test(v.effectiveGasPriceWei)
     || BigInt(v.gasUsed) * BigInt(v.effectiveGasPriceWei) !== BigInt(v.actualGasWei)) throw new AuthorityError('wallet_authority_cost_evidence_invalid');
   return result.rows.map(r => r.value);
@@ -56,12 +59,12 @@ export async function loadAuthoritySetupFeeEvidence(tx: SqlExecutor, owner: stri
 /** Real read-only verifier. No method can sign, broadcast, publish an order,
  * install a source or arm execution. Configuration alone proves no authority. */
 export function createAuthorityEnvironment(deps: AuthorityEnvironmentDependencies): AuthorityEnvironment {
-  const client = deps.client, manifest = deps.manifest ?? published, sql = { query: deps.query };
+  const client = deps.client, network = cowNetwork(deps.chainId), manifest = deps.manifest ?? network, sql = { query: deps.query };
   const guarded = <T>(work: () => Promise<T>): Promise<T> => work().catch(error => {
     throw error instanceof AuthorityError ? error : new AuthorityError('wallet_authority_verification_unavailable');
   });
   async function head(now: number, finalized = false): Promise<AuthorityBlock> {
-    if (await client.getChainId() !== 1) throw new AuthorityError('wallet_authority_chain_mismatch');
+    if (await client.getChainId() !== network.chainId) throw new AuthorityError('wallet_authority_chain_mismatch');
     const b = await client.getBlock({ blockTag: finalized ? 'finalized' : 'latest' });
     if (b.number === null || !b.hash || b.number < 0n || b.timestamp < 0n || b.timestamp > 0xffffffffn) throw new AuthorityError('wallet_authority_verification_unavailable');
     const result = { number: b.number.toString(), hash: b.hash.toLowerCase() as Hex, timestamp: Number(b.timestamp) };
@@ -75,8 +78,8 @@ export function createAuthorityEnvironment(deps: AuthorityEnvironmentDependencie
   }
   async function closureIdentity(review: AuthorityReview, block: AuthorityBlock) {
     const fixed = ['manager', 'implementation', 'settlement', 'vaultRelayer'] as const;
-    if (fixed.some(k => !same(review.contracts[k], manifest.contracts[k]) || !same(review.contracts.codeHashes[k], manifest.codeHashes[k]))
-      || !same(review.contracts.codeHashes.enforcer, keccak256(expectedCowEnforcerRuntime(address(review.contracts.manager))))) {
+    if (review.chainId !== network.chainId || fixed.some(k => !same(review.contracts[k], manifest.contracts[k]) || !same(review.contracts.codeHashes[k], manifest.codeHashes[k]))
+      || !same(review.contracts.codeHashes.enforcer, keccak256(expectedCowEnforcerRuntime(address(review.contracts.manager), network.chainId)))) {
       throw new AuthorityError('wallet_authority_contract_manifest_changed');
     }
     const targets = [...fixed.map(k => [review.contracts[k], review.contracts.codeHashes[k]] as const),
@@ -97,7 +100,7 @@ export function createAuthorityEnvironment(deps: AuthorityEnvironmentDependencie
   async function runtime(profile?: LoadedStrategyProfile) {
     const r = await deps.loadRuntime(sql);
     if (!r) throw new AuthorityError('wallet_authority_runtime_missing');
-    if (!same(r.manager, manifest.contracts.manager) || !same(r.implementation, manifest.contracts.implementation)
+    if (r.terms.chainId !== network.chainId || !same(r.manager, manifest.contracts.manager) || !same(r.implementation, manifest.contracts.implementation)
       || (profile && !runtimeMatchesProfile(r, profile))) throw new AuthorityError('wallet_authority_profile_changed');
     return r;
   }
@@ -107,7 +110,7 @@ export function createAuthorityEnvironment(deps: AuthorityEnvironmentDependencie
       settlement: COW_SETTLEMENT, vaultRelayer: COW_VAULT_RELAYER };
     const expected = { manager: manifest.codeHashes.manager, implementation: manifest.codeHashes.implementation,
       settlement: manifest.codeHashes.settlement, vaultRelayer: manifest.codeHashes.vaultRelayer,
-      enforcer: keccak256(expectedCowEnforcerRuntime(r.manager)) };
+      enforcer: keccak256(expectedCowEnforcerRuntime(r.manager, network.chainId)) };
     const codePairs = await Promise.all(Object.entries(targets).map(async ([key, target]) => [key,
       await client.getCode({ address: address(target), blockNumber: at })] as const));
     const code = Object.fromEntries(codePairs), matches = (key: keyof typeof targets) => !!code[key] && code[key] !== '0x'
@@ -142,22 +145,26 @@ export function createAuthorityEnvironment(deps: AuthorityEnvironmentDependencie
         client.readContract({ address: r.enforcer, abi: enforcerAbi, functionName: 'settlement', blockNumber: at }),
         client.readContract({ address: r.enforcer, abi: enforcerAbi, functionName: 'chainId', blockNumber: at }),
       ]);
-      enforcerOkay = same(manager, r.manager) && same(settlement, COW_SETTLEMENT) && chain === 1n;
+      enforcerOkay = same(manager, r.manager) && same(settlement, COW_SETTLEMENT) && chain === BigInt(network.chainId);
     }
     if (settlementOkay) {
       const [domain, relayer] = await Promise.all([
         client.readContract({ address: COW_SETTLEMENT, abi: settlementAbi, functionName: 'domainSeparator', blockNumber: at }),
         client.readContract({ address: COW_SETTLEMENT, abi: settlementAbi, functionName: 'vaultRelayer', blockNumber: at }),
       ]);
-      settlementOkay = same(domain, domainSeparator({ domain: COW_DOMAIN })) && same(relayer, COW_VAULT_RELAYER);
+      settlementOkay = same(domain, domainSeparator({ domain: cowOrderDomain(network.chainId) })) && same(relayer, COW_VAULT_RELAYER);
     }
     let ownerImplementation = ownerMode === 'metamask-7702';
     if (ownerImplementation) ownerImplementation = same(await client.readContract({ address: r.terms.owner, abi: ownerAbi,
       functionName: 'delegationManager', blockNumber: at }), r.manager);
+    // Gnosis' bridged proxies and bridge callback destination are part of the
+    // reviewed scope, not just runtime code on the proxy address itself.
+    const tokenBehavior = network.chainId !== 100 || await readGnosisStandardTokenEvidence(client, r.terms.owner,
+      () => Math.floor(Date.now() / 1000)).then(() => true, () => false);
     await canonical(block);
     return { contracts: { ...targets, release: COW_ENFORCER_RELEASE, codeHashes: expected as AuthorityReview['contracts']['codeHashes'] },
       allowances, ownerMode, managerPaused, flags: { managerCode: managerOkay, implementationCode: matches('implementation'), enforcerCode: enforcerOkay,
-        settlementCode: settlementOkay, vaultRelayerCode: matches('vaultRelayer'), tokenCodes: tokenChecks.every(Boolean), ownerImplementation, delegationEnabled } };
+        settlementCode: settlementOkay, vaultRelayerCode: matches('vaultRelayer'), tokenCodes: tokenChecks.every(Boolean) && tokenBehavior, ownerImplementation, delegationEnabled } };
   }
   function setupCalls(review: AuthorityReview): AuthorityCall[] {
     return review.allowances.flatMap(a => [0n, BigInt(a.finiteAmount)].map(amount => ({ to: a.token, value: '0x0' as const,
@@ -199,12 +206,13 @@ export function createAuthorityEnvironment(deps: AuthorityEnvironmentDependencie
       } else {
         const past = parseAuthorityReview((row.detail as { review: AuthorityReview }).review);
         if (!same(past.owner, review.owner)) throw new AuthorityError('wallet_authority_cost_evidence_invalid');
+        if (past.chainId !== network.chainId) continue;
         allowed.push(...setupCalls(past));
       }
     }
     for (const hash of [...new Set(hashes)]) {
       const [receipt, tx] = await Promise.all([client.getTransactionReceipt({ hash }), client.getTransaction({ hash })]);
-      if (!same(receipt.transactionHash, hash) || !same(tx.hash, hash) || tx.chainId !== 1 || !same(tx.from, review.owner)
+      if (!same(receipt.transactionHash, hash) || !same(tx.hash, hash) || tx.chainId !== network.chainId || !same(tx.from, review.owner)
         || !same(receipt.from, review.owner) || tx.value !== 0n || receipt.blockNumber > BigInt(final.number)
         || tx.blockHash === null || !same(tx.blockHash, receipt.blockHash) || tx.blockNumber !== receipt.blockNumber
         || !['success', 'reverted'].includes(receipt.status) || !Number.isSafeInteger(tx.nonce) || tx.nonce < 0
@@ -214,7 +222,7 @@ export function createAuthorityEnvironment(deps: AuthorityEnvironmentDependencie
       const canonicalBlock = await client.getBlock({ blockNumber: receipt.blockNumber });
       if (!canonicalBlock.hash || canonicalBlock.number !== receipt.blockNumber || !same(canonicalBlock.hash, receipt.blockHash)) throw new AuthorityError('wallet_authority_verification_unavailable');
       if (tx.to === null) {
-        if (close || receipt.to !== null || tx.input !== cowEnforcerDeployment(address(review.contracts.manager))
+        if (close || receipt.to !== null || tx.input !== cowEnforcerDeployment(address(review.contracts.manager), network.chainId)
           || !same(getContractAddress({ from: address(review.owner), nonce: BigInt(tx.nonce) }), review.contracts.enforcer)
           || (receipt.status === 'success' && (!receipt.contractAddress || !same(receipt.contractAddress, review.contracts.enforcer)))) {
           throw new AuthorityError('wallet_authority_receipt_invalid');
@@ -226,7 +234,7 @@ export function createAuthorityEnvironment(deps: AuthorityEnvironmentDependencie
           if (!allowed.some(a => same(a.to, tx.to!) && same(a.data, tx.input))) throw new AuthorityError('wallet_authority_receipt_invalid');
         }
       }
-      proofs.push({ version: 1, chainId: 1, owner: review.owner, transactionHash: hash.toLowerCase() as Hex,
+      proofs.push({ version: 1, chainId: network.chainId, owner: review.owner, transactionHash: hash.toLowerCase() as Hex,
         blockNumber: receipt.blockNumber.toString(), blockHash: receipt.blockHash, from: tx.from, to: tx.to, nonce: tx.nonce,
         inputHash: keccak256(tx.input), gasUsed: receipt.gasUsed.toString(), effectiveGasPriceWei: receipt.effectiveGasPrice.toString(),
         actualGasWei: (receipt.gasUsed * receipt.effectiveGasPrice).toString(), status: receipt.status, verifiedAt: now, authorityDigest: review.digest,
@@ -234,14 +242,14 @@ export function createAuthorityEnvironment(deps: AuthorityEnvironmentDependencie
     }
     await canonical(final);
     await deps.transaction(async tx => { for (const proof of proofs) await tx.query('INSERT INTO app_settings(key,value) VALUES($1,$2::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=NOW()',
-      [feePrefix(review.owner) + proof.transactionHash, JSON.stringify(proof)]); });
+      [feePrefix(review.owner, network.chainId) + proof.transactionHash, JSON.stringify(proof)]); });
   }
   async function tracked(review: AuthorityReview): Promise<CowOrderRecord[]> {
     const prefix = `wallet:cow:v1:${review.delegation.delegationHash.toLowerCase()}:order:`;
     const rows = await deps.query<{ value: CowOrderRecord }>('SELECT value FROM app_settings WHERE key LIKE $1 ORDER BY key LIMIT 4097', [prefix + '%']);
     if (rows.rows.length > 4096) throw new AuthorityError('wallet_authority_order_history_limit');
     for (const { value: r } of rows.rows) if (r.version !== 1 || r.bindingId !== review.delegation.delegationHash.toLowerCase()
-      || !same(r.owner, review.owner) || cowOrderUid(r.order, address(review.owner)) !== r.uid) throw new AuthorityError('wallet_authority_order_history_invalid');
+      || (r.chainId ?? 1) !== network.chainId || !same(r.owner, review.owner) || cowOrderUid(r.order, address(review.owner), network.chainId) !== r.uid) throw new AuthorityError('wallet_authority_order_history_invalid');
     if (new Set(rows.rows.map(r => r.value.uid)).size !== rows.rows.length) throw new AuthorityError('wallet_authority_order_history_invalid');
     return rows.rows.map(row => row.value);
   }
@@ -290,14 +298,14 @@ export function createAuthorityEnvironment(deps: AuthorityEnvironmentDependencie
           const nonce = await client.getTransactionCount({ address: r.terms.owner, blockTag: 'pending' });
           if (!same(getContractAddress({ from: r.terms.owner, nonce: BigInt(nonce) }), r.enforcer)) blockers.push('wallet_authority_deploy_nonce_changed');
           else {
-            const data = cowEnforcerDeployment(r.manager); let gasEstimate: string | null = null, blocker: string | null = null;
+            const data = cowEnforcerDeployment(r.manager, network.chainId); let gasEstimate: string | null = null, blocker: string | null = null;
             try {
               const gas = await client.estimateGas({ account: r.terms.owner, data, nonce, value: 0n }); gasEstimate = gas.toString();
               const [balance, fees] = await Promise.all([client.getBalance({ address: r.terms.owner, blockTag: 'pending' }), client.estimateFeesPerGas()]);
               if (fees.maxFeePerGas === undefined || balance < gas * fees.maxFeePerGas) blocker = 'wallet_authority_owner_gas_insufficient';
             } catch { blocker = 'wallet_authority_deployment_gas_unavailable'; }
             deploymentStep = { compilerVersion: '0.8.30', artifactHash: COW_ENFORCER_ARTIFACT.artifactHash as Hex,
-              expectedAddress: r.enforcer, sender: r.terms.owner, chainId: 1, transaction: { data, value: '0x0', nonce: toHex(nonce) }, gasEstimate, blocker };
+              expectedAddress: r.enforcer, sender: r.terms.owner, chainId: network.chainId, transaction: { data, value: '0x0', nonce: toHex(nonce) }, gasEstimate, blocker };
           }
         }
       }
@@ -347,5 +355,6 @@ export function createAuthorityEnvironment(deps: AuthorityEnvironmentDependencie
 }
 
 export async function productionAuthorityEnvironment(): Promise<AuthorityEnvironment> {
-  return createAuthorityEnvironment({ client: productionCowClient() as PublicClient, query, transaction, loadRuntime: loadCowRuntime });
+  const config = await loadCowRuntime(), chainId = config?.terms.chainId ?? 1;
+  return createAuthorityEnvironment({ chainId, client: productionCowClient(chainId) as PublicClient, query, transaction, loadRuntime: loadCowRuntime });
 }

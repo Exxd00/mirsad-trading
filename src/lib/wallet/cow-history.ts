@@ -8,6 +8,8 @@ import { SourceApiError, type SourceBalance, type SourceTransaction } from '../e
 import type { CowBlock, CowLog, CowReceipt } from './cow-execution-types';
 import { COW_SETTLEMENT, normalizeCowAddress, normalizeCowUid } from './cow-order';
 import { COINBASE_WETH9 } from './coinbase-market';
+import { cowNetwork } from './cow-network';
+import type { CowOrderChainId } from './cow-order';
 
 const transfer = parseAbiItem('event Transfer(address indexed from,address indexed to,uint256 value)');
 const deposit = parseAbiItem('event Deposit(address indexed dst,uint256 wad)');
@@ -63,7 +65,7 @@ export type CowHistorySnapshot = { scopedCapital: 'approved-erc20-only-native-ex
 export type CowBalanceSnapshot = { observedAt: number; latest: CowBlock; finalized: CowBlock;
   balances: Record<string, string>; finalizedBalances: Record<string, string> };
 type Options = { rpc: CowHistoryRpc; store: CowHistoryStore; owner: Address; tokens: readonly CowHistoryToken[]; quoteToken: Address;
-  startAt: number; clock?: () => number; maxChunks?: number; budgetMs?: number };
+  startAt: number; clock?: () => number; maxChunks?: number; budgetMs?: number; chainId?: CowOrderChainId };
 
 /** An independent, signer-free mainnet read adapter. No grant, authority or
  * executor key is needed to obtain history before wallet setup. */
@@ -117,16 +119,18 @@ export class CowWalletHistory {
   private readonly clock: () => number;
   private readonly maxChunks: number;
   private readonly budgetMs: number;
+  private readonly chainId: CowOrderChainId;
   private active: Promise<CowHistorySnapshot> | null = null;
   private last: CowHistorySnapshot | null = null;
   private balanceActive: Promise<CowBalanceSnapshot> | null = null;
   private balanceLast: CowBalanceSnapshot | null = null;
   constructor(private readonly options: Options) {
+    this.chainId = cowNetwork(options.chainId).chainId;
     this.owner = address(options.owner); this.quote = address(options.quoteToken);
     this.tokens = options.tokens.map(t => {
       const a = address(t.address);
-      if (!/^[A-Z0-9]{2,16}$/.test(t.currency) || t.currency === 'ETH' || !Number.isSafeInteger(t.decimals) || t.decimals < 0 || t.decimals > 36
-        || !['erc20', 'weth9'].includes(t.kind) || (t.kind === 'weth9' && (a !== COINBASE_WETH9 || t.currency !== 'WETH' || t.decimals !== 18))) return fail('cow_history_identity_invalid');
+      if (!/^[A-Z0-9]{2,16}$/.test(t.currency) || t.currency === 'ETH' || t.currency === cowNetwork(this.chainId).nativeCurrency || !Number.isSafeInteger(t.decimals) || t.decimals < 0 || t.decimals > 36
+        || !['erc20', 'weth9'].includes(t.kind) || (t.kind === 'weth9' && (this.chainId !== 1 || a !== COINBASE_WETH9 || t.currency !== 'WETH' || t.decimals !== 18))) return fail('cow_history_identity_invalid');
       return { ...t, address: a };
     }).sort((a, b) => a.address.localeCompare(b.address));
     if (!this.tokens.length || this.tokens.length > 31 || !this.tokens.some(t => t.address === this.quote)
@@ -135,7 +139,7 @@ export class CowWalletHistory {
     this.clock = options.clock ?? (() => Math.floor(Date.now() / 1000)); this.maxChunks = options.maxChunks ?? 8; this.budgetMs = options.budgetMs ?? 12000;
     if (!Number.isSafeInteger(this.maxChunks) || this.maxChunks < 1 || this.maxChunks > 16 || !Number.isSafeInteger(this.budgetMs)
       || this.budgetMs < 100 || this.budgetMs > 15000) throw new CowHistoryError('cow_history_identity_invalid');
-    this.bindingId = createHash('sha256').update(JSON.stringify([1, 1, this.owner, this.quote, options.startAt, this.tokens])).digest('hex');
+    this.bindingId = createHash('sha256').update(JSON.stringify([1, this.chainId, this.owner, this.quote, options.startAt, this.tokens])).digest('hex');
   }
   private physical(raw: Record<string, string>) {
     if (!raw || Object.keys(raw).length !== this.tokens.length || this.tokens.some(t => !(t.address in raw))) return fail('cow_history_cache_invalid');
@@ -191,7 +195,7 @@ export class CowWalletHistory {
       catch (e) { if (e instanceof CowHistoryError) throw e; return fail('cow_history_unavailable'); }
       finally { if (timer) clearTimeout(timer); }
     };
-    if (await read(() => this.options.rpc.getChainId()) !== 1) return fail('cow_history_identity_invalid');
+    if (await read(() => this.options.rpc.getChainId()) !== this.chainId) return fail('cow_history_identity_invalid');
     const [latest, finalized] = (await Promise.all([read(() => this.options.rpc.getBlock('latest')), read(() => this.options.rpc.getBlock('finalized'))])).map(block);
     if (uint(finalized.number) > uint(latest.number) || finalized.timestamp > latest.timestamp || latest.timestamp > this.clock()
       || this.clock() - latest.timestamp > 30 || this.options.startAt > finalized.timestamp) return fail('cow_history_incomplete');
@@ -268,7 +272,7 @@ export class CowWalletHistory {
     await canonical(latest); await canonical(finalized);
     const currentHead = block(await read(() => this.options.rpc.getBlock('latest')));
     if (!isDeepStrictEqual(currentHead, latest) || this.clock() - latest.timestamp > 30) return fail('cow_history_incomplete');
-    if (await read(() => this.options.rpc.getChainId()) !== 1) return fail('cow_history_identity_invalid');
+    if (await read(() => this.options.rpc.getChainId()) !== this.chainId) return fail('cow_history_identity_invalid');
     return { scopedCapital: 'approved-erc20-only-native-excluded', bindingId: this.bindingId, status: complete ? 'complete' : 'backfilling',
       observedAt: this.clock(), latest, finalized, coveredThrough: state.through, startAt: state.startAt, cacheRevision: state.revision,
       balances: latestBalances, records: [...state.records, ...pending] };
@@ -341,7 +345,7 @@ export class CowWalletHistory {
     if (!force && this.balanceLast && this.clock() >= this.balanceLast.observedAt && this.clock() - this.balanceLast.observedAt < 10
       && this.clock() - this.balanceLast.latest.timestamp <= 30) return structuredClone(this.balanceLast);
     const perform = async (): Promise<CowBalanceSnapshot> => {
-      if (await this.options.rpc.getChainId() !== 1) return fail('cow_history_identity_invalid');
+      if (await this.options.rpc.getChainId() !== this.chainId) return fail('cow_history_identity_invalid');
       const [latest, finalized] = (await Promise.all([this.options.rpc.getBlock('latest'), this.options.rpc.getBlock('finalized')])).map(block);
       if (uint(finalized.number) > uint(latest.number) || finalized.timestamp > latest.timestamp || latest.timestamp > this.clock()
         || this.clock() - latest.timestamp > 30) return fail('cow_history_incomplete');
@@ -349,7 +353,7 @@ export class CowWalletHistory {
         [t.address, uint(await this.options.rpc.getTokenBalance(t.address, this.owner, head.number)).toString()])));
       const [balances, finalizedBalances] = await Promise.all([balancesAt(latest), balancesAt(finalized)]);
       const [current, canonicalFinalized, chainId] = await Promise.all([this.options.rpc.getBlock('latest'), this.options.rpc.getBlock(finalized.number), this.options.rpc.getChainId()]);
-      if (chainId !== 1) return fail('cow_history_identity_invalid');
+      if (chainId !== this.chainId) return fail('cow_history_identity_invalid');
       if (!isDeepStrictEqual(block(current), latest) || !isDeepStrictEqual(block(canonicalFinalized), finalized)) return fail('cow_history_incomplete');
       if (this.clock() - latest.timestamp > 30) return fail('cow_history_incomplete');
       return { latest, finalized, balances, finalizedBalances, observedAt: this.clock() };

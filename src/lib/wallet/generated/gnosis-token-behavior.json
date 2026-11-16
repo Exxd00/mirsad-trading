@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "chainId": 100,
+  "observedAt": "2026-11-16T00:19:57.363Z",
+  "reviewMethod": "sourcify-verified-exact-transfer-paths-v1",
+  "quote": {
+    "proxy": "0x2a22f9c3b484c3629090FeED35F17Ff8F88f76F0",
+    "proxyCodeHash": "0xad30d819dbc47814b7e6cb837fd7cc57fcb591479a38596ee93de4fc52e8c435",
+    "implementation": "0x107CF7fb73EA48D1D200989b156Ce1894d7AfEC7",
+    "implementationCodeHash": "0xaada1fda4d1c1b638e3ed53169a42e70647b824a8f6ace10326fd33fd216deb4",
+    "decimals": 6
+  },
+  "base": {
+    "proxy": "0x6A023CCd1ff6F2045C3309768eAd9E68F978f6e1",
+    "proxyCodeHash": "0x1f47c489cf12828f5215e58f237046f4bb948888884c3affbcb52243246730ce",
+    "implementation": "0xf8D1677c8a0c961938bf2f9aDc3F3CFDA759A9d9",
+    "implementationCodeHash": "0x3c42cd875bf3a7c6ef70a1e3ff64377f4e9d35aa8db0695f6724a4f94e1f5c3f",
+    "decimals": 18,
+    "bridgeContract": "0xf6A78083ca3e2a662D6dd1703c939c8aCE2e268d"
+  },
+  "settlement": "0x9008D19f58AAbD9eD0D60971565AA8510560ab41",
+  "governanceAssumption": "reviewed-code-at-admission-no-future-upgrade-or-bridge-change-guarantee",
+  "transferReview": {
+    "quote": "FiatTokenV1.transfer/transferFrom -> _transfer exact debit/credit; FiatTokenV2_2 balance-mask override; paused/blacklist can revert; no fee-on-transfer or balance rebasing.",
+    "base": "PermittableToken.transferFrom and BasicToken.transfer exact debit/credit; callAfterTransfer invokes recipient only when it equals mutable bridgeContractAddr. Owner and Settlement must not equal the pinned bridge; no transferAndCall path is approved.",
+    "noFutureGovernanceOrBridgeSolvencyGuarantee": true,
+    "noPricePegAssumption": true
+  },
+  "codeProvenance": {
+    "quoteToken": {
+      "source": "https://sourcify.dev/server/v2/contract/100/0x2a22f9c3b484c3629090FeED35F17Ff8F88f76F0?fields=all",
+      "matchId": "1132802",
+      "verifiedAt": "2024-08-08T12:32:55Z",
+      "runtimeMatch": "exact_match",
+      "compiler": "0.6.12+commit.27d51765",
+      "contract": "/Users/mgrant/Developer/centre-tokens/contracts/v1/FiatTokenProxy.sol:FiatTokenProxy",
+      "codeHash": "0xad30d819dbc47814b7e6cb837fd7cc57fcb591479a38596ee93de4fc52e8c435",
+      "sourceHashes": {
+        "@openzeppelin/contracts/utils/Address.sol": "0xdfb4f812600ba4ce6738c35584ceb8c9433472583051b48ba5b1f66cb758a498",
+        "/Users/mgrant/Developer/centre-tokens/contracts/v1/FiatTokenProxy.sol": "0x7e640892ac0fd6efafe4a9dc08cbc7ba5e825dafe8a6a8ebf717e7026b8fb69f",
+        "/Users/mgrant/Developer/centre-tokens/contracts/upgradeability/Proxy.sol": "0x6cc252e2b80c8ecaf6d29b950ba3591e4366caf06c3ccba89a8f9cbd2ee807e3",
+        "/Users/mgrant/Developer/centre-tokens/contracts/upgradeability/UpgradeabilityProxy.sol": "0xcd7d32b7a63b1803d2487434ec98a2ace4c41f087cc55057c3dc9f61628ce03a",
+        "/Users/mgrant/Developer/centre-tokens/contracts/upgradeability/AdminUpgradeabilityProxy.sol": "0xc93cb352d8b777ea96e743124af5386eeee32a9fdef0b2fbd89623988e66caad"
+      },
+      "executableCodeMatch": "sourcify-runtime-match-only-cbor-auxdata-differences"
+    },
+    "quoteTokenImplementation": {
+      "source": "https://sourcify.dev/server/v2/contract/100/0x107CF7fb73EA48D1D200989b156Ce1894d7AfEC7?fields=all",
+      "matchId": "5104736",
+      "verifiedAt": "2024-08-13T13:39:13Z",
+      "runtimeMatch": "match",
+      "compiler": "0.6.12+commit.27d51765",
+      "contract": "contracts/v2/FiatTokenV2_2.sol:FiatTokenV2_2",
+      "codeHash": "0xaada1fda4d1c1b638e3ed53169a42e70647b824a8f6ace10326fd33fd216deb4",
+      "sourceHashes": {
+        "contracts/v1/Ownable.sol": "0xdd51a06c4d6c38ef806c50463ade63123980334bf173c3301794e242228fc9e5",
+        "contracts/v2/EIP2612.sol": "0x5d537ee5eb802d5a9e87fe8c84432468ede6dac587dcb5fe496c3c6688ded081",
+        "contracts/v2/EIP3009.sol": "0x5a3016cdefa4829a94cda31bdb4ac0657c7cee0237609f601859d4710efff611",
+        "contracts/util/EIP712.sol": "0xe37a5f63301df416c581522dafd043fc5e5a2959de5912472913f51b8f732fe1",
+        "contracts/v1/Pausable.sol": "0xa1112323b001871746d971f9dd2c61d094ea856146071537dc9d92e18e8cc829",
+        "contracts/util/ECRecover.sol": "0x67e87f3329b45c5ccaaea2aee30c62fc5199ae61084a98ae7b00fb5866ef38bb",
+        "contracts/v1.1/Rescuable.sol": "0x18cd3973ae9807647d8fe9f622c9e680b488051023338062d919783565eb074a",
+        "contracts/v1/FiatTokenV1.sol": "0xd7d4cb362789154d93f826ada42dc65f0a1a1efa4864c0376c416452b4c4f434",
+        "contracts/v2/FiatTokenV2.sol": "0x4a17f2abc9d792b97ccd25ce3656be52cc9912ca080931a2af91620c085d2710",
+        "contracts/v2/EIP712Domain.sol": "0xac8612431dcd0ce278ea4cdc41955408b9465125a57316076581fc41eca16cdb",
+        "contracts/v1/Blacklistable.sol": "0x5222ed7885c2765f59841b92d912acd4b2fdec3b064a033c67b706b1b873a7a2",
+        "contracts/v2/FiatTokenV2_1.sol": "0x98ad86a34c485a54eb89e1ad52bd18b5bedf80cef350761102c542c4efa5e899",
+        "contracts/v2/FiatTokenV2_2.sol": "0xd277ba6a963efe6b837050efa4dd9da2c6e3736ac494d2098d099dd8411ffd27",
+        "contracts/interface/IERC1271.sol": "0xb456c2a7864a871487d0b20922170de00f0fd68cfcbffe9f1b202fe55bd34b7b",
+        "contracts/v1.1/FiatTokenV1_1.sol": "0xf7fb808b12e8463014ccf9c2ef4bb9b190beda510549cb5475c30f3d04853375",
+        "contracts/util/MessageHashUtils.sol": "0x29a830440a0cad1c957be220140820273f895180ab05181e8f3483913791bade",
+        "contracts/util/SignatureChecker.sol": "0xd83cfc98baf19b92607c020a6b4095b8911f0ebd9a23f9005d06066fa93d7528",
+        "contracts/v1/AbstractFiatTokenV1.sol": "0x71fb175b396fe43da0d05d9c51bee3b5be36e3beae202a609b39967de1ffccb3",
+        "contracts/v2/AbstractFiatTokenV2.sol": "0x3b29dd64caae65ba89374034f03753232aa20fbdfe28f209c904cd575e3a1e90",
+        "node_modules/@openzeppelin/contracts/math/SafeMath.sol": "0xcc78a17dd88fa5a2edc60c8489e2f405c0913b377216a5b26b35656b2d0dab52",
+        "node_modules/@openzeppelin/contracts/utils/Address.sol": "0x28911e614500ae7c607a432a709d35da25f3bc5ddc8bd12b278b66358070c0ea",
+        "node_modules/@openzeppelin/contracts/token/ERC20/IERC20.sol": "0x5f02220344881ce43204ae4a6281145a67bc52c2bb1290a791857df3d19d78f5",
+        "node_modules/@openzeppelin/contracts/token/ERC20/SafeERC20.sol": "0xf12dfbe97e6276980b83d2830bb0eb75e0cf4f3e626c2471137f82158ae6a0fc"
+      },
+      "executableCodeMatch": "sourcify-runtime-match-only-cbor-auxdata-differences"
+    },
+    "wethBridged": {
+      "source": "https://sourcify.dev/server/v2/contract/100/0x6A023CCd1ff6F2045C3309768eAd9E68F978f6e1?fields=all",
+      "matchId": "1179490",
+      "verifiedAt": "2025-07-13T07:17:50Z",
+      "runtimeMatch": "match",
+      "compiler": "0.4.24+commit.e67f0147",
+      "contract": "TokenProxy.sol:TokenProxy",
+      "codeHash": "0x1f47c489cf12828f5215e58f237046f4bb948888884c3affbcb52243246730ce",
+      "sourceHashes": {
+        "TokenProxy.sol": "0x20b6745c420c18bdc0f8fa3b26359582d4d3f1187d44a7fde2c8ad7f14dce7d4"
+      },
+      "executableCodeMatch": "sourcify-runtime-match-only-cbor-auxdata-differences"
+    },
+    "wethBridgedImplementation": {
+      "source": "https://sourcify.dev/server/v2/contract/100/0xf8D1677c8a0c961938bf2f9aDc3F3CFDA759A9d9?fields=all",
+      "matchId": "1189019",
+      "verifiedAt": "2024-08-08T12:38:55Z",
+      "runtimeMatch": "match",
+      "compiler": "0.4.24+commit.e67f0147",
+      "contract": "GnosisScan/PermittableToken (implementation)/PermittableToken.sol:PermittableToken",
+      "codeHash": "0x3c42cd875bf3a7c6ef70a1e3ff64377f4e9d35aa8db0695f6724a4f94e1f5c3f",
+      "sourceHashes": {
+        "GnosisScan/PermittableToken (implementation)/PermittableToken.sol": "0xe79846e4b8cc543747e8d11dac3b82a59ca9567c648e17bc1e44f4a37f581bf4"
+      },
+      "executableCodeMatch": "sourcify-runtime-match-only-cbor-auxdata-differences"
+    }
+  }
+}

@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { decodeEventLog, domainSeparator, erc20Abi, getAddress, keccak256, parseAbi, parseAbiItem, parseTransaction,
   recoverTransactionAddress, recoverTypedDataAddress, toHex, TransactionNotFoundError, TransactionReceiptNotFoundError,
   type Address, type Hex, type PublicClient, type TransactionSerialized } from 'viem';
-import { COW_CHAIN_ID, COW_DOMAIN, COW_SETTLEMENT, COW_VAULT_RELAYER, cowOrderUid, type CowOrder } from './cow-order';
+import { COW_SETTLEMENT, COW_VAULT_RELAYER, cowOrderDomain, cowOrderUid, type CowOrder, type CowOrderChainId } from './cow-order';
 import { createCowPolicyDraft, cowPolicyCancel, cowPolicyPresign, encodeCowPolicyRedemption } from './cow-policy';
 import { gasForPhase, normalizeCowGasLimits } from './cow-gas-limits';
 import { cowFail, CowExecutionError, type CowAuthority, type CowBlock, type CowExecutionRpc, type CowFinalizedTrade,
@@ -50,16 +50,20 @@ export type CowRpcOptions = { client: PublicClient; signer?: CowExecutorSigner; 
 export class CowRpcTransport implements CowExecutionRpc {
   private readonly clock: () => number;
   private readonly gasLimits: CowGasLimits;
+  private readonly chainId: CowOrderChainId;
   private readonly approved = new Map<Hex, CowTxPhase>();
   private readonly expiryBlocks = new Map<Hex, CowBlock>();
   constructor(private readonly options: CowRpcOptions) {
     this.clock = options.clock ?? (() => Math.floor(Date.now() / 1000));
     this.gasLimits = normalizeCowGasLimits(options.gasLimits);
+    const chainId = options.authority.draft.terms.chainId;
+    if (chainId !== 1 && chainId !== 100) cowFail('cow_chain_mismatch');
+    this.chainId = chainId;
   }
   private async guarded<T>(work: () => Promise<T>): Promise<T> {
     try { return await work(); } catch (e) { throw e instanceof CowExecutionError ? e : new CowExecutionError('cow_rpc_unavailable'); }
   }
-  private async chain() { if (await this.options.client.getChainId() !== COW_CHAIN_ID) cowFail('cow_chain_mismatch'); }
+  private async chain() { if (await this.options.client.getChainId() !== this.chainId) cowFail('cow_chain_mismatch'); }
   async getBlock(tag: 'latest' | 'finalized' | string): Promise<CowBlock> {
     return this.guarded(async () => { await this.chain(); return block(await this.options.client.getBlock(tag === 'latest' || tag === 'finalized'
       ? { blockTag: tag } : { blockNumber: units(tag) })); });
@@ -83,6 +87,7 @@ export class CowRpcTransport implements CowExecutionRpc {
       await this.chain(); let v: Awaited<ReturnType<PublicClient['getTransaction']>>;
       try { v = await this.options.client.getTransaction({ hash: hex(txHash, 32) }); }
       catch (e) { if (e instanceof TransactionNotFoundError) return null; throw e; }
+      if (v.chainId !== this.chainId) return cowFail('cow_chain_mismatch');
       return { hash: hex(v.hash, 32), from: address(v.from), to: v.to === null ? null : address(v.to), nonce: v.nonce,
         chainId: v.chainId ?? cowFail('cow_rpc_response_invalid'), input: hex(v.input), value: units(v.value).toString(),
         blockHash: v.blockHash === null ? null : hex(v.blockHash, 32), blockNumber: v.blockNumber === null ? null : units(v.blockNumber).toString() };
@@ -134,9 +139,9 @@ export class CowRpcTransport implements CowExecutionRpc {
         client.readContract({ address: COW_SETTLEMENT, abi: settlementAbi, functionName: 'domainSeparator' }),
         client.readContract({ address: COW_SETTLEMENT, abi: settlementAbi, functionName: 'vaultRelayer' }),
       ]);
-      if (!same(checks[0], draft.manager) || !same(checks[1], COW_SETTLEMENT) || checks[2] !== 1n || !same(checks[3], draft.manager)
+      if (!same(checks[0], draft.manager) || !same(checks[1], COW_SETTLEMENT) || checks[2] !== BigInt(this.chainId) || !same(checks[3], draft.manager)
         || checks[4] !== false || checks[5] !== false || checks[6] !== 'DelegationManager' || checks[7] !== '1'
-        || checks[8] !== domainSeparator({ domain: COW_DOMAIN }) || !same(checks[9], COW_VAULT_RELAYER)) return cowFail('cow_authority_invalid');
+        || checks[8] !== domainSeparator({ domain: cowOrderDomain(this.chainId) }) || !same(checks[9], COW_VAULT_RELAYER)) return cowFail('cow_authority_invalid');
     });
   }
   async pendingNonce(): Promise<number> {
@@ -145,7 +150,7 @@ export class CowRpcTransport implements CowExecutionRpc {
   private async callData(phase: CowTxPhase, order: CowOrder, intentKey: Hex) {
     if (phase === 'clear-presign') return { to: this.options.authority.draft.terms.executor, data: '0x' as Hex };
     const a = this.options.authority, action = phase === 'presign' ? cowPolicyPresign(a.draft, order, intentKey)
-      : cowPolicyCancel(a.draft, cowOrderUid(order, a.draft.terms.owner));
+      : cowPolicyCancel(a.draft, cowOrderUid(order, a.draft.terms.owner, this.chainId));
     return { to: a.draft.manager, data: await encodeCowPolicyRedemption(a.draft, action, a.signature) };
   }
   async prepare(uid: Hex, phase: CowTxPhase, order: CowOrder, intentKey: Hex, nonce: number, previous?: CowPreparedTx): Promise<CowPreparedTx> {
@@ -154,7 +159,7 @@ export class CowRpcTransport implements CowExecutionRpc {
       if (!this.options.authorizeWrite) return cowFail('cow_authority_unavailable');
       await this.options.authorizeWrite(phase);
       if (!signer || !same(signer.address, this.options.authority.draft.terms.executor)
-        || uid !== cowOrderUid(order, this.options.authority.draft.terms.owner) || !Number.isSafeInteger(nonce) || nonce < 0) return cowFail('cow_transaction_identity_invalid');
+        || uid !== cowOrderUid(order, this.options.authority.draft.terms.owner, this.chainId) || !Number.isSafeInteger(nonce) || nonce < 0) return cowFail('cow_transaction_identity_invalid');
       if (phase !== 'clear-presign') await this.assertAuthority();
       else {
         await this.chain();
@@ -181,9 +186,9 @@ export class CowRpcTransport implements CowExecutionRpc {
       if (gasLimit === 0n || gasLimit > gasForPhase(limits, phase) || maxFee > units(limits.maxFeePerGasWei) || tip > units(limits.maxPriorityFeePerGasWei)
         || gasLimit * maxFee > units(limits.maxTransactionCostWei) || balance < gasLimit * maxFee) return cowFail('cow_gas_budget_exceeded');
       await this.options.authorizeWrite(phase);
-      const raw = await signer.signTransaction({ type: 'eip1559', chainId: 1, to: target.to, data: target.data, value: 0n,
+      const raw = await signer.signTransaction({ type: 'eip1559', chainId: this.chainId, to: target.to, data: target.data, value: 0n,
         nonce, gas: gasLimit, maxFeePerGas: maxFee, maxPriorityFeePerGas: tip });
-      const prepared: CowPreparedTx = { raw, hash: keccak256(raw), nonce, chainId: 1, from: signer.address, to: target.to, data: target.data,
+      const prepared: CowPreparedTx = { raw, hash: keccak256(raw), nonce, chainId: this.chainId, from: signer.address, to: target.to, data: target.data,
         value: '0', gas: gasLimit.toString(), maxFeePerGasWei: maxFee.toString(), maxPriorityFeePerGasWei: tip.toString(), ...(previous ? { replaces: previous.hash } : {}) };
       await this.validatePrepared(prepared, phase, order, intentKey); return prepared;
     });
@@ -191,7 +196,7 @@ export class CowRpcTransport implements CowExecutionRpc {
   async validatePrepared(tx: CowPreparedTx, phase: CowTxPhase, order: CowOrder, intentKey: Hex): Promise<void> {
     return this.guarded(async () => {
       const expected = await this.callData(phase, order, intentKey), parsed = parseTransaction(tx.raw as TransactionSerialized), signer = this.options.signer;
-      if (!signer || tx.hash !== keccak256(tx.raw) || tx.chainId !== 1 || parsed.chainId !== 1 || parsed.type !== 'eip1559'
+      if (!signer || tx.hash !== keccak256(tx.raw) || tx.chainId !== this.chainId || parsed.chainId !== this.chainId || parsed.type !== 'eip1559'
         || parsed.nonce !== tx.nonce || !parsed.to || !same(parsed.to, expected.to) || (parsed.data ?? '0x') !== expected.data || (parsed.value ?? 0n) !== 0n
         || !same(await recoverTransactionAddress({ serializedTransaction: tx.raw as TransactionSerialized }), signer.address) || !same(tx.from, signer.address)
         || !same(tx.to, expected.to) || tx.data !== expected.data || tx.value !== '0' || parsed.gas?.toString() !== tx.gas
@@ -234,7 +239,7 @@ export class CowRpcTransport implements CowExecutionRpc {
         return { hash: tx.hash, status: count > tx.nonce ? 'conflict' : 'pending', finalizedHead };
       }
       const actual = await this.getTransaction(tx.hash), canonicalBlock = await this.getBlock(receipt.blockNumber);
-      if (!actual || actual.hash !== tx.hash || actual.nonce !== tx.nonce || actual.chainId !== 1 || !same(actual.from, tx.from)
+      if (!actual || actual.hash !== tx.hash || actual.nonce !== tx.nonce || actual.chainId !== this.chainId || !same(actual.from, tx.from)
         || !actual.to || !same(actual.to, tx.to) || actual.input !== tx.data || actual.value !== '0' || !same(receipt.from, tx.from)
         || !receipt.to || !same(receipt.to, tx.to) || actual.blockHash !== receipt.blockHash || actual.blockNumber !== receipt.blockNumber) return cowFail('cow_receipt_identity_mismatch');
       if (canonicalBlock.hash !== receipt.blockHash) return { hash: tx.hash, status: 'pending', finalizedHead };
@@ -270,7 +275,7 @@ export class CowRpcTransport implements CowExecutionRpc {
   }
   async orderProof(record: CowOrderRecord) {
     return this.guarded(async () => {
-      if (cowOrderUid(record.order, record.owner) !== record.uid) return cowFail('cow_order_identity_invalid');
+      if (cowOrderUid(record.order, record.owner, this.chainId) !== record.uid) return cowFail('cow_order_identity_invalid');
       const head = await this.getBlock('latest'), finalizedHead = await this.getBlock('finalized');
       if (units(finalizedHead.number) > units(head.number) || finalizedHead.timestamp > head.timestamp
         || head.timestamp > this.clock()) return cowFail('cow_rpc_response_invalid');

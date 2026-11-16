@@ -4,17 +4,18 @@ import { getAddress, getContractAddress, keccak256, parseAbi, type Address, type
 import { query, transaction } from '../db';
 import { CONFIG, decimal } from '../execution/v1/model';
 import { SqlJournal } from '../execution/v1/journal';
-import { CoinbaseMarketClient, type CoinbaseMarketMapping } from './coinbase-market';
-import { cowExecutor, COW_RUNTIME_KEY, COW_PROFILE_CONVERSION, loadCowRuntime, parseCowRuntime, productionCowClient, type CowRuntimeConfig } from './cow-runtime-config';
+import { createCowMarketClient, type CowMarketMapping } from './cow-market-port';
+import { cowExecutor, COW_RUNTIME_KEY, cowProfileConversion, loadCowRuntime, parseCowRuntime, productionCowClient, type CowRuntimeConfig } from './cow-runtime-config';
 import { loadStrategyProfile, saveStrategyProfile } from './strategy-profile';
 import { loadAuthority } from './authority-store';
 import { createCowPolicyDraft, parseCowPolicyTerms } from './cow-policy';
 import { walletBindingIdentity, type WalletExecutionBinding } from './execution-connection';
 import { AuthorityError } from './authority';
 import { expectedCowEnforcerRuntime } from './cow-artifact';
-import manifest from './generated/mainnet-contracts.json';
+import { cowNetwork } from './cow-network';
+import type { CowOrderChainId } from './cow-order';
 import { assertCowSetupFeasible } from './cow-feasibility';
-import { COW_SETUP_GAS_LIMITS } from './wallet-feasibility';
+import { COW_SETUP_GAS_LIMITS, COW_GNOSIS_SETUP_GAS_LIMITS } from './wallet-feasibility';
 
 const abi = parseAbi(['function decimals() view returns(uint8)', 'function balanceOf(address) view returns(uint256)']);
 const journal = new SqlJournal();
@@ -22,7 +23,7 @@ export const cowRuntimeArchiveKey = (config: CowRuntimeConfig) => 'wallet:strate
   + createCowPolicyDraft(config.terms, { manager: config.manager, enforcer: config.enforcer }).delegationHash.toLowerCase();
 async function refreshUnusedDeployment(profile: NonNullable<Awaited<ReturnType<typeof loadStrategyProfile>>>, config: CowRuntimeConfig,
   grant: Awaited<ReturnType<typeof loadAuthority>>) {
-  const client = productionCowClient(), code = await client.getCode({ address: config.enforcer });
+  const client = productionCowClient(config.terms.chainId), code = await client.getCode({ address: config.enforcer });
   if (code && code !== '0x') return config;
   const nonce = await client.getTransactionCount({ address: config.terms.owner, blockTag: 'pending' });
   const predicted = getContractAddress({ from: config.terms.owner, nonce: BigInt(nonce) });
@@ -53,7 +54,7 @@ async function refreshUnusedDeployment(profile: NonNullable<Awaited<ReturnType<t
   } finally { await journal.release(lease); }
 }
 export function cowBinding(config: CowRuntimeConfig): WalletExecutionBinding {
-  return { chainId: 1, owner: config.terms.owner, quoteToken: config.terms.quoteToken, quoteDecimals: 6, quoteCurrency: 'EUR', quoteUnit: 'USDC',
+  return { chainId: config.terms.chainId, owner: config.terms.owner, quoteToken: config.terms.quoteToken, quoteDecimals: 6, quoteCurrency: 'EUR', quoteUnit: cowNetwork(config.terms.chainId).quoteCurrency,
     grantId: config.terms.id, startsAt: config.terms.startsAt, expiresAt: config.terms.expiresAt,
     markets: config.mappings.map(m => ({ symbol: m.symbol, baseToken: m.tokenAddress, baseDecimals: m.tokenDecimals, quoteToken: config.terms.quoteToken })),
     semantics: { limitOrders: true, cancelRemainder: true, idempotentSubmission: true, confirmedReceipts: true, fencedWrites: true } };
@@ -61,11 +62,13 @@ export function cowBinding(config: CowRuntimeConfig): WalletExecutionBinding {
 /** Finite transport ceiling, in addition to the unchanged runtime sizing rules.
  * Signed cumulative caps count presigns, including subsequently cancelled ones. */
 export function setupPolicy(input: { owner: Address; executor: Address; quoteRaw: bigint; now: number;
-  markets: { mapping: CoinbaseMarketMapping; euroPrice: string }[]; eurPerQuote: string }) {
+  markets: { mapping: CowMarketMapping; euroPrice: string }[]; eurPerQuote: string; chainId?: CowOrderChainId }) {
   if (input.quoteRaw < 10n || !input.markets.length) throw new AuthorityError('wallet_authority_funding_required');
   const perBuy = input.quoteRaw / 10n, total = input.quoteRaw * 10n;
-  return parseCowPolicyTerms({ id: randomUUID(), chainId: 1, owner: input.owner, executor: input.executor,
-    quoteToken: manifest.contracts.quoteToken, startsAt: input.now, expiresAt: input.now + 7 * 86400,
+  const network = cowNetwork(input.chainId);
+  if (input.markets.some(m => m.mapping.chainId !== network.chainId)) throw new AuthorityError('wallet_authority_chain_unsupported');
+  return parseCowPolicyTerms({ id: randomUUID(), chainId: network.chainId, owner: input.owner, executor: input.executor,
+    quoteToken: network.contracts.quoteToken, startsAt: input.now, expiresAt: input.now + 7 * 86400,
     maxOrderValiditySeconds: 300, maxQuotePerBuy: perBuy.toString(), maxQuoteTotal: total.toString(),
     markets: input.markets.map(({ mapping: m, euroPrice }) => {
       const scale = decimal('10').pow(m.tokenDecimals), quotePrice = decimal(euroPrice).div(input.eurPerQuote);
@@ -81,23 +84,24 @@ export function setupPolicy(input: { owner: Address; executor: Address; quoteRaw
 }
 /** Authenticated owner setup. All remote operations here are read-only. */
 export async function prepareCowSetup(ownerInput: string, chainId: number) {
-  if (chainId !== 1) throw new AuthorityError('wallet_authority_chain_unsupported');
+  if (chainId !== 1 && chainId !== 100) throw new AuthorityError('wallet_authority_chain_unsupported');
+  const network = cowNetwork(chainId), manifest = network;
   const owner = getAddress(ownerInput.toLowerCase()), now = Math.floor(Date.now() / 1000), tx = { query };
   const [existing, grant, existingRuntime] = await Promise.all([loadStrategyProfile(tx, now), loadAuthority(tx), loadCowRuntime(tx)]);
   if (grant && ['verified', 'closing'].includes(grant.state)) throw new AuthorityError('wallet_authority_close_required');
-  if (existing && existing.profile.owner !== owner.toLowerCase()) throw new AuthorityError('wallet_authority_account_changed');
+  if (existing && (existing.profile.owner !== owner.toLowerCase() || existing.profile.chainId !== chainId)) throw new AuthorityError('wallet_authority_account_changed');
   // Read-only gate precedes executor creation, candidate writes and wallet
   // funding/grant prompts. The client cannot attest its own feasibility.
   await assertCowSetupFeasible(owner, chainId);
   if (existing && existingRuntime && existing.profile.authority.expiresAt > now && grant?.state !== 'closed') {
     const refreshed = await refreshUnusedDeployment(existing, existingRuntime, grant);
     return { status: 'configured' as const, profileRevision: refreshed.profileRevision, owner, executor: refreshed.executorAddress,
-      markets: refreshed.mappings, blockers: [] as string[] };
+      chainId, markets: refreshed.mappings, blockers: [] as string[] };
   }
-  const client = productionCowClient(), market = new CoinbaseMarketClient(), executor = await cowExecutor(true);
+  const client = productionCowClient(network.chainId), market = createCowMarketClient(network.chainId), executor = await cowExecutor(true);
   if (!executor) throw new AuthorityError('wallet_authority_executor_unavailable');
   const block = await client.getBlock(), blockNumber = block.number;
-  if (blockNumber === null || Number(block.timestamp) > now + 30 || now - Number(block.timestamp) > 180 || await client.getChainId() !== 1) {
+  if (blockNumber === null || Number(block.timestamp) > now + 30 || now - Number(block.timestamp) > 180 || await client.getChainId() !== chainId) {
     throw new AuthorityError('wallet_authority_verification_unavailable');
   }
   const [quoteRaw, ownerGasWei, executorGasWei, nonce, catalog, conversion] = await Promise.all([
@@ -106,11 +110,11 @@ export async function prepareCowSetup(ownerInput: string, chainId: number) {
     client.getTransactionCount({ address: owner, blockTag: 'pending' }), market.catalog(), market.fundingConversion(now),
   ]);
   // Pin all shared release contracts before even displaying a setup candidate.
-  for (const key of ['manager', 'implementation', 'settlement', 'vaultRelayer', 'quoteToken', 'weth9'] as const) {
+  for (const key of ['manager', 'implementation', 'settlement', 'vaultRelayer', 'quoteToken', 'baseToken'] as const) {
     const code = await client.getCode({ address: manifest.contracts[key] as Address, blockNumber });
     if (!code || keccak256(code) !== manifest.codeHashes[key]) throw new AuthorityError('wallet_authority_release_code_mismatch');
   }
-  const eligible: { mapping: CoinbaseMarketMapping; euroPrice: string }[] = [], excluded: { symbol: string; reason: string }[] = [];
+  const eligible: { mapping: CowMarketMapping; euroPrice: string }[] = [], excluded: { symbol: string; reason: string }[] = [];
   const tokenCodeHashes: Record<string, Hex> = { [manifest.contracts.quoteToken.toLowerCase()]: manifest.codeHashes.quoteToken as Hex };
   // Sequential small batches respect the public provider's request budget.
   for (let i = 0; i < catalog.length; i += 2) {
@@ -127,25 +131,25 @@ export async function prepareCowSetup(ownerInput: string, chainId: number) {
       else excluded.push({ symbol: batch[index].symbol, reason: 'market_identity_or_history_incomplete' });
     });
   }
-  const funding = { quoteUnit: 'USDC', quoteToken: manifest.contracts.quoteToken, quoteRaw: quoteRaw.toString(),
+  const funding = { quoteUnit: network.quoteCurrency, nativeGasUnit: network.nativeCurrency, quoteToken: manifest.contracts.quoteToken, quoteRaw: quoteRaw.toString(),
     ownerGasWei: ownerGasWei.toString(), executorGasWei: executorGasWei.toString() };
   const blockers = [...(quoteRaw < 10n ? ['wallet_usdc_funding_required'] : []), ...(!eligible.length ? ['wallet_market_history_unavailable'] : []),
     ...(ownerGasWei === 0n ? ['wallet_owner_gas_required'] : []), ...(executorGasWei === 0n ? ['wallet_executor_gas_required'] : [])];
-  if (quoteRaw < 10n || !eligible.length) return { status: 'funding-required' as const, owner, executor: executor.address, chainId: 1,
+  if (quoteRaw < 10n || !eligible.length) return { status: 'funding-required' as const, owner, executor: executor.address, chainId,
     funding, markets: eligible.map(m => m.mapping), excluded, blockers };
-  const terms = setupPolicy({ owner, executor: executor.address, quoteRaw, now, markets: eligible, eurPerQuote: conversion.eurPerUnit });
+  const terms = setupPolicy({ chainId: network.chainId, owner, executor: executor.address, quoteRaw, now, markets: eligible, eurPerQuote: conversion.eurPerUnit });
   let enforcer = getContractAddress({ from: owner, nonce: BigInt(nonce) });
   if (existingRuntime) {
     const code = await client.getCode({ address: existingRuntime.enforcer, blockNumber });
     if (code && code !== '0x') {
-      if (code.toLowerCase() !== expectedCowEnforcerRuntime(existingRuntime.manager).toLowerCase()) throw new AuthorityError('wallet_authority_release_code_mismatch');
+      if (code.toLowerCase() !== expectedCowEnforcerRuntime(existingRuntime.manager, network.chainId).toLowerCase()) throw new AuthorityError('wallet_authority_release_code_mismatch');
       enforcer = existingRuntime.enforcer;
     }
   }
   const profile = { schemaVersion: 1, kind: 'owner-strategy-profile', accountId: CONFIG.accountId, strategyVersion: CONFIG.strategyVersion,
-    chainId: 1, owner, executor: executor.address, quoteToken: terms.quoteToken, quoteDecimals: 6,
+    chainId, owner, executor: executor.address, quoteToken: terms.quoteToken, quoteDecimals: 6,
     markets: eligible.map(({ mapping: m }) => ({ symbol: m.symbol, baseToken: m.tokenAddress, baseDecimals: m.tokenDecimals, quoteToken: terms.quoteToken })),
-    accountingCurrency: 'EUR', conversion: COW_PROFILE_CONVERSION,
+    accountingCurrency: 'EUR', conversion: cowProfileConversion(network.chainId),
     authority: { grantReference: 'urn:mirsad:cow-policy:' + terms.id, revocationReference: 'urn:mirsad:cow-policy-close:' + terms.id,
       startsAt: terms.startsAt, expiresAt: terms.expiresAt, scope: { recipient: owner,
         contracts: [manifest.contracts.manager, enforcer, manifest.contracts.settlement, manifest.contracts.vaultRelayer],
@@ -155,6 +159,8 @@ export async function prepareCowSetup(ownerInput: string, chainId: number) {
   if (!lease) throw new AuthorityError('wallet_authority_account_busy');
   try {
     const state = await journal.state(lease), decisions = await journal.accountDecisions(CONFIG.accountId), protections = await journal.protections(CONFIG.accountId);
+    if (!state.walletIdentity && (Object.keys(state.indicators).length || state.pendingSignals.length || decisions.length || protections.length
+      || await journal.accounting(CONFIG.accountId) || (await journal.provisionalProtections?.(CONFIG.accountId))?.length)) throw new AuthorityError('wallet_authority_account_changed');
     if (state.entriesEnabled || (await journal.sourceWrites(lease)).some(w => w.settledAt === null)
       || decisions.some(d => d.status !== 'absent' && (!d.source || !['filled', 'cancelled', 'rejected', 'expired'].includes(d.source.status)))
       || decisions.some(d => d.intent.side === 'buy' && d.source && decimal(d.source.filledQuantity).gt(0)
@@ -162,7 +168,7 @@ export async function prepareCowSetup(ownerInput: string, chainId: number) {
       || protections.some(p => p.status !== 'closed')) throw new AuthorityError('wallet_authority_close_required');
     const proposed = { version: 1, profileRevision: (existing?.revision ?? 0) + 1, terms, createdAt: existingRuntime?.createdAt ?? now,
       manager: manifest.contracts.manager, implementation: manifest.contracts.implementation, enforcer, executorAddress: executor.address,
-      tokenCodeHashes, gasLimits: COW_SETUP_GAS_LIMITS, mappings: eligible.map(m => m.mapping) };
+      tokenCodeHashes, gasLimits: network.chainId === 100 ? COW_GNOSIS_SETUP_GAS_LIMITS : COW_SETUP_GAS_LIMITS, mappings: eligible.map(m => m.mapping) };
     const proposedIdentity = walletBindingIdentity(cowBinding(parseCowRuntime(proposed)));
     if (state.walletIdentity && state.walletIdentity !== proposedIdentity) throw new AuthorityError('wallet_authority_account_changed');
     const saved = await transaction(async t => {
@@ -187,6 +193,6 @@ export async function prepareCowSetup(ownerInput: string, chainId: number) {
     // a grant, capability certificate or an execution switch.
     state.walletIdentity = identity;
     return { status: 'configured' as const, profileRevision: saved.profileRevision, owner, executor: executor.address,
-      chainId: 1, funding, markets: saved.mappings, excluded, blockers };
+      chainId, funding, markets: saved.mappings, excluded, blockers };
   } finally { await journal.release(lease); }
 }

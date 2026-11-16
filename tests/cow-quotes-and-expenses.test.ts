@@ -21,7 +21,7 @@ function fixture(physicalBase = '0', physicalQuote = '1000') {
   const rpc = { estimateFeesPerGas: vi.fn(async () => ({ maxFeePerGas: 1_000_000_000n, maxPriorityFeePerGas: 100_000_000n })) };
   const market = { fundingConversion: vi.fn(async () => ({ currency: 'USDC', eurPerUnit: '0.9', sourceAt: NOW,
     rateAt: NOW, rateMaxAgeSeconds: 15, sourceId: 'isolated-usdc-eur' })), referenceBook: vi.fn(async (currency: string) => ({
-      bid: currency === 'ETH' ? '90' : '90', ask: '90', readAt: NOW, tradeAt: NOW, sourceId: 'isolated-eth-eur' })),
+      currency, bid: currency === 'ETH' ? '90' : '90', ask: '90', readAt: NOW, tradeAt: NOW, sourceId: 'isolated-eth-eur' })),
     valuationCandles: vi.fn(async (_c: string, _since: number, until: number) => [{ at: until / 1000, price: '0.89' }]) };
   const api = { getQuote: vi.fn(async (input: { kind: string; amount: string }) => ({ sellAmount: input.kind === 'buy' ? '100000000' : input.amount,
     buyAmount: input.kind === 'buy' ? input.amount : '99000000', quotedFeeAmount: input.kind === 'buy' ? '100000' : '0',

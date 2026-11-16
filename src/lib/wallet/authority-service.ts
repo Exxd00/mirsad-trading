@@ -38,10 +38,10 @@ function environment(env: AuthorityEnvironment | null): AuthorityEnvironment {
 }
 async function profileFor(tx: SqlExecutor, review?: AuthorityReview, now = Math.floor(Date.now() / 1000)) {
   const p = await loadStrategyProfile(tx, now);
-  if (!p || p.profile.chainId !== 1 || p.profile.implementation.kind !== 'cow-candidate' || p.profile.markets.length > 30) {
+  if (!p || ![1, 100].includes(p.profile.chainId) || p.profile.implementation.kind !== 'cow-candidate' || p.profile.markets.length > 30) {
     throw new AuthorityError('wallet_authority_profile_missing_or_unsupported');
   }
-  if (review && (p.revision !== review.profileRevision || p.profile.owner !== review.owner.toLowerCase()
+  if (review && (p.revision !== review.profileRevision || p.profile.chainId !== review.chainId || p.profile.owner !== review.owner.toLowerCase()
     || p.profile.executor !== review.executor.toLowerCase())) throw new AuthorityError('wallet_authority_profile_changed');
   return p;
 }
@@ -51,7 +51,7 @@ function assertProfileScope(p: LoadedStrategyProfile, review: AuthorityReview) {
   const signed = new Set(terms.markets.map(m => m.baseToken.toLowerCase()));
   const contracts = Object.values({ manager: review.contracts.manager, enforcer: review.contracts.enforcer, settlement: review.contracts.settlement,
     vaultRelayer: review.contracts.vaultRelayer }).map(v => v.toLowerCase());
-  if (terms.owner.toLowerCase() !== profile.owner || terms.executor.toLowerCase() !== profile.executor
+  if (terms.chainId !== profile.chainId || terms.owner.toLowerCase() !== profile.owner || terms.executor.toLowerCase() !== profile.executor
     || terms.quoteToken.toLowerCase() !== profile.quoteToken || signed.size !== wanted.size || [...wanted].some(t => !signed.has(t))
     || terms.startsAt !== profile.authority.startsAt || terms.expiresAt !== profile.authority.expiresAt
     || contracts.some(a => !profile.authority.scope.contracts.includes(a))) throw new AuthorityError('wallet_authority_scope_mismatch');

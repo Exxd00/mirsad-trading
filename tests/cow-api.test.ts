@@ -40,6 +40,52 @@ function client(value: unknown) {
 }
 afterEach(() => vi.useRealTimers());
 
+describe('explicit Gnosis read endpoint and chain identity', () => {
+  const gnosisUid = cowOrderUid(data, owner, 100);
+  const gnosisIdentity = () => ({ ...identity(), uid: gnosisUid });
+  it('binds order, account and trade reads to the Gnosis domain and fixed endpoint', async () => {
+    const row = { ...order(), uid: gnosisUid };
+    const fetcher = vi.fn<typeof fetch>(async url => String(url).includes('/account/') ? response([row])
+      : String(url).includes('/trades?') ? response([{ ...fill(), orderUid: gnosisUid }]) : response(row));
+    const api = new CowReadClient({ chainId: 100, fetcher, clock: () => now });
+    expect(await api.getOrder(gnosisIdentity())).toMatchObject({ status: 'found', evidence: { chainId: 100, uid: gnosisUid } });
+    expect((await api.getAccountOrders(owner, 0, 1)).orders[0]).toMatchObject({ chainId: 100, uid: gnosisUid });
+    expect((await api.getTrades(gnosisIdentity())).trades[0].orderUid).toBe(gnosisUid);
+    expect(fetcher.mock.calls.every(([url, init]) => String(url).startsWith('https://api.cow.fi/xdai/api/') && init?.method === 'GET')).toBe(true);
+    await expect(api.getOrder(identity())).rejects.toThrow('cow_request_invalid');
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+  it('rejects Ethereum evidence returned from the Gnosis endpoint', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response(order()));
+    await expect(new CowReadClient({ chainId: 100, fetcher }).getOrder(gnosisIdentity())).rejects.toThrow('cow_identity_mismatch');
+  });
+  it('keeps original net quote amounts, partial flag and endpoint identity', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({ ...quote(), protocolFeeBps: '2' }));
+    const api = new CowReadClient({ chainId: 100, fetcher, clock: () => now });
+    expect(await api.getQuote(request())).toMatchObject({ chainId: 100, sellAmount: '990', buyAmount: '2000',
+      quotedFeeAmount: '10', partiallyFillable: false, verified: true });
+    expect(fetcher.mock.calls[0][0]).toBe('https://api.cow.fi/xdai/api/v1/quote');
+  });
+  it('selects the fixed version exception for its own chain only', async () => {
+    const version = 'v2.387.2@' + 'a'.repeat(40);
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(version, { headers: { 'content-type': 'text/plain' } }));
+    expect(await new CowReadClient({ chainId: 100, fetcher }).getVersion()).toBe(version);
+    expect(fetcher.mock.calls[0][0]).toBe('https://api.cow.fi/xdai/api/v1/version');
+  });
+  it('never falls back on an unsupported chain or admits cross-chain/mutation routes', async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    for (const chainId of [0, 10, 137, '100', null, NaN])
+      expect(() => new CowReadClient({ chainId: chainId as never, fetcher })).toThrow('cow_request_invalid');
+    const config = { chainId: 100 as 1 | 100, fetcher }, api = new CowReadClient(config);
+    config.chainId = 1; expect(api.chainId).toBe(100);
+    const internal = api as unknown as { read(path: string, payload?: unknown): Promise<unknown> };
+    for (const [path, body] of [['/mainnet/api/v1/version', undefined], ['/mainnet/api/v1/quote', {}],
+      ['/xdai/api/v1/orders', {}], ['/xdai/api/v1/orders/' + gnosisUid, {}], ['/xdai/api/v1/quote/../orders', {}]] as const)
+      await expect(internal.read(path, body)).rejects.toThrow('cow_request_invalid');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
 describe('CoW read-only mainnet evidence', () => {
   it('reads an exact partially filled order with current fee denomination and no finality claim', async () => {
     const f = client(order()), result = await f.client.getOrder(identity());

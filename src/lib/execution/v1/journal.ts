@@ -7,6 +7,7 @@ import type { ProtectionLevels } from './protection';
 import type { AccountingEvidence } from './accounting';
 import { validateProvisionalProtection, type ProvisionalProtection } from './provisional-protection';
 export type RuntimeState = { risk: RiskState; indicators: Record<string, IndicatorState>; pendingSignals: Signal[]; entriesEnabled: boolean; scanCursor?: number;
+  indicatorSourceIdentity?: string;
   walletIdentity?: string;
   // Armed by the owner's execution switch, never by deployment or a scheduler.
   // Pausing entries does not remove protection from already managed fills.

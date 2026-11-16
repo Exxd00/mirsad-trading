@@ -1,12 +1,19 @@
 import { concatHex, getAddress, hashTypedData, isAddress, numberToHex, zeroAddress, type Address, type Hex } from 'viem';
 
-// Ethereum GPv2 deployment and signing domain. These are order identity helpers,
+// GPv2 deployment and signing domains. These are order identity helpers,
 // not an execution source, permission grant, or approval to submit an order.
 export const COW_CHAIN_ID = 1;
+export type CowOrderChainId = 1 | 100;
 export const COW_SETTLEMENT = '0x9008D19f58AAbD9eD0D60971565AA8510560ab41' as const;
 export const COW_VAULT_RELAYER = '0xC92E8bdf79f0507f65a392b0ab4667716BFE0110' as const;
 export const COW_DOMAIN = Object.freeze({ name: 'Gnosis Protocol', version: 'v2',
   chainId: COW_CHAIN_ID, verifyingContract: COW_SETTLEMENT } as const);
+/** Explicit identity support is not a configured execution connector. Existing
+ * callers retain Ethereum identity; another chain never silently falls back. */
+export function cowOrderDomain(chainId: CowOrderChainId = COW_CHAIN_ID) {
+  if (chainId !== 1 && chainId !== 100) throw new Error('cow_chain_unsupported');
+  return Object.freeze({ name: 'Gnosis Protocol', version: 'v2', chainId, verifyingContract: COW_SETTLEMENT } as const);
+}
 
 export type CowOrder = {
   sellToken: Address; buyToken: Address; receiver: Address;
@@ -64,20 +71,20 @@ export function normalizeCowUid(raw: unknown): Hex {
   return raw.toLowerCase() as Hex;
 }
 
-export function cowOrderDigest(order: CowOrder): Hex {
+export function cowOrderDigest(order: CowOrder, chainId: CowOrderChainId = COW_CHAIN_ID): Hex {
   const normalized = normalizeCowOrder(order);
-  return hashTypedData({ domain: COW_DOMAIN, types: orderTypes, primaryType: 'Order',
+  return hashTypedData({ domain: cowOrderDomain(chainId), types: orderTypes, primaryType: 'Order',
     message: { ...normalized, sellAmount: BigInt(normalized.sellAmount), buyAmount: BigInt(normalized.buyAmount), feeAmount: 0n } });
 }
 
-export function cowOrderUid(order: CowOrder, owner: string): Hex {
+export function cowOrderUid(order: CowOrder, owner: string, chainId: CowOrderChainId = COW_CHAIN_ID): Hex {
   const normalized = normalizeCowOrder(order), account = normalizeCowAddress(owner);
-  const digest = cowOrderDigest(normalized);
+  const digest = cowOrderDigest(normalized, chainId);
   return normalizeCowUid(concatHex([digest, account, numberToHex(normalized.validTo, { size: 4 })]));
 }
 
-export function assertCowOrderUid(uid: unknown, order: CowOrder, owner: string): Hex {
+export function assertCowOrderUid(uid: unknown, order: CowOrder, owner: string, chainId: CowOrderChainId = COW_CHAIN_ID): Hex {
   const normalized = normalizeCowUid(uid);
-  if (normalized !== cowOrderUid(order, owner)) throw new Error('cow_order_uid_mismatch');
+  if (normalized !== cowOrderUid(order, owner, chainId)) throw new Error('cow_order_uid_mismatch');
   return normalized;
 }

@@ -9,7 +9,7 @@ export const maxDuration = 60;
 export async function POST(request: Request) {
   try {
     const session = await requireMutation(request);
-    const input = z.object({ action: z.literal('prepare'), owner: z.string().regex(/^0x[0-9a-fA-F]{40}$/), chainId: z.literal(1) }).strict().safeParse(await body(request));
+    const input = z.object({ action: z.literal('prepare'), owner: z.string().regex(/^0x[0-9a-fA-F]{40}$/), chainId: z.union([z.literal(1), z.literal(100)]) }).strict().safeParse(await body(request));
     if (!input.success) throw new AuthorityError('wallet_authority_request_invalid');
     const response = json({ ...await prepareCowSetup(input.data.owner, input.data.chainId), csrfToken: session.csrfToken });
     response.headers.append('Set-Cookie', await refreshSessionCookie(request, session));

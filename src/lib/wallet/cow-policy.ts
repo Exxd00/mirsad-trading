@@ -4,7 +4,7 @@ import { hashDelegation, SIGNABLE_DELEGATION_TYPED_DATA } from '@metamask/smart-
 import { encodeAbiParameters, encodeFunctionData, getAddress, keccak256, parseAbi, parseAbiParameters,
   recoverTypedDataAddress, stringToHex, type Address, type Hex } from 'viem';
 import { z } from 'zod';
-import { COW_CHAIN_ID, COW_SETTLEMENT, cowOrderUid, normalizeCowOrder, normalizeCowUid, type CowOrder } from './cow-order';
+import { COW_SETTLEMENT, cowOrderUid, normalizeCowOrder, normalizeCowUid, type CowOrder } from './cow-order';
 
 // Calldata construction only. No signer, provider, approval, broadcast, source
 // installation or automatic readiness. The enforcer is an undeployed candidate.
@@ -13,7 +13,7 @@ const units = z.string().regex(/^[1-9][0-9]{0,38}$/).refine(v => BigInt(v) <= (1
 const marketSchema = z.object({ baseToken: address, maxBasePerSell: units, maxBaseTotal: units,
   buyFloorQuote: units, buyFloorBase: units, sellFloorBase: units, sellFloorQuote: units }).strict();
 const schema = z.object({
-  id: z.uuid(), chainId: z.literal(COW_CHAIN_ID), owner: address, executor: address, quoteToken: address,
+  id: z.uuid(), chainId: z.union([z.literal(1), z.literal(100)]), owner: address, executor: address, quoteToken: address,
   startsAt: z.number().int().nonnegative().max(0xffffffff), expiresAt: z.number().int().positive().max(0xffffffff),
   // This bounds expiry; the durable cancellation deadline stays 60 seconds.
   maxOrderValiditySeconds: z.number().int().min(60).max(0xffffffff), maxQuotePerBuy: units, maxQuoteTotal: units,
@@ -64,7 +64,7 @@ export function createCowPolicyDraft(raw: unknown, contracts: { manager: string;
     caveats: [{ enforcer, terms: encodeCowPolicyTerms(terms), args: '0x' }],
     salt: keccak256(stringToHex('mirsad/cow-policy-candidate/v1/' + terms.id)), signature: '0x' };
   const typed = {
-    domain: { name: 'DelegationManager', version: '1', chainId: COW_CHAIN_ID, verifyingContract: manager },
+    domain: { name: 'DelegationManager', version: '1', chainId: terms.chainId, verifyingContract: manager },
     primaryType: 'Delegation', types: SIGNABLE_DELEGATION_TYPED_DATA,
     message: { delegate: delegation.delegate, delegator: delegation.delegator, authority: delegation.authority,
       caveats: delegation.caveats.map(c => ({ enforcer: c.enforcer, terms: c.terms })), salt: delegation.salt },
@@ -83,7 +83,7 @@ export function cowPolicyOrderAppData(draft: CowPolicyDraft, intentKey: Hex) {
 export function cowPolicyPresign(draft: CowPolicyDraft, raw: CowOrder, intentKey: Hex): CowPolicyAction {
   const order = normalizeCowOrder(raw);
   if (order.receiver !== draft.terms.owner || !order.partiallyFillable || order.appData !== cowPolicyOrderAppData(draft, intentKey).hash) throw new Error('cow_policy_order_invalid');
-  const uid = cowOrderUid(order, draft.terms.owner);
+  const uid = cowOrderUid(order, draft.terms.owner, draft.terms.chainId);
   return { uid, kind: 'presign', args: encodeCowPolicyOrder(order, intentKey),
     execution: { target: COW_SETTLEMENT, value: 0n, callData: encodeFunctionData({ abi: settlementAbi, functionName: 'setPreSignature', args: [uid, true] }) } };
 }

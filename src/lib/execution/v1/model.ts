@@ -24,7 +24,7 @@ export type QuoteConversion = { currency: string; eurPerUnit: string; sourceAt: 
 export type FundingEvidence = QuoteConversion & { available: string; reserved: string; total: string };
 export type Quote = { symbol: string; bid: string; ask: string; sourceAt: number; readAt: number; source: string;
   conversion?: QuoteConversion;
-  exactSize?: { provider: 'cow-mainnet-v1'; quantity: string; buyQuoteId: number | null; sellQuoteId: number | null;
+  exactSize?: { provider: 'cow-mainnet-v1' | 'cow-gnosis-v1'; quantity: string; buyQuoteId: number | null; sellQuoteId: number | null;
     buySellAmount: string; buyBuyAmount: string; buyFeeAmount: string; sellSellAmount: string; sellBuyAmount: string;
     sellFeeAmount: string; buyExpiration: number; sellExpiration: number;
     /** Absent on historical journals. New CoW entries require compatible evidence. */
@@ -45,7 +45,7 @@ export type Position = { id: string; symbol: string; managed: boolean; openedAt:
 export type SourceOrder = { id: string; clientKey: string; symbol: string; side: 'buy' | 'sell';
   protectionEvidence?: import('./source-model').EntryProtectionEvidence | null;
   feeRecognition?: { method: 'cow-api-total-at-finalized-last-fill-v1'; token: string; rawAmount: string;
-    recognitionAt: number; eurPerToken: string; sourceId: 'coinbase-exchange-completed-1m-eur-v1' };
+    recognitionAt: number; eurPerToken: string; sourceId: 'coinbase-exchange-completed-1m-eur-v1' | 'gnosis-canonical-state-eur-reference-v1' };
   finality?: { status: 'pending' | 'mined' | 'finalized'; unconfirmedFilledQuantity: string; transactionHashes: string[] };
   status: 'open' | 'partial' | 'filled' | 'cancelled' | 'rejected' | 'expired' | 'unknown';
   quantity: string | null; filledQuantity: string; remainingBudgetEur: string | null;

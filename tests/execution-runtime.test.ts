@@ -54,6 +54,37 @@ beforeEach(async () => {
 });
 afterEach(async () => { installWalletExecutionSource(null); vi.useRealTimers(); await closeDatabase(); vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 describe('durable SQL ownership and orchestration', () => {
+  it('does not adopt unbound indicators/signals for a new chain/provider identity or erase their evidence', async () => {
+    const j = new SqlJournal(); await seed(j); const { port } = makePort();
+    Object.assign(port, { candleSourceIdentity: 'chain100:provider-and-token-map-v1' });
+    const beforeLease = (await j.acquire(CONFIG.accountId))!, before = await j.state(beforeLease); await j.release(beforeLease);
+    const result = await cycle(port, j, ['AAA-EUR'], () => NOW);
+    expect(result.blocks).toContainEqual({ reason: 'indicator_source_migration_required' });
+    expect(port.candles).not.toHaveBeenCalled(); expect(port.submit).not.toHaveBeenCalled();
+    const lease = (await j.acquire(CONFIG.accountId))!, after = await j.state(lease); await j.release(lease);
+    expect(after.indicators).toEqual(before.indicators); expect(after.pendingSignals).toEqual(before.pendingSignals);
+    expect(after.indicatorSourceIdentity).toBeUndefined();
+  });
+  it('blocks changed candle identity while retaining current stop exits and historical indicators', async () => {
+    const j = new SqlJournal(); await seed(j); const { port, a } = makePort();
+    const lease = (await j.acquire(CONFIG.accountId))!, state = await j.state(lease);
+    state.indicatorSourceIdentity = 'same-wallet:old-market-provider'; await j.save(lease, state); await j.release(lease);
+    Object.assign(port, { candleSourceIdentity: 'same-wallet:new-market-provider' });
+    a.positions = [position()]; vi.mocked(port.quotes).mockImplementation(async symbols => symbols.map(s => ({ ...quote(s), bid: '97' })));
+    const result = await cycle(port, j, ['AAA-EUR'], () => NOW);
+    expect(result).toMatchObject({ status: 'submitted', intent: { side: 'sell', reason: 'stop' } });
+    expect(result.blocks).toContainEqual({ reason: 'indicator_source_migration_required' });
+    expect(port.candles).not.toHaveBeenCalled(); expect(port.armCancellation).not.toHaveBeenCalled();
+    const check = (await j.acquire(CONFIG.accountId))!; expect((await j.state(check)).indicatorSourceIdentity).toBe(state.indicatorSourceIdentity); await j.release(check);
+  });
+  it('binds an empty indicator state to its exact source before warming from 1000 fresh closed bars', async () => {
+    const j = new SqlJournal(), { port } = makePort(); Object.assign(port, { candleSourceIdentity: 'chain100:canonical-state-v1:WETH-mapping' });
+    vi.mocked(port.candles).mockResolvedValue(Array.from({ length: 1000 }, (_, i) => candle(NOW / 900 - 1000 + i)));
+    await cycle(port, j, ['AAA-EUR'], () => NOW);
+    expect(port.candles).toHaveBeenCalledExactlyOnceWith('AAA-EUR', null); expect(port.submit).not.toHaveBeenCalled();
+    const lease = (await j.acquire(CONFIG.accountId))!, state = await j.state(lease); await j.release(lease);
+    expect(state.indicatorSourceIdentity).toBe(port.candleSourceIdentity); expect(state.indicators['AAA-EUR'].count).toBe(1000);
+  });
   it('applies executable-size refinement before ranking and again before recording the single decision', async () => {
     const j = new SqlJournal(); await seed(j, ['AAA-EUR', 'BBB-EUR']); const { port } = makePort();
     port.entryPlan = vi.fn(async (a, s, i, q, risk, now) => {

@@ -1,13 +1,13 @@
 import 'server-only';
 import { keccak256, stringToHex, type Address, type Hex } from 'viem';
-import { COW_SETTLEMENT, assertCowOrderUid, normalizeCowAddress, normalizeCowOrder, normalizeCowUid, type CowOrder } from './cow-order';
+import { COW_SETTLEMENT, assertCowOrderUid, cowOrderDomain, normalizeCowAddress, normalizeCowOrder, normalizeCowUid, type CowOrder, type CowOrderChainId } from './cow-order';
 
 /** Read-only foundation. No method submits, signs, cancels or activates an order.
  * Schemas: cowprotocol/services c1e29b8b5135d5ca600b501a50b6cae4c203aa35.
  * API state is indexed evidence, never proof of canonical chain finality. */
 export const COW_API_ORIGIN = 'https://api.cow.fi';
 const MAX_BYTES = 512 * 1024, MAX_UINT256 = (1n << 256n) - 1n;
-const MAX_VERSION_BYTES = 128, VERSION_PATH = '/mainnet/api/v1/version';
+const MAX_VERSION_BYTES = 128;
 const NOT_FOUND = Symbol('cow_order_not_found');
 type Value = Record<string, unknown>;
 type ErrorCode = 'cow_request_invalid' | 'cow_response_invalid' | 'cow_identity_mismatch' | 'cow_read_timeout' | 'cow_read_unavailable';
@@ -56,13 +56,15 @@ function order(raw: Value): CowOrder {
   try { return normalizeCowOrder(fields); } catch { return fail('cow_response_invalid'); }
 }
 export type CowExpectedOrder = { order: CowOrder; owner: string; uid: string };
-function expected(raw: CowExpectedOrder) {
+function expected(raw: CowExpectedOrder, chainId: CowOrderChainId) {
   try {
     const data = normalizeCowOrder(raw.order), owner = normalizeCowAddress(raw.owner);
-    return { order: data, owner, uid: assertCowOrderUid(raw.uid, data, owner) };
+    return { order: data, owner, uid: assertCowOrderUid(raw.uid, data, owner, chainId), chainId };
   } catch { return fail('cow_request_invalid'); }
 }
 export type CowOrderEvidence = {
+  /** Missing only on legacy saved evidence. New reads bind their endpoint chain. */
+  chainId?: CowOrderChainId;
   order: CowOrder; owner: Address; uid: Hex;
   apiStatus: 'presignaturePending' | 'open' | 'fulfilled' | 'cancelled' | 'expired';
   invalidated: boolean; creationDate: string;
@@ -74,17 +76,17 @@ export type CowOrderLookup = { status: 'found'; evidence: CowOrderEvidence }
   | { status: 'unknown'; reason: 'order_not_found' };
 function orderEvidence(raw: unknown, identity: ReturnType<typeof expected>, readAt: number): CowOrderEvidence {
   const value = object(raw), data = order(value), owner = address(value.owner), actualUid = uid(value.uid);
-  try { assertCowOrderUid(actualUid, data, owner); } catch { return fail('cow_identity_mismatch'); }
+  try { assertCowOrderUid(actualUid, data, owner, identity.chainId); } catch { return fail('cow_identity_mismatch'); }
   if (actualUid !== identity.uid || !sameAddress(owner, identity.owner)
     || !sameAddress(address(value.settlementContract), COW_SETTLEMENT)) return fail('cow_identity_mismatch');
   // Matching the digest also binds every order field; never trust a returned UID alone.
-  try { assertCowOrderUid(identity.uid, data, identity.owner); } catch { return fail('cow_identity_mismatch'); }
+  try { assertCowOrderUid(identity.uid, data, identity.owner, identity.chainId); } catch { return fail('cow_identity_mismatch'); }
   if (typeof value.status !== 'string' || !['presignaturePending', 'open', 'fulfilled', 'cancelled', 'expired'].includes(value.status)
     || typeof value.invalidated !== 'boolean') return fail('cow_response_invalid');
   const sold = units(value.executedSellAmount), bought = units(value.executedBuyAmount);
   if ((BigInt(sold) === 0n) !== (BigInt(bought) === 0n)
     || (data.kind === 'buy' ? BigInt(bought) > BigInt(data.buyAmount) : BigInt(sold) > BigInt(data.sellAmount))) return fail('cow_response_invalid');
-  return { order: data, owner, uid: actualUid, apiStatus: value.status as CowOrderEvidence['apiStatus'], invalidated: value.invalidated,
+  return { chainId: identity.chainId, order: data, owner, uid: actualUid, apiStatus: value.status as CowOrderEvidence['apiStatus'], invalidated: value.invalidated,
     creationDate: date(value.creationDate), executedSellAmount: sold, executedBuyAmount: bought,
     // Legacy executedFeeAmount describes the old signed fee only. Its presence
     // cannot substitute for the current total fee and its actual denomination.
@@ -126,6 +128,8 @@ export type CowQuoteRequest = {
   appData?: string; appDataHash?: Hex;
 };
 export type CowQuoteEvidence = {
+  /** Endpoint identity, never inferred from a token ticker or response flag. */
+  chainId?: CowOrderChainId;
   owner: Address; sellToken: Address; buyToken: Address; receiver: Address; kind: 'buy' | 'sell'; validTo: number;
   sellAmount: string; buyAmount: string; quotedFeeAmount: string; partiallyFillable: boolean;
   signingScheme: 'presign' | 'eip1271'; expiration: string; quoteId: number | null; verified: boolean; readAt: number;
@@ -187,13 +191,20 @@ async function versionText(response: Response, signal: AbortSignal): Promise<str
   if (!/^text\/plain(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?\s*$/i.test(response.headers.get('content-type') ?? '')) return fail('cow_response_invalid');
   return bodyText(response, signal, MAX_VERSION_BYTES);
 }
-/** Fixed official mainnet endpoint; fetch injection is for isolated tests only.
+/** Fixed official chain-1/100 endpoints; fetch injection is for isolated tests only.
  * No URL, RPC, credentials, signed payload or order mutation is accepted. */
 export class CowReadClient {
+  readonly chainId: CowOrderChainId;
+  private readonly prefix: '/mainnet' | '/xdai';
+  private readonly versionPath: string;
   private readonly fetcher: typeof fetch;
   private readonly clock: () => number;
   private readonly timeoutMs: number;
-  constructor(options: { fetcher?: typeof fetch; clock?: () => number; timeoutMs?: number } = {}) {
+  constructor(options: { fetcher?: typeof fetch; clock?: () => number; timeoutMs?: number; chainId?: CowOrderChainId } = {}) {
+    const chainId = options.chainId === undefined ? 1 : options.chainId;
+    try { cowOrderDomain(chainId); } catch { throw new CowReadError('cow_request_invalid'); }
+    this.chainId = chainId; this.prefix = chainId === 1 ? '/mainnet' : '/xdai';
+    this.versionPath = this.prefix + '/api/v1/version';
     this.fetcher = options.fetcher ?? fetch; this.clock = options.clock ?? Date.now;
     this.timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(100, Math.min(options.timeoutMs!, 5000)) : 5000;
   }
@@ -201,33 +212,34 @@ export class CowReadClient {
   private async read(path: string, payload?: unknown, allowMissing = false): Promise<unknown | typeof NOT_FOUND> {
     // Keep the transport sink read-only too; TypeScript private visibility is
     // not a runtime guarantee that a future caller cannot pass another route.
-    const readable = /^\/mainnet\/api\/v1\/orders\/0x[0-9a-f]{112}$/.test(path)
-      || /^\/mainnet\/api\/v1\/account\/0x[0-9a-f]{40}\/orders\?offset=\d{1,7}&limit=\d{1,3}$/.test(path)
-      || /^\/mainnet\/api\/v2\/trades\?orderUid=0x[0-9a-f]{112}&offset=\d{1,7}&limit=\d{1,3}$/.test(path)
-      || path === VERSION_PATH;
-    if (payload === undefined ? !readable : path !== '/mainnet/api/v1/quote') return fail('cow_request_invalid');
+    if (typeof path !== 'string' || !path.startsWith(this.prefix + '/api/')) return fail('cow_request_invalid');
+    const readable = /^\/(?:mainnet|xdai)\/api\/v1\/orders\/0x[0-9a-f]{112}$/.test(path)
+      || /^\/(?:mainnet|xdai)\/api\/v1\/account\/0x[0-9a-f]{40}\/orders\?offset=\d{1,7}&limit=\d{1,3}$/.test(path)
+      || /^\/(?:mainnet|xdai)\/api\/v2\/trades\?orderUid=0x[0-9a-f]{112}&offset=\d{1,7}&limit=\d{1,3}$/.test(path)
+      || path === this.versionPath;
+    if (payload === undefined ? !readable : path !== this.prefix + '/api/v1/quote') return fail('cow_request_invalid');
     const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new CowReadError('cow_read_timeout')); }, this.timeoutMs); });
     const work = async () => {
       const response = await this.fetcher(COW_API_ORIGIN + path, { method: payload === undefined ? 'GET' : 'POST',
-        headers: { Accept: path === VERSION_PATH ? 'text/plain' : 'application/json', ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }) },
+        headers: { Accept: path === this.versionPath ? 'text/plain' : 'application/json', ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }) },
         ...(payload === undefined ? {} : { body: JSON.stringify(payload) }), signal: controller.signal,
         cache: 'no-store', redirect: 'error', credentials: 'omit' });
       if (allowMissing && response.status === 404) { void response.body?.cancel().catch(() => undefined); return NOT_FOUND; }
       if (!response.ok) { void response.body?.cancel().catch(() => undefined); return fail('cow_read_unavailable'); }
-      return path === VERSION_PATH ? versionText(response, controller.signal) : json(response, controller.signal);
+      return path === this.versionPath ? versionText(response, controller.signal) : json(response, controller.signal);
     };
     try { return await Promise.race([work(), deadline]); }
     catch (error) { throw error instanceof CowReadError ? error : new CowReadError('cow_read_unavailable'); }
     finally { if (timer !== undefined) clearTimeout(timer); controller.abort(); }
   }
   async getVersion(): Promise<string> {
-    const value = await this.read(VERSION_PATH);
+    const value = await this.read(this.versionPath);
     if (typeof value !== 'string' || !/^v\d+\.\d+\.\d+@[0-9a-f]{40}$/.test(value)) return fail('cow_response_invalid');
     return value;
   }
   async getOrder(raw: CowExpectedOrder): Promise<CowOrderLookup> {
-    const identity = expected(raw), value = await this.read(`/mainnet/api/v1/orders/${identity.uid}`, undefined, true);
+    const identity = expected(raw, this.chainId), value = await this.read(`${this.prefix}/api/v1/orders/${identity.uid}`, undefined, true);
     return value === NOT_FOUND ? { status: 'unknown', reason: 'order_not_found' }
       : { status: 'found', evidence: orderEvidence(value, identity, this.now()) };
   }
@@ -235,21 +247,21 @@ export class CowReadClient {
    * commitments only; indexed cancellation/fills cannot prove chain finality. */
   async getAccountOrders(ownerInput: string, offset = 0, limit = 100): Promise<{ orders: CowOrderEvidence[]; nextOffset: number | null }> {
     const owner = address(ownerInput).toLowerCase(); integer(offset, 0, 1_000_000); integer(limit, 1, 100);
-    const value = await this.read(`/mainnet/api/v1/account/${owner}/orders?offset=${offset}&limit=${limit}`);
+    const value = await this.read(`${this.prefix}/api/v1/account/${owner}/orders?offset=${offset}&limit=${limit}`);
     if (!Array.isArray(value) || value.length > limit) return fail('cow_response_invalid');
     const orders = value.map(raw => {
-      const v = object(raw), identity = expected({ order: order(v), owner, uid: uid(v.uid) });
+      const v = object(raw), identity = expected({ order: order(v), owner, uid: uid(v.uid) }, this.chainId);
       return orderEvidence(v, identity, this.now());
     });
     if (new Set(orders.map(o => o.uid)).size !== orders.length) return fail('cow_response_invalid');
     return { orders, nextOffset: orders.length === limit ? offset + limit : null };
   }
   async getTrades(raw: CowExpectedOrder, pagination: { offset?: number; limit?: number } = {}): Promise<CowTradePage> {
-    const identity = expected(raw); let offset: number, limit: number;
+    const identity = expected(raw, this.chainId); let offset: number, limit: number;
     try { offset = integer(pagination.offset ?? 0, 0, 1_000_000); limit = integer(pagination.limit ?? 100, 1, 100); }
     catch { return fail('cow_request_invalid'); }
     const query = new URLSearchParams({ orderUid: identity.uid, offset: String(offset), limit: String(limit) });
-    const value = await this.read(`/mainnet/api/v2/trades?${query}`);
+    const value = await this.read(`${this.prefix}/api/v2/trades?${query}`);
     if (!Array.isArray(value) || value.length > limit) return fail('cow_response_invalid');
     const trades = value.map(item => trade(item, identity)), ids = new Set(trades.map(t => `${t.txHash}:${t.logIndex}`));
     if (ids.size !== trades.length) return fail('cow_response_invalid');
@@ -265,7 +277,7 @@ export class CowReadClient {
       kind: request.kind, validTo: request.validTo, signingScheme: request.signingScheme, priceQuality: 'verified',
       appData: request.appData, ...(/^0x[0-9a-fA-F]{64}$/.test(request.appData) ? {} : { appDataHash: request.appDataHash }),
       ...(request.kind === 'sell' ? { sellAmountBeforeFee: request.amount } : { buyAmountAfterFee: request.amount }) };
-    const value = await this.read('/mainnet/api/v1/quote', payload);
-    return quoteEvidence(value, request, this.now());
+    const value = await this.read(this.prefix + '/api/v1/quote', payload);
+    return { ...quoteEvidence(value, request, this.now()), chainId: this.chainId };
   }
 }

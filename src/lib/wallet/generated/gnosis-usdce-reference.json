@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "chainId": 100,
+  "method": "gnosis-usdce-transmuter-underlying-redemption-reference-v1",
+  "address": "0x0392A2F5Ac47388945D8c84212469F545fAE52B2",
+  "codeHash": "0x69db9d29bb76f20c1c559e0f5516766c797e72f2ed803e827642383969bbbd33",
+  "observedBlock": {
+    "number": "49300531",
+    "hash": "0x9e4945c2674251892d09ead7b3dc0bf99d39af3f19fd7e0729b570b9bdff0a19",
+    "timestamp": 1794788300
+  },
+  "owner": "0x6378A40Df79583Eaa6Ce70e951ba7da45CEB4fc7",
+  "unitRatio": {
+    "usdceRaw": "1",
+    "legacyUsdcRaw": "1"
+  },
+  "source": {
+    "documentation": "https://docs.gnosischain.com/bridges/About%20Token%20Bridges/omnibridge",
+    "sourcify": "https://sourcify.dev/server/v2/contract/100/0x0392A2F5Ac47388945D8c84212469F545fAE52B2?fields=all"
+  },
+  "caveats": [
+    "Owner can permanently disable or rebalance legacy backing; fresh state and size-specific backing check required.",
+    "One raw USDC.e redeems for one raw legacy bridged USDC under pinned code and enabled controls; this does not promise USDC.e/USD parity.",
+    "Ethereum bridge operation, backing, fees, eligibility and delay remain separate; no redemption was executed."
+  ]
+}

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { DelegationManager } from '@metamask/smart-accounts-kit/contracts';
 import { encodeAbiParameters, encodeFunctionData, getAddress, getContractAddress, keccak256, parseAbi, parseAbiParameters, stringToHex, type Hex } from 'viem';
 import { createCowPolicyDraft, parseCowPolicyTerms, type CowPolicyDraft, type CowPolicyTerms } from './cow-policy';
-import { COW_CHAIN_ID, COW_SETTLEMENT, COW_VAULT_RELAYER, normalizeCowUid } from './cow-order';
+import { COW_CHAIN_ID, COW_SETTLEMENT, COW_VAULT_RELAYER, normalizeCowUid, type CowOrderChainId } from './cow-order';
 
 const address = z.string().regex(/^0x[0-9a-fA-F]{40}$/).refine(v => !/^0x0{40}$/i.test(v)).transform(v => getAddress(v.toLowerCase()));
 const hash = z.string().regex(/^0x[0-9a-fA-F]{64}$/).transform(v => v.toLowerCase() as Hex);
@@ -21,12 +21,12 @@ export type AuthorityAllowance = z.infer<typeof allowanceSchema>;
 export type AuthorityCall = { to: string; data: Hex; value: '0x0' };
 export interface AuthorityDeploymentStep {
   compilerVersion: '0.8.30'; artifactHash: Hex; expectedAddress: string;
-  sender: string; chainId: 1;
+  sender: string; chainId: CowOrderChainId;
   transaction: { data: Hex; value: '0x0'; nonce: Hex }; gasEstimate: string | null; blocker: string | null;
 }
 export interface AuthorityReview {
   version: 1; id: string; profileRevision: number; digest: Hex; createdAt: number; reviewExpiresAt: number;
-  chainId: 1; owner: string; executor: string; block: AuthorityBlock; contracts: AuthorityContracts;
+  chainId: CowOrderChainId; owner: string; executor: string; block: AuthorityBlock; contracts: AuthorityContracts;
   terms: CowPolicyTerms; allowances: AuthorityAllowance[]; upgradeRequired: boolean;
   tokenCodeHashes?: Record<string, Hex>;
   calls: AuthorityCall[]; delegation: CowPolicyDraft; deploymentStep: AuthorityDeploymentStep | null; blockers: string[];
@@ -102,7 +102,7 @@ export function createAuthorityReview(input: { id: string; profileRevision: numb
   const allowances = z.array(allowanceSchema).min(2).max(31).parse(p.allowances);
   const tokens = new Set([terms.quoteToken.toLowerCase(), ...terms.markets.map(m => m.baseToken.toLowerCase())]);
   const caps = new Map<string, string>([[terms.quoteToken.toLowerCase(), terms.maxQuoteTotal], ...terms.markets.map(m => [m.baseToken.toLowerCase(), m.maxBaseTotal] as const)]);
-  if (block.timestamp > now + 30 || now - block.timestamp > 180 || terms.expiresAt <= now || terms.chainId !== 1
+  if (block.timestamp > now + 30 || now - block.timestamp > 180 || terms.expiresAt <= now || ![1, 100].includes(terms.chainId)
     || new Set(allowances.map(a => a.token.toLowerCase())).size !== allowances.length
     || allowances.length !== tokens.size || allowances.some(a => !tokens.has(a.token.toLowerCase()))
     || allowances.some(a => a.finiteAmount !== caps.get(a.token.toLowerCase()))
@@ -113,14 +113,14 @@ export function createAuthorityReview(input: { id: string; profileRevision: numb
   const tokenCodeHashes = p.tokenCodeHashes ?? {};
   if (Object.keys(tokenCodeHashes).length && (Object.keys(tokenCodeHashes).length !== tokens.size
     || [...tokens].some(t => !hash.safeParse(tokenCodeHashes[t]).success))) fail();
-  if (deploymentStep) validateDeploymentStep(deploymentStep, contracts.enforcer, terms.owner);
+  if (deploymentStep) validateDeploymentStep(deploymentStep, contracts.enforcer, terms.owner, terms.chainId);
   const calls = approvalCalls(allowances);
   // An EOA with already matching approvals still needs one reviewed harmless
   // approval call to request the atomic-account upgrade through EIP-5792.
   if (p.ownerMode === 'eoa' && calls.length === 0) calls.push({ to: allowances[0].token, value: '0x0',
     data: encodeFunctionData({ abi: approvalAbi, functionName: 'approve', args: [COW_VAULT_RELAYER, BigInt(allowances[0].finiteAmount)] }) });
   const base = { version: 1 as const, id: input.id, profileRevision: input.profileRevision, createdAt: now,
-    reviewExpiresAt: Math.min(now + 600, terms.expiresAt), chainId: 1 as const, owner: terms.owner, executor: terms.executor,
+    reviewExpiresAt: Math.min(now + 600, terms.expiresAt), chainId: terms.chainId, owner: terms.owner, executor: terms.executor,
     block, contracts, terms, allowances, upgradeRequired: p.ownerMode === 'eoa', calls,
     delegation: createCowPolicyDraft(terms, { manager: contracts.manager, enforcer: contracts.enforcer }), deploymentStep, blockers, tokenCodeHashes };
   return { ...base, digest: authorityDigest(base) };
@@ -176,10 +176,10 @@ export function closeVerificationReady(v: AuthorityCloseVerification, now: numbe
       && v.entriesFenced === true && !v.blockers.length && b.timestamp <= now + 30 && now - b.timestamp <= 180;
   } catch { return false; }
 }
-function validateDeploymentStep(v: AuthorityDeploymentStep, expectedAddress: string, owner: string) {
+function validateDeploymentStep(v: AuthorityDeploymentStep, expectedAddress: string, owner: string, chainId: CowOrderChainId) {
   if (v.compilerVersion !== '0.8.30' || !hash.safeParse(v.artifactHash).success
     || !address.safeParse(v.expectedAddress).success || v.expectedAddress.toLowerCase() !== expectedAddress.toLowerCase()
-    || v.sender.toLowerCase() !== owner.toLowerCase() || v.chainId !== 1
+    || v.sender.toLowerCase() !== owner.toLowerCase() || v.chainId !== chainId
     || !/^0x(?:0|[1-9a-fA-F][0-9a-fA-F]{0,15})$/.test(v.transaction.nonce)
     || getContractAddress({ from: address.parse(owner), nonce: BigInt(v.transaction.nonce) }).toLowerCase() !== expectedAddress.toLowerCase()
     || v.transaction.value !== '0x0' || !/^0x[0-9a-fA-F]{2,100000}$/.test(v.transaction.data)
@@ -190,11 +190,11 @@ function validateDeploymentStep(v: AuthorityDeploymentStep, expectedAddress: str
 /** The caller supplies the pinned solc artifact and independently pinned digest.
  * A deployment address or receipt is never inferred from this construction. */
 export function authorityDeploymentTransaction(artifact: { compilerVersion: string; bytecode: Hex; artifactHash: Hex },
-  pinnedHash: Hex, manager: string): { data: Hex; value: '0x0' } {
+  pinnedHash: Hex, manager: string, chainId: CowOrderChainId = COW_CHAIN_ID): { data: Hex; value: '0x0' } {
   if (!artifact.compilerVersion.startsWith('0.8.30+') || artifact.artifactHash !== pinnedHash
     || !hash.safeParse(pinnedHash).success || !/^0x[0-9a-fA-F]{2,100000}$/.test(artifact.bytecode)
-    || artifact.bytecode.length % 2 || keccak256(artifact.bytecode) !== pinnedHash) fail('wallet_authority_artifact_invalid');
+    || artifact.bytecode.length % 2 || keccak256(artifact.bytecode) !== pinnedHash || ![1, 100].includes(chainId)) fail('wallet_authority_artifact_invalid');
   const constructor = encodeAbiParameters(parseAbiParameters('address manager,address settlement,uint256 chainId'),
-    [address.parse(manager), COW_SETTLEMENT, 1n]);
+    [address.parse(manager), COW_SETTLEMENT, BigInt(chainId)]);
   return { data: (artifact.bytecode + constructor.slice(2)) as Hex, value: '0x0' };
 }

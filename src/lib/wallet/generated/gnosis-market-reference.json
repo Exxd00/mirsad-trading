@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "chainId": 100,
+  "referenceOnly": true,
+  "status": "public-runtime-reference-not-execution-proof",
+  "observedAt": "2026-11-16T00:23:01.110Z",
+  "observedBlock": {
+    "number": "49300547",
+    "hash": "0x98db1fbe13d589703c66ef27e496b82194da168aef2105b323e5f208b5fd9772",
+    "timestamp": 1794788380
+  },
+  "readers": [
+    "https://rpc.gnosischain.com",
+    "https://rpc.gnosis.gateway.fm"
+  ],
+  "sources": {
+    "deployment": "https://developers.uniswap.org/deployments.json",
+    "pool": "https://github.com/Uniswap/v3-core/blob/main/contracts/UniswapV3Pool.sol",
+    "bridge": "https://docs.gnosischain.com/bridges/About%20Token%20Bridges/omnibridge"
+  },
+  "pool": {
+    "address": "0xf5E40cC12f69121B0329c256A99F4ab3ebDfAA2E",
+    "factory": "0xe32F7dD7e3f098D518ff19A22d5f028e076489B1",
+    "token0": "0x2a22f9c3b484c3629090feed35f17ff8f88f76f0",
+    "token1": "0xe91d153e0b41518a2ce8dd3d7944fa863463a97d",
+    "fee": 100,
+    "token0Decimals": 6,
+    "token1Decimals": 18,
+    "runtimeHash": "0x9863f738451bf167386c1d648d94cdfb80723f84d285b2d8824e758c291cd39b",
+    "factoryRuntimeHash": "0x1c34570f49479aaf31c55a3aa8209b64b3028b5d1bf8380ba887efb42e22875f"
+  },
+  "semantics": "Actual WXDAI per USDC.e UniswapV3 state; no USDC.e/USDC market peg or CoW liquidity/execution quote is implied."
+}

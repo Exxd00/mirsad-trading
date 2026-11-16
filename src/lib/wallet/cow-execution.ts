@@ -54,7 +54,7 @@ export class CowExecution {
       validTo: Math.min(record.createdAt + p.maxOrderValiditySeconds, p.expiresAt), appData: data.hash, feeAmount: '0',
       kind: record.intent.side, partiallyFillable: true, sellTokenBalance: 'erc20', buyTokenBalance: 'erc20' });
     if (!base.eq(base.floor()) || !isDeepStrictEqual(expected, normalizeCowOrder(record.order)) || data.full !== record.fullAppData
-      || cowOrderUid(expected, p.owner) !== record.uid || record.cancelAt !== (record.intent.side === 'buy' ? record.intent.expiresAt : null)) return cowFail('cow_order_identity_invalid');
+      || (record.chainId ?? 1) !== p.chainId || cowOrderUid(expected, p.owner, p.chainId) !== record.uid || record.cancelAt !== (record.intent.side === 'buy' ? record.intent.expiresAt : null)) return cowFail('cow_order_identity_invalid');
   }
   private frozenConversion(intent: Intent, market: CowExecutionMarket): CowConversion {
     const quote = intent.side === 'buy' ? intent.quote : intent.triggerQuote;
@@ -67,7 +67,8 @@ export class CowExecution {
       assertCowEntryQuote(intent, cowPolicyOrderAppData(this.options.authority.draft, key(intent)).hash,
         this.clock(), this.options.gasLimits, undefined, market);
       const exact = quote.exactSize, rawBase = decimal(intent.quantity).mul(decimal('10').pow(market.baseDecimals));
-      if (!exact || exact.provider !== 'cow-mainnet-v1' || exact.quantity !== intent.quantity
+      const provider = this.options.authority.draft.terms.chainId === 100 ? 'cow-gnosis-v1' : 'cow-mainnet-v1';
+      if (!exact || exact.provider !== provider || exact.quantity !== intent.quantity
         || exact.buyBuyAmount !== rawBase.toFixed(0)
         || !decimal(exact.sellSellAmount).add(exact.sellFeeAmount).eq(rawBase)
         || exact.buyExpiration <= this.clock() || exact.sellExpiration <= this.clock()
@@ -106,7 +107,7 @@ export class CowExecution {
       sellAmount: (intent.side === 'buy' ? quoteUnits : baseUnits).toFixed(0), buyAmount: (intent.side === 'buy' ? baseUnits : quoteUnits).toFixed(0),
       validTo, appData: appData.hash, feeAmount: '0', kind: intent.side, partiallyFillable: true, sellTokenBalance: 'erc20', buyTokenBalance: 'erc20' });
     return { clientOrderId: input.clientOrderId, decisionKey: intent.key, owner: p.owner, intent: structuredClone(intent),
-      uid: cowOrderUid(order, p.owner), order, fullAppData: appData.full, conversion, createdAt: now, createdBlock,
+      uid: cowOrderUid(order, p.owner, p.chainId), ...(p.chainId === 100 ? { chainId: 100 as const } : {}), order, fullAppData: appData.full, conversion, createdAt: now, createdBlock,
       cancelAt: intent.side === 'buy' ? intent.expiresAt : null, postState: 'not-posted', cancelRequested: false, lastError: null };
   }
   async submitOrder(input: SourceSubmitOrder, context?: CowSubmitContext): Promise<CowOrderInspection> {

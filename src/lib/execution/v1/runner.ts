@@ -10,6 +10,7 @@ export type EntryPlanner = (account: Account, signal: Signal, instrument: Instru
   now: number, quantityCap?: string) => Promise<ReturnType<typeof planBuy>>;
 export interface VenuePort {
   readonly accountId: string;
+  readonly candleSourceIdentity?: string;
   capabilities(): Promise<{ idempotentOrders: boolean; fencedWrites: boolean; attachedProtection: boolean;
     managedProtection?: boolean; entryRiskData?: boolean;
     coordinatedExits: boolean; cancelRemainder: boolean; cancellationTimer: boolean }>;
@@ -46,8 +47,11 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
   const readLease = await journal.acquire(port.accountId);
   if (!readLease) return { ...result, status: 'busy' };
   const before = await journal.state(readLease).finally(() => journal.release(readLease));
+  const indicatorCompatible = (state: Awaited<ReturnType<Journal['state']>>) => !port.candleSourceIdentity
+    || (state.indicatorSourceIdentity === port.candleSourceIdentity)
+    || (!state.indicatorSourceIdentity && !Object.keys(state.indicators).length && !state.pendingSignals.length);
   const tracked = (await journal.protections(port.accountId)).filter(p => p.status !== 'closed').map(p => p.symbol);
-  const scan = [...new Set([...tracked, ...symbols])];
+  const scan = indicatorCompatible(before) ? [...new Set([...tracked, ...symbols])] : [];
   const prefetched = new Map<string, { candles?: Candle[]; error?: string }>();
   const scanStart = Date.now(), cursor = scan.length ? (before.scanCursor ?? 0) % scan.length : 0;
   let scanned = 0;
@@ -62,6 +66,9 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
   if (!lease) return { ...result, status: 'busy' };
   try {
     const caps = await port.capabilities(), state = await journal.state(lease);
+    const indicatorMismatch = !indicatorCompatible(state);
+    if (indicatorMismatch) result.blocks.push({ reason: 'indicator_source_migration_required' });
+    else if (port.candleSourceIdentity) state.indicatorSourceIdentity = port.candleSourceIdentity;
     state.scanCursor = scan.length ? (cursor + scanned) % scan.length : 0;
     if (!executionCapabilitiesReady(caps)) result.blocks.push({ reason: 'execution_capabilities_missing' });
     await port.reconcile(lease, { transactions: true });
@@ -104,6 +111,7 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
     if (!configured.length) result.blocks.push({ reason: 'configured_symbols_missing' });
     const allSymbols = [...new Set([...configured, ...account.positions.filter(p => p.managed).map(p => p.symbol)])];
     for (const symbol of allSymbols) {
+      if (indicatorMismatch) continue;
       await journal.renew(lease);
       try {
         const fetched = prefetched.get(symbol);
@@ -114,9 +122,9 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
         for (const signal of parsed.signals) await journal.event(lease, { type: 'signal', readAt: clock(), sourceAt: signal.at, signal });
       } catch (e) { result.blocks.push({ symbol, reason: executionReason(e, 'candles_unavailable') }); }
     }
-    state.pendingSignals = state.pendingSignals.filter(s => s.side === 'sell' ? account.positions.some(p => p.managed && p.symbol === s.symbol) : fresh(s.at, clock(), CONFIG.signalTtlSeconds));
+    if (!indicatorMismatch) state.pendingSignals = state.pendingSignals.filter(s => s.side === 'sell' ? account.positions.some(p => p.managed && p.symbol === s.symbol) : fresh(s.at, clock(), CONFIG.signalTtlSeconds));
     const quotes = await port.quotes(allSymbols);
-    let intent: Intent | null = planExit(account, state.pendingSignals, quotes, clock());
+    let intent: Intent | null = planExit(account, indicatorMismatch ? [] : state.pendingSignals, quotes, clock());
     if (intent) {
       if (!caps.coordinatedExits || !caps.fencedWrites || !caps.idempotentOrders) { result.blocks.push({ reason: 'exit_capability_missing' }); intent = null; }
       else if (await journal.decision(lease, intent.key)) {
@@ -140,7 +148,8 @@ export async function cycle(port: VenuePort, journal: Journal, symbols: string[]
       const risk = evaluateRisk(state.risk, account.trades, account.equityHistory, account.tradeHistoryComplete, clock());
       state.risk = risk.state;
       await journal.event(lease, { type: 'risk', at: clock(), risk });
-      if (!state.entriesEnabled) result.blocks.push({ reason: 'entries_paused' });
+      if (indicatorMismatch) { /* retain old indicators/signals for explicit review; stop/target exits remain available */ }
+      else if (!state.entriesEnabled) result.blocks.push({ reason: 'entries_paused' });
       else if (!valuationMatches(account)) result.blocks.push({ reason: 'risk_valuation_mismatch' });
       else if (result.blocks.some(b => b.reason === 'order_outcome_unknown')) result.blocks.push({ reason: 'entry_reservation_unknown' });
       else if (result.blocks.some(b => b.reason === 'protection_reconciliation_failed')) result.blocks.push({ reason: 'protection_requires_resolution' });
