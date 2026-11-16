@@ -36,11 +36,15 @@ const jobSchema = z.object({ version: z.union([z.literal(1), z.literal(2)]), id:
   lease: z.object({ owner: z.string().uuid(), until: time }).strict().nullable(), report: reportSchema.nullable(),
   lastError: z.enum(['wallet_market_readiness_unavailable', 'wallet_market_readiness_total_timeout']).nullable() }).strict();
 type Job = z.infer<typeof jobSchema>;
-export type GnosisMarketReadinessEnvelope = { job: null | { state: 'running' | 'waiting' | 'complete' | 'expired' | 'exhausted';
+export type GnosisMarketReadinessEnvelope = { job: null | { id: string; state: 'running' | 'waiting' | 'complete' | 'expired' | 'exhausted';
   attempts: number; maxAttempts: 72 | 144; nextAt: number; expiresAt: number; lastTrigger: 'manual' | 'scheduler'; lastError: Job['lastError'] };
   report: GnosisMarketReadiness | null; currentFresh: boolean; reportFresh: boolean };
 type Dependencies = { query?: SqlExecutor['query']; transact?: typeof transaction; clock?: () => number; audit?: () => Promise<GnosisMarketReadiness> };
 const invalid = (): never => { throw new Error('wallet_market_readiness_job_invalid'); };
+export class GnosisMarketReadinessJobConflict extends Error {
+  readonly code = 'wallet_market_readiness_job_changed';
+  constructor() { super('wallet_market_readiness_job_changed'); this.name = 'GnosisMarketReadinessJobConflict'; }
+}
 function parse(value: unknown): Job {
   const p = jobSchema.safeParse(value); if (!p.success) return invalid(); const j = p.data;
   if (j.expiresAt !== j.createdAt + jobLifetime(j.version) || j.attempts > jobAttempts(j.version) || j.nextAt < j.createdAt
@@ -54,6 +58,7 @@ const envelope = (job: Job | null, now: number): GnosisMarketReadinessEnvelope =
   const reportFresh = currentFresh && r?.status === 'ready' && r.history.complete && r.history.lastCloseTime === Math.floor(now / 900) * 900
     && !job?.lastError;
   return { job: job ? {
+    id: job.id,
     state: job.complete ? 'complete' : now >= job.expiresAt ? 'expired' : job.lease && job.lease.until > now ? 'running'
       : job.attempts >= jobAttempts(job.version) ? 'exhausted' : 'waiting', attempts: job.attempts, maxAttempts: jobAttempts(job.version), nextAt: job.nextAt,
     expiresAt: job.expiresAt, lastTrigger: job.lastTrigger, lastError: job.lastError } : null, report: r ?? null, currentFresh, reportFresh };
@@ -72,27 +77,33 @@ export function createGnosisMarketReadinessJob(deps: Dependencies = {}) {
     return j;
   };
   const save = async (tx: SqlExecutor, j: Job) => { await tx.query('UPDATE app_settings SET value=$2::jsonb,updated_at=NOW() WHERE key=$1', [KEY, JSON.stringify(j)]); };
-  const execute = async (trigger: 'manual' | 'scheduler') => {
+  const execute = async (trigger: 'manual' | 'scheduler', expectedJobId?: string) => {
+    if (expectedJobId !== undefined && !z.uuid().safeParse(expectedJobId).success) throw new GnosisMarketReadinessJobConflict();
     const claimed = await transact(async tx => {
-      const now = clock(), owner = randomUUID();
-      if (trigger === 'manual') {
+      const now = clock();
+      if (trigger === 'manual' && expectedJobId === undefined) {
         const initial: Job = { version: 2, id: randomUUID(), createdAt: now, expiresAt: now + LIFETIME, nextAt: now,
           attempts: 0, complete: false, lease: null, lastTrigger: trigger, lastError: null, report: null };
         await tx.query('INSERT INTO app_settings(key,value) VALUES($1,$2::jsonb) ON CONFLICT(key) DO NOTHING', [KEY, JSON.stringify(initial)]);
       }
-      let j = await load(tx, true); if (!j) return { job: null, owner: null };
+      let j = await load(tx, true);
+      // Resume-only owner work cannot turn a concurrent cron completion/reset
+      // into a new warmup. Identity is checked under the same claim row lock.
+      if (expectedJobId !== undefined && (!j || j.id !== expectedJobId)) throw new GnosisMarketReadinessJobConflict();
+      if (!j) return { job: null, owner: null };
       let upgraded = false;
-      if (trigger === 'manual' && j.version === 1) {
+      if (trigger === 'manual' && expectedJobId === undefined && j.version === 1) {
         // Only the explicit owner POST extends the finite market-only policy.
         // Keep its identity, original start, progress, cooldown and live lease.
         j = { ...j, version: 2, expiresAt: j.createdAt + LIFETIME }; await save(tx, j); upgraded = true;
       }
       if ((j.lease && j.lease.until > now) || now < j.nextAt) return { job: j, owner: null };
       if (j.complete || now >= j.expiresAt || j.attempts >= jobAttempts(j.version)) {
-        if (trigger !== 'manual' || upgraded) return { job: j, owner: null };
+        if (trigger !== 'manual' || upgraded || expectedJobId !== undefined) return { job: j, owner: null };
         j = { ...j, version: 2, id: randomUUID(), createdAt: now, expiresAt: now + LIFETIME, nextAt: now, attempts: 0, complete: false, lease: null, lastError: null };
       }
       if (now + LEASE > j.expiresAt) { j.nextAt = j.expiresAt; await save(tx, j); return { job: j, owner: null }; }
+      const owner = randomUUID();
       j = { ...j, attempts: j.attempts + 1, lease: { owner, until: now + LEASE }, nextAt: now + PERIOD, lastTrigger: trigger };
       await save(tx, j); return { job: j, owner };
     });
@@ -116,9 +127,14 @@ export function createGnosisMarketReadinessJob(deps: Dependencies = {}) {
     });
     return envelope(result, clock());
   };
-  return { read: async () => envelope(await load({ query: read }), clock()), start: () => execute('manual'), resume: () => execute('scheduler') };
+  return { read: async () => envelope(await load({ query: read }), clock()), start: () => execute('manual'), resume: () => execute('scheduler'),
+    resumeExisting: async (expectedJobId: string) => {
+      if (!z.uuid().safeParse(expectedJobId).success) throw new GnosisMarketReadinessJobConflict();
+      return execute('manual', expectedJobId);
+    } };
 }
 const production = createGnosisMarketReadinessJob();
 export const readGnosisMarketReadiness = production.read;
 export const startGnosisMarketReadiness = production.start;
 export const resumeGnosisMarketReadiness = production.resume;
+export const resumeExistingGnosisMarketReadiness = production.resumeExisting;
