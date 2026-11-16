@@ -325,7 +325,9 @@ export async function resolveGnosisFundingReceipt(input: FundingResolutionInput,
     if (rawReceipt === null) return null;
     const receipt = object(rawReceipt), receiptNumber = uint(receipt.blockNumber), receiptHash = hex(receipt.blockHash, 32), status = uint(receipt.status);
     if (!same(receipt.transactionHash, input.transactionHash) || ![0n, 1n].includes(status)
-      || receiptNumber < BigInt(input.freshProof.sourceBlock.number) || !Array.isArray(receipt.logs) || receipt.logs.length > 2048) return fail('wallet_gnosis_funding_receipt_invalid');
+      // The review anchor was already a closed canonical block. A new owner
+      // request cannot be proved by any transaction already inside that block.
+      || receiptNumber <= BigInt(input.freshProof.sourceBlock.number) || !Array.isArray(receipt.logs) || receipt.logs.length > 2048) return fail('wallet_gnosis_funding_receipt_invalid');
     const [canonicalBlock, finalizedRaw] = await pair(c, SOURCE, [
       { method: 'eth_getBlockByNumber', params: [toHex(receiptNumber), false] }, { method: 'eth_getBlockByNumber', params: ['finalized', false] },
     ]);
@@ -345,11 +347,15 @@ export async function resolveGnosisFundingReceipt(input: FundingResolutionInput,
     if (status === 0n) {
       // Reverted wrapper receipts have no action logs. Only an exact direct
       // owner transaction can prove which failed action consumed this hash.
+      const baseline=input.freshProof;
+      if(![baseline.sourceNonce,baseline.sourcePendingNonce].every(n=>Number.isSafeInteger(n)&&n>=0)
+        ||baseline.sourcePendingNonce<baseline.sourceNonce)return null;
       const [rawTx] = await pair(c, SOURCE, [{ method: 'eth_getTransactionByHash', params: [input.transactionHash] }]);
       const tx = object(rawTx), expected = input.phase === 'approve'
         ? { to: r.approval.token, data: r.approval.data } : r.transaction;
+      let nonce:bigint;try{nonce=uint(tx.nonce);}catch{return null;}
       if (!same(tx.hash, input.transactionHash) || !same(tx.from, owner) || !same(tx.to, expected.to) || !same(tx.input, expected.data) || uint(tx.value) !== 0n
-        || uint(tx.chainId) !== 1n || !same(tx.blockHash, receiptHash) || uint(tx.blockNumber) !== receiptNumber) return null;
+        ||nonce<BigInt(baseline.sourcePendingNonce)|| uint(tx.chainId) !== 1n || !same(tx.blockHash, receiptHash) || uint(tx.blockNumber) !== receiptNumber) return null;
       return await checkedResult('0', 'reverted', tx);
     }
     const approvals: bigint[] = [], outgoing: { to: Address; value: bigint }[] = [], bridges: Record<string, unknown>[] = [];
