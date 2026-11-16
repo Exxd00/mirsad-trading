@@ -105,7 +105,6 @@ export function setupPolicy(input: { owner: Address; executor: Address; quoteRaw
 }
 /** Authenticated owner setup. All remote operations here are read-only. */
 export async function prepareCowSetup(ownerInput: string, chainId: number) {
-  await assertAuthorityActionIdle({ query });
   if (chainId !== 1 && chainId !== 100) throw new AuthorityError('wallet_authority_chain_unsupported');
   const network = cowNetwork(chainId), manifest = network;
   const owner = getAddress(ownerInput.toLowerCase()), now = Math.floor(Date.now() / 1000), tx = { query };
@@ -115,6 +114,7 @@ export async function prepareCowSetup(ownerInput: string, chainId: number) {
   // Read-only gate precedes executor creation, candidate writes and wallet
   // funding/grant prompts. The client cannot attest its own feasibility.
   await assertCowSetupFeasible(owner, chainId);
+  await assertAuthorityActionIdle(tx);
   if (existing && existingRuntime && existing.profile.authority.expiresAt > now && grant?.state !== 'closed') {
     const refreshed = await refreshUnusedDeployment(existing, existingRuntime, grant);
     const blockers = chainId === 100 && executorGasMissing(await gnosisSetupExecutorGas(refreshed), chainId, refreshed.gasLimits)

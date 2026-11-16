@@ -19,6 +19,8 @@ import codes from './fixtures/cow-gnosis-runtime.json';
 import { prepareExecutorGasReview } from '../src/lib/wallet/gnosis-executor-gas';
 import { readExecutorGasFence, reserveExecutorGas, saveExecutorGasArtifact } from '../src/lib/wallet/gnosis-executor-gas-attempts';
 import { parseAuthorityActionReservationUI, parseAuthorityActionStateUI } from '../src/lib/wallet/authority-action-ui';
+import * as feasibility from '../src/lib/wallet/cow-feasibility';
+import type { WalletFeasibility } from '../src/lib/wallet/wallet-feasibility';
 const HASH = toHex(100n, { size: 32 }), TX = toHex(999n, { size: 32 }), TX2 = toHex(998n, { size: 32 });
 beforeEach(async () => {
   await closeDatabase(); vi.stubEnv('NODE_ENV', 'test'); vi.stubEnv('DATABASE_URL', ''); vi.stubEnv('VERCEL', ''); vi.stubEnv('VERCEL_ENV', '');
@@ -53,7 +55,10 @@ describe('durable authority prompts and cross-writer SQL fence', () => {
     expect(r.attempt).toMatchObject({ accountId: 'metamask-strategy-v1', phase, owner: f.owner, chainId: 100, status: 'reserved', ownerPendingNonce: 0 });
     expect(await readAuthorityActionFence()).toMatchObject({ blocked: true, active: { id: r.attempt.id } });
     expect((await loadAuthority({ query }))?.signatureCiphertext).toBeNull();
-    await expect(prepareCowSetup(f.owner, 100)).rejects.toThrow('wallet_authority_action_pending');
+    // The read-only feasibility gate retains its original precedence over the
+    // newly introduced SQL fence. This test supplies that unrelated read port.
+    vi.spyOn(feasibility, 'assertCowSetupFeasible').mockResolvedValue({ decision: 'eligible-for-setup' } as WalletFeasibility);
+    await expect(prepareCowSetup(f.owner, 100)).rejects.toThrow(phase === 'close' ? 'wallet_authority_close_required' : 'wallet_authority_action_pending');
     await expect(prepareAuthority({ query }, null, f.record.revision, GAS_NOW)).rejects.toThrow('wallet_authority_action_pending');
     await expect(prepareAuthorityClose({ query }, null, { ...f.input }, GAS_NOW)).rejects.toThrow('wallet_authority_action_pending');
   });
