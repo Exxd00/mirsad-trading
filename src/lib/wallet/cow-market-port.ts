@@ -17,7 +17,7 @@ export interface CowMarketPort {
   provisionalConversionAt?(currency: string, at: number, previous?: GnosisProvisionalConversion): Promise<GnosisProvisionalConversion>;
 }
 export function validateCowMarketMappings(chainId: CowOrderChainId, raw: unknown[]): CowMarketMapping[] {
-  if (chainId === 100) return raw.map(parseGnosisMarketMapping);
+  if (chainId === 100) return raw.map(m=>parseGnosisMarketMapping(m,true));
   const mappings = raw as CoinbaseMarketMapping[];
   new CoinbaseMarketClient({ mappings });
   return mappings;

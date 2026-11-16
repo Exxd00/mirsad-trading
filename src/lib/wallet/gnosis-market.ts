@@ -11,6 +11,8 @@ import pins from './generated/gnosis-contracts.json';
 import redemption from './generated/gnosis-usdce-reference.json';
 import stablePins from './generated/gnosis-market-reference.json';
 import { gnosisHistoricalDiagnosticSchema, type GnosisHistoricalReferenceDiagnostic } from './gnosis-market-diagnostic';
+import { GNOSIS_HISTORY_POLICY, GNOSIS_LEGACY_REFERENCE_IDENTITY } from './gnosis-historical-policy';
+export { GNOSIS_HISTORY_POLICY } from './gnosis-historical-policy';
 
 export const GNOSIS_MARKET_PROVIDER = 'gnosis-canonical-state-eur-reference-v1' as const;
 export const GNOSIS_REFERENCE_IDENTITY = 'gnosis-reference:v1:'+createHash('sha256').update(JSON.stringify([
@@ -18,6 +20,10 @@ export const GNOSIS_REFERENCE_IDENTITY = 'gnosis-reference:v1:'+createHash('sha2
   stablePins.pool,redemption.address,redemption.codeHash,pins.codeHashes.quoteToken,pins.codeHashes.quoteTokenImplementation,
   pins.codeHashes.wethBridged,pins.codeHashes.wethBridgedImplementation,pins.codeHashes.homeOmnibridge,
   pins.codeHashes.homeOmnibridgeImplementation,GNOSIS_REFERENCE_FEEDS])).digest('hex');
+export const GNOSIS_HISTORY_IDENTITY = 'gnosis-history:v2:'+createHash('sha256')
+  .update(JSON.stringify([GNOSIS_REFERENCE_IDENTITY,GNOSIS_HISTORY_POLICY])).digest('hex');
+export const GNOSIS_EMA_CACHE_PREFIX = `wallet:gnosis:eur-state:v2:${GNOSIS_HISTORY_IDENTITY}:`;
+export const GNOSIS_LEGACY_CACHE_PREFIX = `wallet:gnosis:eur-state:v1:${GNOSIS_LEGACY_REFERENCE_IDENTITY}:`;
 export const GNOSIS_PROFILE_CONVERSION = Object.freeze({ quoteUnit: 'USDCE', sourceId: GNOSIS_MARKET_PROVIDER,
   methodologyReference: 'urn:mirsad:gnosis-state-usdce-underlying-eur-reference:v1',
   evidenceReference: 'https://docs.gnosischain.com/bridges/About%20Token%20Bridges/omnibridge' });
@@ -31,8 +37,20 @@ const description = { version: 1, chainId: 100, tokenAddress: pins.contracts.wet
 export const GNOSIS_WETH_MAPPING: Readonly<GnosisMarketMapping> = Object.freeze({ ...description,
   sourceId: 'gnosis-eur:v1:' + createHash('sha256').update(JSON.stringify([description.version, description.chainId,
     description.tokenAddress, description.tokenDecimals, description.currency, description.referenceCurrency,
-    description.symbol, description.productId, description.provider, description.method,GNOSIS_REFERENCE_IDENTITY])).digest('hex') });
-export function parseGnosisMarketMapping(raw: unknown): GnosisMarketMapping {
+    description.symbol, description.productId, description.provider, description.method,GNOSIS_REFERENCE_IDENTITY,GNOSIS_HISTORY_IDENTITY])).digest('hex') });
+export const GNOSIS_LEGACY_WETH_MAPPING:Readonly<GnosisMarketMapping>=Object.freeze({...description,
+  sourceId:'gnosis-eur:v1:'+createHash('sha256').update(JSON.stringify([description.version,description.chainId,description.tokenAddress,
+    description.tokenDecimals,description.currency,description.referenceCurrency,description.symbol,description.productId,
+    description.provider,description.method,GNOSIS_LEGACY_REFERENCE_IDENTITY])).digest('hex')});
+export function isLegacyGnosisMarketMapping(raw:unknown):boolean {
+  return GNOSIS_REFERENCE_IDENTITY===GNOSIS_LEGACY_REFERENCE_IDENTITY&&!!raw&&typeof raw==='object'&&!Array.isArray(raw)&&Object.keys(raw).length===Object.keys(GNOSIS_LEGACY_WETH_MAPPING).length
+    &&Object.entries(GNOSIS_LEGACY_WETH_MAPPING).every(([k,v])=>(raw as Record<string,unknown>)[k]===v);
+}
+export function gnosisHistoryEntryIssue(mappings:readonly unknown[]):'wallet_market_history_policy_upgrade_required'|null {
+  return mappings.some(isLegacyGnosisMarketMapping)?'wallet_market_history_policy_upgrade_required':null;
+}
+export function parseGnosisMarketMapping(raw: unknown,allowLegacy=false): GnosisMarketMapping {
+  if(allowLegacy&&isLegacyGnosisMarketMapping(raw))return {...GNOSIS_LEGACY_WETH_MAPPING};
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('gnosis_market_mapping_invalid');
   const value = raw as Record<string, unknown>;
   if (Object.keys(value).length !== Object.keys(GNOSIS_WETH_MAPPING).length
@@ -41,6 +59,7 @@ export function parseGnosisMarketMapping(raw: unknown): GnosisMarketMapping {
 }
 
 type Code = 'gnosis_market_range_invalid' | 'gnosis_market_mapping_invalid' | 'gnosis_market_history_incomplete'
+  | 'gnosis_market_history_policy_upgrade_required'
   | 'gnosis_market_reference_stale' | 'gnosis_market_read_timeout' | 'gnosis_market_read_unavailable'
   | 'gnosis_market_provider_cooldown' | 'gnosis_provisional_fx_reorganized';
 export class GnosisMarketError extends Error { constructor(readonly code: Code,readonly retryAt?:number,
@@ -60,12 +79,17 @@ export function gnosisFundingSourceId(feeds:Pick<GnosisOracleHistory['baseline']
     ...(['eurUsd','usdcUsd'] as const).map(k=>[feeds[k].proxy,feeds[k].aggregator,feeds[k].proxyPhase,
       feeds[k].roundId,feeds[k].answerRaw,feeds[k].updatedAt])]);
 }
+export type GnosisEventQualification = { feed:'eurUsd'|'usdcUsd';at:number;barOpenTime:number;barCloseTime:number;roundId:string;answerRaw:string;updatedAt:number;
+  event:{block:{number:string;hash:Hex;timestamp:number};logIndex:number;kind:'pool'|'stable'|'oracle'};
+  successor:{roundId:string;updatedAt:number;block:{number:string;hash:Hex;timestamp:number};transactionHash:Hex;logIndex:number} };
+export type GnosisHistoryPolicyEvidence = {policyId:typeof GNOSIS_HISTORY_POLICY.id;sourceIdentity:string;
+  qualifications:GnosisEventQualification[];parents:Hex[];lineage?:{provenanceId:Hex;barFingerprints:Hex[]}};
 export type GnosisEurStateSeries = { version: 1; method: typeof GNOSIS_MARKET_PROVIDER; chainId: 100;
   referenceOnly: true; executionReady: false; intervalSeconds:60|900; bars: Candle[]; provenanceId: Hex;
   marks: { at: number; wethEur: string; usdceEur: string; xdaiEur: string;
     eurUsdRoundId:string;usdcUsdRoundId:string;eurUsdUpdatedAt:number;usdcUsdUpdatedAt:number }[];
   coverage: { identity:string;state: string; stable: string; oracle: string; bridgeReference: 'explicit-transmuter-underlying-reference-not-spot-peg';
-    composition: 'chronological-block-and-global-log-index'; finalized: true } };
+    composition: 'chronological-block-and-global-log-index'; finalized: true;historyPolicy?:GnosisHistoryPolicyEvidence } };
 export interface GnosisEurStateStore {
   load(input:{intervalSeconds:60|900;startExclusive:number;endInclusive:number}):Promise<GnosisEurStateSeries[]>;
   save(series:GnosisEurStateSeries):Promise<void>;
@@ -75,17 +99,78 @@ export function gnosisEurSeriesDigest(series:Pick<GnosisEurStateSeries,'bars'|'m
 }
 /** Overlapping chunks may have different proof ranges. Their immutable bar
  * semantics and actual oracle rounds must still agree exactly. */
-export function gnosisEurBarFingerprint(bar:Candle,mark:GnosisEurStateSeries['marks'][number]):Hex {
-  return digest({identity:GNOSIS_REFERENCE_IDENTITY,bar,mark});
+export function gnosisEurBarFingerprint(bar:Candle,mark:GnosisEurStateSeries['marks'][number],policy?:GnosisHistoryPolicyEvidence):Hex {
+  return bar.closeTime-bar.openTime===900?digest({identity:GNOSIS_HISTORY_IDENTITY,bar,mark,
+    qualifications:(policy?.qualifications??[]).filter(q=>q.barOpenTime===bar.openTime).map(q=>digest(q)).sort()})
+    :digest({identity:GNOSIS_REFERENCE_IDENTITY,bar,mark});
 }
-export function parseStoredGnosisEurSeries(raw:unknown):GnosisEurStateSeries {
+export function gnosisLegacyBarFingerprint(bar:Candle,mark:GnosisEurStateSeries['marks'][number]):Hex {
+  return digest({identity:GNOSIS_LEGACY_REFERENCE_IDENTITY,bar,mark});
+}
+export function gnosisHistoryPolicyEvidence(qualifications:GnosisEventQualification[]=[],parents:Hex[]=[]):GnosisHistoryPolicyEvidence {
+  return {policyId:GNOSIS_HISTORY_POLICY.id,sourceIdentity:GNOSIS_HISTORY_IDENTITY,qualifications,
+    parents:[...new Set(parents)].sort()};
+}
+export function validGnosisHistoryPolicy(s:GnosisEurStateSeries):boolean {
+  const p=s.coverage.historyPolicy,hash=(v:unknown)=>typeof v==='string'&&/^0x[0-9a-f]{64}$/.test(v);
+  const exact=(v:object,keys:string[])=>Reflect.ownKeys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k));
+  const time=(n:number)=>Number.isSafeInteger(n)&&n>=0&&n<=253402300799;
+  const round=(r:string)=>typeof r==='string'&&/^[1-9]\d{0,24}$/.test(r)&&BigInt(r)<1n<<80n;
+  if(!p||!exact(p,['policyId','sourceIdentity','qualifications','parents',...(p.lineage?['lineage']:[])])
+    ||p.policyId!==GNOSIS_HISTORY_POLICY.id||p.sourceIdentity!==GNOSIS_HISTORY_IDENTITY||!Array.isArray(p.qualifications)
+    ||p.qualifications.length>45000||!Array.isArray(p.parents)||p.parents.length>1200||!p.parents.every(hash)
+    ||JSON.stringify(p.parents)!==JSON.stringify([...new Set(p.parents)].sort()))return false;
+  const seen=new Set<string>(),opens=new Map(s.bars.map((b,i)=>[b.openTime,s.marks[i]]));
+  for(const q of p.qualifications){const n=q?.successor,b=n?.block;
+    const e=q?.event,eb=e?.block;
+    if(!q||!n||!b||!e||!eb||!exact(q,['feed','at','barOpenTime','barCloseTime','roundId','answerRaw','updatedAt','event','successor'])
+      ||!exact(e,['block','logIndex','kind'])||!exact(eb,['number','hash','timestamp'])||!['pool','stable','oracle'].includes(e.kind)
+      ||!hash(eb.hash)||typeof eb.number!=='string'||!/^\d{1,19}$/.test(eb.number)||BigInt(eb.number)>BigInt(Number.MAX_SAFE_INTEGER)
+      ||eb.timestamp!==q.at||!Number.isSafeInteger(e.logIndex)||e.logIndex<0||typeof q.answerRaw!=='string'||!/^[1-9]\d{0,77}$/.test(q.answerRaw)
+      ||!exact(n,['roundId','updatedAt','block','transactionHash','logIndex'])||!exact(b,['number','hash','timestamp'])
+      ||!['eurUsd','usdcUsd'].includes(q.feed)||![q.at,q.barOpenTime,q.barCloseTime,q.updatedAt,n.updatedAt,b.timestamp].every(time)
+      ||!round(q.roundId)||!round(n.roundId)||BigInt(n.roundId)<=BigInt(q.roundId)||(BigInt(n.roundId)>>64n)!==(BigInt(q.roundId)>>64n)
+      ||q.barOpenTime%900||q.barCloseTime!==q.barOpenTime+900||!opens.has(q.barOpenTime)
+      ||q.at<q.barOpenTime||q.at>=q.barCloseTime||q.updatedAt>q.barOpenTime||q.barOpenTime-q.updatedAt>86400
+      ||q.at-q.updatedAt<=86400||q.at-q.updatedAt>86460||b.timestamp<q.at||b.timestamp>=q.barCloseTime
+      ||b.timestamp-q.updatedAt<=86400||b.timestamp-q.updatedAt>86460||n.updatedAt> b.timestamp
+      ||!hash(b.hash)||!hash(n.transactionHash)||typeof b.number!=='string'||!/^\d{1,19}$/.test(b.number)||BigInt(b.number)>BigInt(Number.MAX_SAFE_INTEGER)
+      ||!Number.isSafeInteger(n.logIndex)||n.logIndex<0)return false;
+    if(BigInt(b.number)<BigInt(eb.number)||(BigInt(b.number)===BigInt(eb.number)&&(b.hash!==eb.hash||n.logIndex<=e.logIndex)))return false;
+    const mark=opens.get(q.barOpenTime)!,closeRound=q.feed==='eurUsd'?mark.eurUsdRoundId:mark.usdcUsdRoundId,
+      closeUpdated=q.feed==='eurUsd'?mark.eurUsdUpdatedAt:mark.usdcUsdUpdatedAt;
+    if(!round(closeRound)||BigInt(closeRound)<BigInt(n.roundId)||closeUpdated<n.updatedAt
+      ||(closeRound===n.roundId&&closeUpdated!==n.updatedAt))return false;
+    const key=digest(q);if(seen.has(key))return false;seen.add(key);
+  }
+  if(p.lineage){const l=p.lineage;
+    if(!exact(l,['provenanceId','barFingerprints'])||!hash(l.provenanceId)||!Array.isArray(l.barFingerprints)
+      ||l.barFingerprints.length!==s.bars.length||p.qualifications.length||!p.parents.includes(l.provenanceId)
+      ||l.barFingerprints.some((v,i)=>v!==gnosisLegacyBarFingerprint(s.bars[i],s.marks[i])))return false;
+    const {historyPolicy:_,...coverage}=s.coverage;
+    if(coverage.identity!==GNOSIS_LEGACY_REFERENCE_IDENTITY||gnosisEurSeriesDigest({bars:s.bars,marks:s.marks,coverage})!==l.provenanceId)return false;
+  }
+  return true;
+}
+export function parseStoredGnosisEurSeries(raw:unknown):GnosisEurStateSeries { return parseSeries(raw,false); }
+/** Frozen strict-v1 decoder, used only after the original SQL fingerprints and
+ * original quarantine have been checked. It never treats v1 as v2 authority. */
+export function parseLegacyGnosisEurSeries(raw:unknown):GnosisEurStateSeries { return parseSeries(raw,true); }
+export function qualifyLegacyGnosisEurSeries(raw:unknown):GnosisEurStateSeries {
+  const s=parseLegacyGnosisEurSeries(raw);if(s.intervalSeconds!==900)return s;
+  s.coverage.historyPolicy={...gnosisHistoryPolicyEvidence([],[s.provenanceId]),lineage:{provenanceId:s.provenanceId,
+    barFingerprints:s.bars.map((b,i)=>gnosisLegacyBarFingerprint(b,s.marks[i]))}};
+  s.provenanceId=gnosisEurSeriesDigest(s);return parseStoredGnosisEurSeries(s);
+}
+function parseSeries(raw:unknown,legacy:boolean):GnosisEurStateSeries {
   try{if(!raw||typeof raw!=='object'||Array.isArray(raw))throw Error();const s=raw as GnosisEurStateSeries;
     const exact=(v:object,keys:string[])=>Reflect.ownKeys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k));
     if(!exact(s,['version','method','chainId','referenceOnly','executionReady','intervalSeconds','bars','marks','coverage','provenanceId'])
-      ||!s.coverage||!exact(s.coverage,['identity','state','stable','oracle','bridgeReference','composition','finalized']))throw Error();
+      ||!s.coverage||!exact(s.coverage,['identity','state','stable','oracle','bridgeReference','composition','finalized',...(s.coverage.historyPolicy?['historyPolicy']:[])]))throw Error();
     if(s.version!==1||s.method!==GNOSIS_MARKET_PROVIDER||s.chainId!==100||s.referenceOnly!==true||s.executionReady!==false
       ||![60,900].includes(s.intervalSeconds)||!Array.isArray(s.bars)||!Array.isArray(s.marks)||!s.bars.length||s.bars.length>200||s.bars.length!==s.marks.length
-      ||s.coverage?.identity!==GNOSIS_REFERENCE_IDENTITY||s.coverage.finalized!==true
+      ||s.coverage?.identity!==(legacy?GNOSIS_LEGACY_REFERENCE_IDENTITY:GNOSIS_REFERENCE_IDENTITY)||s.coverage.finalized!==true
+      ||(legacy||s.intervalSeconds===60?s.coverage.historyPolicy!==undefined:!validGnosisHistoryPolicy(s))
       ||s.coverage.composition!=='chronological-block-and-global-log-index'
       ||s.coverage.bridgeReference!=='explicit-transmuter-underlying-reference-not-spot-peg'
       ||[s.coverage.state,s.coverage.stable,s.coverage.oracle,s.provenanceId].some(v=>typeof v!=='string'||!/^0x[0-9a-f]{64}$/.test(v)))throw Error();
@@ -134,9 +219,31 @@ export function composeGnosisEurStateHistory(pool: GnosisPoolStateSeries, stable
     || !Number.isSafeInteger(c.ix)||c.ix<0) return fail('gnosis_market_history_incomplete');
     const known=seenBlocks.get(c.block.number);if(known&&!sameBlock(known,c.block))return fail('gnosis_market_history_incomplete');
     seenBlocks.set(c.block.number,c.block);previousTime=c.block.timestamp; }
-  const prices = (at:number,phase:'open'|'event'|'close',bar:{openTime:number;closeTime:number}) => {
+  const successors=new Map<string,GnosisOracleHistory['timeline'][number]>(),prior=structuredClone(oracle.baseline);
+  for(const c of changes)if(c.kind==='oracle'){
+    const r=c.event.round,old=prior[r.feed];
+    if(BigInt(r.roundId)<=BigInt(old.roundId))return fail('gnosis_market_history_incomplete');
+    successors.set(`${old.feed}:${old.roundId}`,c.event);prior[r.feed]=r;
+  }
+  const qualifications=new Map<string,GnosisEventQualification>();
+  const prices = (at:number,phase:'open'|'event'|'close',bar:{openTime:number;closeTime:number},event?:typeof changes[number]) => {
     const check=(r:GnosisUnderlyingRound) => { if(r.updatedAt>at || r.availableAtBlock.timestamp>at || at-r.updatedAt>r.heartbeatSeconds
       || r.heartbeatSeconds!==86400) {
+      const n=successors.get(`${r.feed}:${r.roundId}`),nr=n?.round;
+      // Qualification uses only evidence already available by THIS bar close.
+      // The successor answer is never substituted into the earlier sample.
+      if(step===900&&phase==='event'&&event&&(r.feed==='eurUsd'||r.feed==='usdcUsd')&&r.heartbeatSeconds===86400
+        &&r.updatedAt<=bar.openTime&&bar.openTime-r.updatedAt<=86400&&r.availableAtBlock.timestamp<=bar.openTime
+        &&at-r.updatedAt>86400&&at-r.updatedAt<=86460&&n&&nr&&nr.availability==='transmission-block'
+        &&sameBlock(nr.availableAtBlock,n.block)&&nr.updatedAt<=n.block.timestamp&&n.block.timestamp>=at&&n.block.timestamp<bar.closeTime
+        &&n.block.timestamp-r.updatedAt>86400&&n.block.timestamp-r.updatedAt<=86460
+        &&(BigInt(nr.roundId)>>64n)===(BigInt(r.roundId)>>64n)){
+        const q:GnosisEventQualification={feed:r.feed,at,barOpenTime:bar.openTime,barCloseTime:bar.closeTime,roundId:r.roundId,answerRaw:r.answerRaw,updatedAt:r.updatedAt,
+          event:{block:{number:event.block.number,hash:event.block.hash,timestamp:event.block.timestamp},logIndex:event.ix,kind:event.kind},
+          successor:{roundId:nr.roundId,updatedAt:nr.updatedAt,block:{number:n.block.number,hash:n.block.hash,timestamp:n.block.timestamp},
+            transactionHash:n.transactionHash,logIndex:n.logIndex}};
+        qualifications.set(JSON.stringify(q),q);return positive(r.value);
+      }
       const d=gnosisHistoricalDiagnosticSchema.safeParse({version:1,feed:r.feed,reason:r.updatedAt>at?'future-round'
         :r.availableAtBlock.timestamp>at?'future-availability':'heartbeat-exceeded',roundId:r.roundId,updatedAt:r.updatedAt,at,
         heartbeatSeconds:r.heartbeatSeconds,availability:r.availability,availableAtBlock:{number:r.availableAtBlock.number,
@@ -157,7 +264,7 @@ export function composeGnosisEurStateHistory(pool: GnosisPoolStateSeries, stable
         if(!/^(0|[1-9]\d*)$/.test(c.event.baseVolumeRaw))return fail('gnosis_market_history_incomplete');volume+=BigInt(c.event.baseVolumeRaw);}}
       else if(c.kind==='stable')wxdaiPerUsdce=positive(c.event.state.wxdaiPerUsdce);
       else rounds[c.event.round.feed]=structuredClone(c.event.round);
-      const p=prices(c.block.timestamp,'event',raw).weth;high=D.max(high,p);low=D.min(low,p);
+      const p=prices(c.block.timestamp,'event',raw,c).weth;high=D.max(high,p);low=D.min(low,p);
     }
     const close=prices(raw.closeTime,'close',raw);
     for(const key of ['eurUsd','usdcUsd','daiUsd'] as const){const expected=oracle.points[barIndex].feeds[key];
@@ -173,7 +280,8 @@ export function composeGnosisEurStateHistory(pool: GnosisPoolStateSeries, stable
   }
   if(ix!==changes.length||!wxdaiPerUsdce.eq(stable.end.state.wxdaiPerUsdce))return fail('gnosis_market_history_incomplete');
   const coverage:GnosisEurStateSeries['coverage']={identity:GNOSIS_REFERENCE_IDENTITY,state:pool.provenanceId,stable:stable.provenanceId,oracle:oracle.provenanceId,
-    bridgeReference:'explicit-transmuter-underlying-reference-not-spot-peg',composition:'chronological-block-and-global-log-index',finalized:true};
+    bridgeReference:'explicit-transmuter-underlying-reference-not-spot-peg',composition:'chronological-block-and-global-log-index',finalized:true,
+    ...(step===900?{historyPolicy:gnosisHistoryPolicyEvidence([...qualifications.values()])}:{})};
   return {version:1,method:GNOSIS_MARKET_PROVIDER,chainId:100,referenceOnly:true,executionReady:false,intervalSeconds:step,bars,marks,coverage,
     provenanceId:gnosisEurSeriesDigest({bars,marks,coverage})};
 }
@@ -190,7 +298,7 @@ export class GnosisMarketClient {
   private readonly nextRequestAt=new Map<string,number>();
   private providerRetryAt=0;
   constructor(options:GnosisMarketOptions={}){this.fetcher=options.fetch??fetch;this.clock=options.clock??(()=>Math.floor(Date.now()/1000));
-    this.mappings=(options.mappings??[GNOSIS_WETH_MAPPING]).map(parseGnosisMarketMapping);this.historyStore=options.historyStore;
+    this.mappings=(options.mappings??[GNOSIS_WETH_MAPPING]).map(m=>parseGnosisMarketMapping(m,true));this.historyStore=options.historyStore;
     this.historyBudgetMs=options.historyBudgetMs??38000;
     if(!Number.isSafeInteger(this.historyBudgetMs)||this.historyBudgetMs<1000||this.historyBudgetMs>60000)fail('gnosis_market_range_invalid');
     if(this.mappings.length>1)fail('gnosis_market_mapping_invalid');}
@@ -286,11 +394,11 @@ export class GnosisMarketClient {
     const cached=this.historyStore?await this.historyStore.load({intervalSeconds:interval,startExclusive:start,endInclusive:close}):[];
     ensureActive();
     if(!Array.isArray(cached)||cached.length>1200||cached.reduce((n,s)=>n+(Array.isArray(s?.bars)?s.bars.length:20001),0)>20000)return fail('gnosis_market_history_incomplete');
-    const records=new Map<number,{bar:Candle;mark:GnosisEurStateSeries['marks'][number]}>(),proofs=new Map<string,GnosisEurStateSeries>();
+    const records=new Map<number,{bar:Candle;mark:GnosisEurStateSeries['marks'][number];policy?:GnosisHistoryPolicyEvidence}>(),proofs=new Map<string,GnosisEurStateSeries>();
     const include=(raw:GnosisEurStateSeries)=>{const series=parseStoredGnosisEurSeries(raw);if(series.intervalSeconds!==interval)return;
       let useful=false;series.bars.forEach((bar,i)=>{if(bar.closeTime<=start||bar.closeTime>close)return;useful=true;
-        const known=records.get(bar.closeTime),mark=series.marks[i];if(known&&gnosisEurBarFingerprint(known.bar,known.mark)!==gnosisEurBarFingerprint(bar,mark))
-          return fail('gnosis_market_history_incomplete');records.set(bar.closeTime,{bar,mark});});if(useful)proofs.set(series.provenanceId,series);};
+        const known=records.get(bar.closeTime),mark=series.marks[i];if(known&&gnosisEurBarFingerprint(known.bar,known.mark,known.policy)!==gnosisEurBarFingerprint(bar,mark,series.coverage.historyPolicy))
+          return fail('gnosis_market_history_incomplete');records.set(bar.closeTime,{bar,mark,policy:series.coverage.historyPolicy});});if(useful)proofs.set(series.provenanceId,series);};
     [...cached,...this.chunks.values()].forEach(s=>{if(s.intervalSeconds===interval)include(s);});
     const windows:{close:number;count:number}[]=[];
     for(let at=start+interval;at<=close;){if(records.has(at)){at+=interval;continue;}
@@ -308,7 +416,9 @@ export class GnosisMarketClient {
     const rows=[...records.values()].sort((a,b)=>a.bar.closeTime-b.bar.closeTime),children=[...proofs.values()].sort((a,b)=>a.provenanceId.localeCompare(b.provenanceId));
     const coverage:GnosisEurStateSeries['coverage']={identity:GNOSIS_REFERENCE_IDENTITY,
       state:digest(children.map(s=>s.coverage.state)),stable:digest(children.map(s=>s.coverage.stable)),oracle:digest(children.map(s=>s.coverage.oracle)),
-      bridgeReference:'explicit-transmuter-underlying-reference-not-spot-peg',composition:'chronological-block-and-global-log-index',finalized:true};
+      bridgeReference:'explicit-transmuter-underlying-reference-not-spot-peg',composition:'chronological-block-and-global-log-index',finalized:true,
+      ...(interval===900?{historyPolicy:gnosisHistoryPolicyEvidence([...new Map(children.flatMap(s=>s.coverage.historyPolicy!.qualifications).filter(q=>q.barOpenTime>=start&&q.barCloseTime<=close)
+        .map(q=>[digest(q),q])).values()],children.map(s=>s.provenanceId))}:{})};
     const body={bars:rows.map(r=>r.bar),marks:rows.map(r=>r.mark),coverage};
     return{version:1,method:GNOSIS_MARKET_PROVIDER,chainId:100,intervalSeconds:interval,referenceOnly:true,executionReady:false,
       ...body,provenanceId:gnosisEurSeriesDigest(body)};
@@ -318,7 +428,8 @@ export class GnosisMarketClient {
     if(start<0||start%900||start>=close||close-start>900000)return fail('gnosis_market_range_invalid');
     return this.history(close,(close-start)/900,900);
   }
-  async candles(input:unknown,now:number,after:number|null):Promise<Candle[]>{const m=parseGnosisMarketMapping(input);
+  async candles(input:unknown,now:number,after:number|null):Promise<Candle[]>{const m=parseGnosisMarketMapping(input,true);
+    if(isLegacyGnosisMarketMapping(m))return fail('gnosis_market_history_policy_upgrade_required');
     if(!this.mappings.some(v=>v.sourceId===m.sourceId))return fail('gnosis_market_mapping_invalid');
     const end=Math.floor(timestamp(now)/900)*900;if(after===end)return[];
     return (await this.referenceSeries(now,after)).bars;

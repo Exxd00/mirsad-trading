@@ -26,6 +26,13 @@ describe('owner funding browser DTO validation (recorded quote, synthetic proof 
       ? Object.fromEntries(Object.entries(v).reverse().map(([k, x]) => [k, reorder(x)])) : v;
     expect(parseGnosisFundingReservationUI(reorder(r), fundingOwner, 'fund')).toEqual(r);
   });
+  it('refuses a legacy history identity even when the entire owner request is consistently rehashed', async () => {
+    const r = await fundingReservation();
+    expect(parseGnosisFundingReservationUI(r, fundingOwner, 'fund')).toEqual(r);
+    r.freshProof.history.identity = 'gnosis-reference:v1:' + 'a'.repeat(64);
+    rehash(r);
+    expect(parseGnosisFundingReservationUI(r, fundingOwner, 'fund')).toBeNull();
+  });
   it('rejects account, phase, fresh-proof, transaction and unknown-field changes', async () => {
     const r = await fundingReservation();
     expect(parseGnosisFundingReservationUI(r, '0x' + 'b'.repeat(40), 'fund')).toBeNull();

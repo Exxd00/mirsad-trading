@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONFIG } from '../src/lib/execution/v1/model';
 import { auditGnosisMarketReadiness } from '../src/lib/wallet/gnosis-market-readiness';
-import { GNOSIS_MARKET_PROVIDER, GNOSIS_REFERENCE_IDENTITY, gnosisEurSeriesDigest, type GnosisEurStateSeries,
+import { GNOSIS_MARKET_PROVIDER, GNOSIS_REFERENCE_IDENTITY,gnosisHistoryPolicyEvidence, gnosisEurSeriesDigest, type GnosisEurStateSeries,
   GnosisMarketError, type GnosisEurStateStore, type GnosisMarketClient, type GnosisMarketOptions } from '../src/lib/wallet/gnosis-market';
 import { historyDiagnostic } from './fixtures/gnosis-history-diagnostic';
 
@@ -17,7 +17,7 @@ function series(count = 1000, close = CLOSE): GnosisEurStateSeries {
   const marks = bars.map(b => ({ at: b.closeTime, wethEur: '100', usdceEur: '0.92', xdaiEur: '0.91',
     eurUsdRoundId: '1', usdcUsdRoundId: '2', eurUsdUpdatedAt: b.closeTime - 10, usdcUsdUpdatedAt: b.closeTime - 10 }));
   const coverage: GnosisEurStateSeries['coverage'] = { identity: GNOSIS_REFERENCE_IDENTITY, state: hash, stable: hash, oracle: hash,
-    bridgeReference: 'explicit-transmuter-underlying-reference-not-spot-peg', composition: 'chronological-block-and-global-log-index', finalized: true };
+    bridgeReference: 'explicit-transmuter-underlying-reference-not-spot-peg', composition: 'chronological-block-and-global-log-index', finalized: true,historyPolicy:gnosisHistoryPolicyEvidence() };
   return { version: 1, method: GNOSIS_MARKET_PROVIDER, chainId: 100, referenceOnly: true, executionReady: false, intervalSeconds: 900,
     bars, marks, coverage, provenanceId: gnosisEurSeriesDigest({ bars, marks, coverage }) };
 }

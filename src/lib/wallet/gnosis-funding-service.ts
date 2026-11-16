@@ -8,7 +8,7 @@ import destination from './generated/gnosis-token-behavior.json';
 import ethereum from './generated/mainnet-contracts.json';
 import type { FundingResolutionInput, GnosisFundingResolution } from './gnosis-funding-attempts';
 import { sqlGnosisEurStateStore } from './gnosis-eur-state-store';
-import { GNOSIS_REFERENCE_IDENTITY, gnosisEurBarFingerprint, parseStoredGnosisEurSeries, type GnosisEurStateStore } from './gnosis-market';
+import { GNOSIS_REFERENCE_IDENTITY,GNOSIS_HISTORY_IDENTITY,GNOSIS_HISTORY_POLICY, gnosisEurBarFingerprint, parseStoredGnosisEurSeries, type GnosisEurStateStore } from './gnosis-market';
 import { readGnosisMarketReadiness } from './gnosis-market-readiness-job';
 
 export class GnosisFundingError extends Error {
@@ -155,10 +155,11 @@ async function historyProof(c: Context, deps: FundingReadDependencies): Promise<
     const rows = new Map<number, Hex>(); let inspected = 0;
     for (const value of chunks) {
       const series = parseStoredGnosisEurSeries(value); inspected += series.bars.length;
-      if (inspected > 20000 || series.intervalSeconds !== 900 || series.coverage.identity !== GNOSIS_REFERENCE_IDENTITY) return fail('wallet_gnosis_funding_history_required');
+      if (inspected > 20000 || series.intervalSeconds !== 900 || series.coverage.identity !== GNOSIS_REFERENCE_IDENTITY
+        ||series.coverage.historyPolicy?.policyId!==GNOSIS_HISTORY_POLICY.id||series.coverage.historyPolicy.sourceIdentity!==GNOSIS_HISTORY_IDENTITY) return fail('wallet_gnosis_funding_history_required');
       for (let i = 0; i < series.bars.length; i++) {
         const b = series.bars[i]; if (b.closeTime <= close - 1000 * 900 || b.closeTime > close) continue;
-        const fingerprint = gnosisEurBarFingerprint(b, series.marks[i]) as Hex, prior = rows.get(b.closeTime);
+        const fingerprint = gnosisEurBarFingerprint(b, series.marks[i],series.coverage.historyPolicy) as Hex, prior = rows.get(b.closeTime);
         if (prior && prior !== fingerprint) return fail('wallet_gnosis_funding_history_required'); rows.set(b.closeTime, fingerprint);
       }
     }
@@ -166,7 +167,7 @@ async function historyProof(c: Context, deps: FundingReadDependencies): Promise<
     const ordered: [number, Hex][] = [];
     for (let at = close - 999 * 900; at <= close; at += 900) { const v = rows.get(at); if (!v) return fail('wallet_gnosis_funding_history_required'); ordered.push([at, v]); }
     if (close > c.clock() || c.clock() - close > 86400) return fail('wallet_gnosis_funding_history_required');
-    return { identity: GNOSIS_REFERENCE_IDENTITY, firstCloseTime: close - 999 * 900, closeTime: close, count: 1000 as const,
+    return { identity: GNOSIS_HISTORY_IDENTITY, firstCloseTime: close - 999 * 900, closeTime: close, count: 1000 as const,
       fingerprint: fundingDigest(ordered), scope: 'compiled-cache-24h-snapshot-not-entry-readiness' as const };
   };
   try { return await Promise.race([work(), new Promise<never>((_, reject) => {

@@ -6,7 +6,7 @@ import { query, transaction, type SqlExecutor } from '../db';
 import { fundingDigest, GnosisFundingError, proveGnosisFundingNoSourceEffect, resolveGnosisFundingReceipt, verifyGnosisFundingReview, type GnosisFundingPrepared,
   type GnosisFundingFreshProof } from './gnosis-funding-service';
 import type { GnosisFundingQuoteReview } from './gnosis-funding-quote';
-import { GNOSIS_REFERENCE_IDENTITY } from './gnosis-market';
+import { GNOSIS_HISTORY_IDENTITY,GNOSIS_EMA_CACHE_PREFIX,GNOSIS_LEGACY_CACHE_PREFIX } from './gnosis-market';
 
 export type GnosisFundingPhase = 'approve' | 'fund';
 export type GnosisFundingAttemptStatus = 'reserved' | 'hash-recorded' | 'unknown' | 'owner-rejected' | 'owner-cancelled-unsent' | 'confirmed' | 'reverted';
@@ -120,10 +120,11 @@ export async function reserveGnosisFundingAttempt(input: { owner: string; phase:
     if (currentFence.blocked) return fail('wallet_gnosis_funding_attempt_pending');
     // The immutable cache's revision fence shares this transaction. A source
     // quarantine committed during the RPC awaits cannot authorize a prompt.
-    const cache = await tx.query<{ value: unknown }>('SELECT value FROM app_settings WHERE key=$1 FOR SHARE',
-      [`wallet:gnosis:eur-state:v1:${GNOSIS_REFERENCE_IDENTITY}:quarantine`]);
-    const cacheFence = z.object({ version: z.literal(1), quarantined: z.literal(false) }).strict().safeParse(cache.rows[0]?.value);
-    if (!cacheFence.success || freshProof.history.identity !== GNOSIS_REFERENCE_IDENTITY) return fail('wallet_gnosis_funding_history_required');
+    const cache = await tx.query<{key:string; value: unknown }>('SELECT key,value FROM app_settings WHERE key=ANY($1::text[]) ORDER BY key FOR SHARE',
+      [[GNOSIS_EMA_CACHE_PREFIX+'quarantine',GNOSIS_LEGACY_CACHE_PREFIX+'quarantine']]);
+    const schema=z.object({version:z.literal(1),quarantined:z.literal(false)}).strict();
+    if (!cache.rows.some(r=>r.key===GNOSIS_EMA_CACHE_PREFIX+'quarantine')||cache.rows.some(r=>!schema.safeParse(r.value).success)
+      || freshProof.history.identity !== GNOSIS_HISTORY_IDENTITY) return fail('wallet_gnosis_funding_history_required');
     const current = await tx.query<{ value: unknown }>('SELECT value FROM app_settings WHERE key=$1', [artifactKey(owner)]);
     const artifact = artifactSchema.safeParse(current.rows[0]?.value);
     if (!artifact.success || artifact.data.reviewDigest !== input.reviewDigest || artifact.data.proofDigest !== input.proofDigest) return fail('wallet_gnosis_funding_review_changed');

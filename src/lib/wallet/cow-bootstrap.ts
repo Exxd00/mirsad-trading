@@ -1,4 +1,5 @@
 import 'server-only';
+import { gnosisHistoryEntryIssue } from './gnosis-market';
 import { type PublicClient, type Hex, stringToHex } from 'viem';
 import { query, transaction } from '../db';
 import { decryptSecret, encryptSecret } from '../secrets';
@@ -20,7 +21,7 @@ import { createCowMarketClient } from './cow-market-port';
 import { sqlCoinbasePriceStore } from './cow-price-store';
 import { CowExecutionJournal } from './cow-execution-journal';
 import { CowExecution } from './cow-execution';
-import type { CowOrderRecord } from './cow-execution-types';
+import { CowExecutionError,type CowOrderRecord } from './cow-execution-types';
 import { CowRpcTransport } from './cow-rpc';
 import { CowSubmitApi } from './cow-submit-api';
 import { CowMarketQuotes } from './cow-market-quotes';
@@ -102,7 +103,10 @@ async function build(): Promise<WalletVenueSource | null> {
     } });
   const markets = config.mappings.map(m => ({ symbol: m.symbol, baseToken: m.tokenAddress, baseDecimals: m.tokenDecimals,
     quoteToken: config.terms.quoteToken, quoteDecimals: 6, quoteCurrency: network.quoteCurrency }));
+  const assertEntrySource=()=>{const issue=config.terms.chainId===100?gnosisHistoryEntryIssue(config.mappings):null;
+    if(issue)throw new CowExecutionError(issue);};
   const authorizePublish = async (r: CowOrderRecord) => {
+    if(r.intent.side==='buy')assertEntrySource();
     if (r.bindingId.toLowerCase() !== draft.delegationHash.toLowerCase()
       || (r.chainId ?? 1) !== network.chainId
       || r.owner.toLowerCase() !== config.terms.owner.toLowerCase()) throw new Error('cow_order_identity_invalid');
@@ -115,7 +119,7 @@ async function build(): Promise<WalletVenueSource | null> {
   };
   const execution = new CowExecution({ journal: protocolJournal, rpc,
     api: new CowSubmitApi({ chainId: network.chainId, authorize: authorizePublish, gasLimits: config.gasLimits }), authority, markets, gasLimits: config.gasLimits,
-    armCancellation: scheduleCancellation, authorizePublish });
+    armCancellation: scheduleCancellation, authorizePublish,assertEntrySource });
   const readers: { journal: CowExecutionJournal; execution: CowExecution }[] = [{ journal: protocolJournal, execution }];
   const archives = await query<{ key: string; value: unknown }>("SELECT key,value FROM app_settings WHERE key LIKE 'wallet:strategy:cow-runtime-archive:v1:%' ORDER BY key LIMIT 257");
   if (archives.rows.length > 256) throw new Error('wallet_cow_runtime_history_limit');
@@ -155,6 +159,8 @@ async function build(): Promise<WalletVenueSource | null> {
   const market = createCowMarketClient(network.chainId, config.mappings, { priceStore: sqlCoinbasePriceStore }), api = new CowReadClient({ chainId: network.chainId });
   let client: CowSourceClient;
   const quotes = new CowMarketQuotes({ config, client: reader, market, api, balances: () => client.getBalances() });
+  const entryBlocker=()=>{const issue=config.terms.chainId===100?gnosisHistoryEntryIssue(config.mappings):null;
+    return issue?Promise.resolve(issue):client.entryBlocker();};
   const expenses = new CowExpenseLedger({ config, client: reader, marketQuotes: quotes, query, transaction });
   client = new CowSourceClient({ chainId: network.chainId, owner: config.terms.owner, markets, execution: readExecution, journal: readJournal, history, quotes, market, api,
     expenses: () => expenses.getExpenses(), orderGasEur: id => expenses.orderGasEur(id) });
@@ -163,8 +169,8 @@ async function build(): Promise<WalletVenueSource | null> {
       [...config.mappings].sort((a, b) => a.symbol.localeCompare(b.symbol)).map(m => [m.chainId, m.symbol, m.tokenAddress.toLowerCase(), m.provider, m.method, m.sourceId])]))),
     // Quotes remain non-partial market references. New entries must carry the
     // separately reviewed signed-net-limit certificate through every write.
-    entryBlocker: () => client.entryBlocker(), entryPlan: async (...args) => {
-      const reason = await client.entryBlocker();
+    entryBlocker, entryPlan: async (...args) => {
+      const reason = await entryBlocker();
       return reason ? { intent: null, reason } : quotes.entryPlan(...args);
     },
     verifyGrant: verify, resumeExecution: async (lease, options) => {

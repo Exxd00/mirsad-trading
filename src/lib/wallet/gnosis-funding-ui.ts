@@ -47,7 +47,7 @@ const proofSchema = z.object({ version: z.literal(1), owner: address, reviewDige
   readAt: time, expiresAt: time, sourceBalanceRaw: raw, sourceAllowanceRaw: raw, sourceNativeBalanceWei: raw,
   sourceNonce: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), sourcePendingNonce: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   destinationTokenBalanceRaw: raw, destinationNativeBalanceWei: raw,
-  checksDigest: hash, history: z.object({ identity: z.string().regex(/^gnosis-reference:v1:[0-9a-f]{64}$/),
+  checksDigest: hash, history: z.object({ identity: z.string().regex(/^gnosis-history:v2:[0-9a-f]{64}$/),
     firstCloseTime: time, closeTime: time, count: z.literal(1000), fingerprint: hash,
     scope: z.literal('compiled-cache-24h-snapshot-not-entry-readiness') }).strict(),
   scope: z.literal('current-canonical-snapshot-not-future-contract-or-arrival-guarantee'), digest: hash }).strict();

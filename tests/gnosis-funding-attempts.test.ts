@@ -4,14 +4,14 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { closeDatabase, query, transaction } from '../src/lib/db';
 import { createSqlGnosisEurStateStore } from '../src/lib/wallet/gnosis-eur-state-store';
-import { GNOSIS_REFERENCE_IDENTITY } from '../src/lib/wallet/gnosis-market';
+import { GNOSIS_EMA_CACHE_PREFIX } from '../src/lib/wallet/gnosis-market';
 import { prepareGnosisFundingReview, proveGnosisFundingNoSourceEffect, verifyGnosisFundingReview, type GnosisFundingPrepared } from '../src/lib/wallet/gnosis-funding-service';
 import { attestGnosisFundingRejection, cancelGnosisFundingUnsent, markGnosisFundingUnknown, readGnosisFundingFence, recordGnosisFundingHash,
   reserveGnosisFundingAttempt, resolveGnosisFundingAttempt, saveGnosisFundingArtifact, type GnosisFundingResolution } from '../src/lib/wallet/gnosis-funding-attempts';
 import { fundingReads, FUNDING_OWNER, FUNDING_NOW } from './helpers/gnosis-funding';
 import { parseGnosisFundingReservationUI } from '../src/lib/wallet/gnosis-funding-ui';
 const hash = ('0x' + '11'.repeat(32)) as `0x${string}`, otherHash = ('0x' + '22'.repeat(32)) as `0x${string}`;
-const fenceKey = `wallet:gnosis:eur-state:v1:${GNOSIS_REFERENCE_IDENTITY}:quarantine`;
+const fenceKey = GNOSIS_EMA_CACHE_PREFIX+'quarantine';
 beforeEach(async () => { await closeDatabase(); vi.stubEnv('NODE_ENV', 'test'); vi.stubEnv('VERCEL', ''); vi.stubEnv('DATABASE_URL', '');
   vi.stubEnv('LOCAL_DATABASE_PATH', 'memory://'); vi.stubEnv('MIRSAD_RETIRE_LEGACY_CONNECTION', undefined); });
 afterEach(async () => { await closeDatabase(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });

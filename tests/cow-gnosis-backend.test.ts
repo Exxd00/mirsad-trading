@@ -12,10 +12,10 @@ import { createCowPolicyDraft } from '../src/lib/wallet/cow-policy';
 import { cowOrderUid, type CowOrder } from '../src/lib/wallet/cow-order';
 import { CowExecutionJournal } from '../src/lib/wallet/cow-execution-journal';
 import { CowExecution } from '../src/lib/wallet/cow-execution';
-import type { CowExecutionRpc, CowTxPhase } from '../src/lib/wallet/cow-execution-types';
+import { CowExecutionError,type CowExecutionRpc,type CowTxPhase } from '../src/lib/wallet/cow-execution-types';
 import { verifyCowNetLimitProof, createCowNetLimitProof, type CowNetLimitProofInput } from '../src/lib/wallet/cow-net-limit-proof';
 import { COW_GNOSIS_SETUP_GAS_LIMITS } from '../src/lib/wallet/wallet-feasibility';
-import { GNOSIS_WETH_MAPPING, GNOSIS_PROFILE_CONVERSION } from '../src/lib/wallet/gnosis-market';
+import { GNOSIS_WETH_MAPPING,GNOSIS_LEGACY_WETH_MAPPING,gnosisHistoryEntryIssue, GNOSIS_PROFILE_CONVERSION } from '../src/lib/wallet/gnosis-market';
 import { cowNetwork } from '../src/lib/wallet/cow-network';
 import { walletBindingIdentity } from '../src/lib/wallet/execution-connection';
 import { attachTestNetLimitProof } from './helpers/cow-net-limit-proof';
@@ -132,7 +132,9 @@ describe('real SQL chain100 journal and nonce fencing', () => {
         presigned: mined, invalidated, expired: false, finalizedHead: head })),
     };
     const api = { post: vi.fn(async () => 'accepted' as const) }, armCancellation = vi.fn(async () => {});
+    let sourceMappings=f.config.mappings;
     const execution = new CowExecution({ journal, rpc, api, gasLimits: f.config.gasLimits,
+      assertEntrySource:()=>{const issue=gnosisHistoryEntryIssue(sourceMappings);if(issue)throw new CowExecutionError(issue);},
       authority: { draft: f.policy, signature: '0x11', ownerImplementation: f.config.implementation,
         codeHashes: { manager: f.n.codeHashes.manager, enforcer: f.n.codeHashes.manager,
           ownerImplementation: f.n.codeHashes.implementation, settlement: f.n.codeHashes.settlement } },
@@ -151,6 +153,14 @@ describe('real SQL chain100 journal and nonce fencing', () => {
       expect(submitted.record.conversion.currency).toBe('USDCE');
       expect(armCancellation).toHaveBeenCalledWith(f.intent.key, f.intent.expiresAt);
       expect(rpc.prepare).toHaveBeenCalledTimes(1); expect(rpc.broadcast).toHaveBeenCalledTimes(1); expect(api.post).toHaveBeenCalledTimes(1);
+      // A frozen legacy mapping retains this journal/physical wallet identity,
+      // but a cold-resumed pending BUY cannot broadcast the old prepared bytes.
+      sourceMappings=[{...GNOSIS_LEGACY_WETH_MAPPING}];
+      expect(parseCowRuntime({...f.config,mappings:sourceMappings}).mappings).toEqual(sourceMappings);
+      expect(walletBindingIdentity(cowBinding({...f.config,mappings:sourceMappings}))).toBe(walletBindingIdentity(cowBinding(f.config)));
+      now++;await expect(execution.resumeExecution(lease,{entriesEnabled:true})).rejects.toThrow('wallet_market_history_policy_upgrade_required');
+      expect(rpc.broadcast).toHaveBeenCalledTimes(1);expect(api.post).toHaveBeenCalledTimes(1);
+      expect((await journal.getRecord(submitted.record.uid))?.lastError).toBe('wallet_market_history_policy_upgrade_required');
       // The durable 60-second cancellation remains usable after pricing ages.
       mined = true; now = f.intent.expiresAt;
       await execution.cancelOrder(submitted.record.uid, { lease, decisionKey: f.intent.key });

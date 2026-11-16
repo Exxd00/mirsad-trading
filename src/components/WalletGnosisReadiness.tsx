@@ -6,6 +6,8 @@ import { gnosisHistoricalDiagnosticSchema } from '@/lib/wallet/gnosis-market-dia
 import styles from '@/app/automation/page.module.css';
 
 const endpoint = '/api/wallet/strategy/market-readiness';
+const historyPolicy = 'gnosis-ema-history-event-grace-v2';
+const historyIdentity = /^gnosis-history:v2:[0-9a-f]{64}$/;
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const time = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0 && (v as number) <= 253402300799;
 const count = (v: unknown) => v === null || (time(v) && v <= 1000);
@@ -29,6 +31,9 @@ function valid(v: unknown): v is GnosisMarketReadinessEnvelope {
     || h.provenanceIds.length > 1200 || !h.provenanceIds.every(id => typeof id === 'string' && /^0x[0-9a-f]{64}$/.test(id))) return false;
   if (h.complete && (h.completedCandles !== 1000 || h.contiguousCandles !== 1000 || h.lastCloseTime !== h.targetCloseTime
     || h.firstCloseTime !== h.targetCloseTime - 999 * 900)) return false;
+  const hasHistoryPolicy = h.policyId !== undefined || h.sourceIdentity !== undefined;
+  if (hasHistoryPolicy && (h.policyId !== historyPolicy || typeof h.sourceIdentity !== 'string' || !historyIdentity.test(h.sourceIdentity))) return false;
+  if (v.reportFresh && !hasHistoryPolicy) return false;
   if (r.historyDiagnostic !== undefined && r.historyDiagnostic !== null) {
     const d = gnosisHistoricalDiagnosticSchema.safeParse(r.historyDiagnostic);
     if (!d.success || r.status === 'ready' || !r.errors.includes('gnosis_market_reference_stale') || d.data.at > r.readAt || d.data.availableAtBlock.timestamp > r.readAt
@@ -91,7 +96,9 @@ export function WalletGnosisReadiness({ csrfToken, disabled = false }: { csrfTok
     const timer = setTimeout(() => setNow(Date.now()), Math.min(2147483647, Math.min(...deadlines) * 1000 - now + 50));
     return () => clearTimeout(timer);
   }, [job?.nextAt, report, now]);
-  const fresh = !!value?.reportFresh && !!value?.currentFresh && !!report && report.current.sourceAt !== null && report.current.readAt !== null
+  const currentHistoryPolicy = report?.history.policyId === historyPolicy && typeof report.history.sourceIdentity === 'string'
+    && historyIdentity.test(report.history.sourceIdentity);
+  const fresh = currentHistoryPolicy && !!value?.reportFresh && !!value?.currentFresh && !!report && report.current.sourceAt !== null && report.current.readAt !== null
     && now / 1000 <= Math.min(report.readAt, report.current.sourceAt, report.current.readAt) + 15
     && Math.floor(now / 900000) * 900 === report.history.targetCloseTime;
   const cooldown = !!job && (job.state === 'running' || now / 1000 < job.nextAt);
@@ -107,9 +114,14 @@ export function WalletGnosisReadiness({ csrfToken, disabled = false }: { csrfTok
     {job && <p role="status">{states[job.state]} · المحاولة {job.attempts} من {job.maxAttempts}. {(['running', 'waiting'].includes(job.state) || cooldown)
       ? <> أقرب موعد للمتابعة: <bdi dir="ltr">{stamp(job.nextAt)}</bdi>.</> : ' يمكنك طلب متابعة جديدة.'}</p>}
     {report && <>
-      <p role="status">{fresh ? 'اكتمل فحص البيانات بقراءة حديثة.' : report.history.complete ? 'اكتمل التاريخ في آخر تحقق؛ يلزم تحقق حديث قبل مراجعة التشغيل.' : 'جمع التاريخ لم يكتمل بعد.'}</p>
+      <p role="status">{fresh ? 'اكتمل فحص البيانات بقراءة حديثة.' : !currentHistoryPolicy ? 'قراءة محفوظة بطريقة سابقة؛ يلزم تحقق بطريقة اعتماد السجل الحالية.' : report.history.complete ? 'اكتمل التاريخ في آخر تحقق؛ يلزم تحقق حديث قبل مراجعة التشغيل.' : 'جمع التاريخ لم يكتمل بعد.'}</p>
       <p>الشموع المحفوظة: {report.history.completedCandles ?? 'غير معلوم'} من 1000؛ المتتابعة حتى آخر فترة مطلوبة: {report.history.contiguousCandles ?? 'غير معلوم'}.</p>
       <p>آخر قراءة: <bdi dir="ltr">{stamp(report.readAt)}</bdi>. نهاية الفترة المطلوبة: <bdi dir="ltr">{stamp(report.history.targetCloseTime)}</bdi>.</p>
+      {currentHistoryPolicy && <details><summary>طريقة اعتماد السجل التاريخي</summary>
+        <p>تُستخدم الأسعار التي كانت منشورة فعليًا. يبقى حد عمر المرجع عند افتتاح وإغلاق كل شمعة 24 ساعة. للأحداث داخل شمعة 15 دقيقة فقط، يُقبل تأخر بث أقصاه 60 ثانية إذا ثبت التحديث التالي قبل إغلاق الشمعة؛ ويبقى السعر السابق حتى وقت التحديث المثبت.</p>
+        <p>هذا اعتماد لسجل شموع مغلقة. تبقى فحوص الأسعار الحالية وتحويل التمويل مستقلة وصارمة.</p>
+        <p>هوية طريقة السجل: <bdi dir="ltr">{report.history.sourceIdentity}</bdi>.</p>
+      </details>}
       {report.current.status === 'ready' && <p>آخر أسعار مرجعية باليورو: WETH <bdi>{report.current.wethEur}</bdi>؛ USDC.e <bdi>{report.current.usdceEur}</bdi>؛ xDAI <bdi>{report.current.xdaiEur}</bdi>.</p>}
       {report.errors.length > 0 && <details><summary>سبب عدم اكتمال التحقق</summary><ul>{report.errors.map(e => <li key={e}><bdi dir="ltr">{e}</bdi></li>)}</ul></details>}
       {report.historyDiagnostic && <details><summary>تشخيص الجولة التاريخية المرفوضة</summary>

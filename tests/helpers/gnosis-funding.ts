@@ -7,7 +7,7 @@ import gnosisRuntime from '../fixtures/cow-gnosis-runtime.json';
 import sourceSwapRuntime from '../fixtures/gnosis-funding-source-swap-runtime.json';
 import policy from '../../src/lib/wallet/generated/gnosis-funding-contracts.json';
 import { CONFIG } from '../../src/lib/execution/v1/model';
-import { GNOSIS_MARKET_PROVIDER, GNOSIS_REFERENCE_IDENTITY, gnosisEurSeriesDigest, type GnosisEurStateSeries, type GnosisEurStateStore } from '../../src/lib/wallet/gnosis-market';
+import { GNOSIS_MARKET_PROVIDER, GNOSIS_REFERENCE_IDENTITY,gnosisHistoryPolicyEvidence, gnosisEurSeriesDigest, type GnosisEurStateSeries, type GnosisEurStateStore } from '../../src/lib/wallet/gnosis-market';
 
 export const FUNDING_NOW = Math.floor(Date.parse(quote.observedAt) / 1000);
 export const FUNDING_OWNER = quote.quote.action.fromAddress;
@@ -29,7 +29,8 @@ export function fundingHistory(close = Math.floor(FUNDING_NOW / 900) * 900): Gno
     const marks = bars.map(b => ({ at: b.closeTime, wethEur: '100', usdceEur: '0.9', xdaiEur: '0.91', eurUsdRoundId: '1', usdcUsdRoundId: '1',
       eurUsdUpdatedAt: b.closeTime - 1, usdcUsdUpdatedAt: b.closeTime - 1 }));
     const coverage = { identity: GNOSIS_REFERENCE_IDENTITY, state: zeroHash, stable: zeroHash, oracle: zeroHash,
-      bridgeReference: 'explicit-transmuter-underlying-reference-not-spot-peg' as const, composition: 'chronological-block-and-global-log-index' as const, finalized: true as const };
+      bridgeReference: 'explicit-transmuter-underlying-reference-not-spot-peg' as const, composition: 'chronological-block-and-global-log-index' as const, finalized: true as const,
+      historyPolicy:gnosisHistoryPolicyEvidence() };
     return { version: 1, chainId: 100, method: GNOSIS_MARKET_PROVIDER, referenceOnly: true, executionReady: false, intervalSeconds: 900,
       bars, marks, coverage, provenanceId: gnosisEurSeriesDigest({ bars, marks, coverage }) };
   });

@@ -20,7 +20,7 @@ export async function fundingReservation(phase: GnosisFundingPhase = 'fund', ove
     destinationBlock: { number: '200', hash: H, parentHash: H, timestamp: at },
     readAt: at, expiresAt: at + 15, sourceBalanceRaw: '10807268', sourceAllowanceRaw: phase === 'fund' ? '10000000' : '0',
     sourceNativeBalanceWei: '0', sourceNonce: 2, sourcePendingNonce: 2, destinationTokenBalanceRaw: '0', destinationNativeBalanceWei: '0', checksDigest: H,
-    history: { identity: 'gnosis-reference:v1:' + 'a'.repeat(64), firstCloseTime: closeTime - 999 * 900, closeTime, count: 1000 as const,
+    history: { identity: 'gnosis-history:v2:' + 'a'.repeat(64), firstCloseTime: closeTime - 999 * 900, closeTime, count: 1000 as const,
       fingerprint: H, scope: 'compiled-cache-24h-snapshot-not-entry-readiness' as const },
     scope: 'current-canonical-snapshot-not-future-contract-or-arrival-guarantee' as const };
   const freshProof: GnosisFundingFreshProof = { ...proofBase, digest: fundingDigest(proofBase) };
