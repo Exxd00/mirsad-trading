@@ -11,11 +11,11 @@ import styles from '@/app/automation/page.module.css';
 import { WalletFeasibilityAudit } from './WalletFeasibilityAudit';
 import { WalletGnosisReadiness } from './WalletGnosisReadiness';
 import { WalletFundingReview, type FundingOwnerAction, type FundingAttemptResult } from './WalletFundingReview';
+import { WalletExecutorGas, type ExecutorGasOwnerAction, type ExecutorGasAttemptResult } from './WalletExecutorGas';
+import { refreshAfterExecutorGas, type WalletSetupView } from '@/lib/wallet/executor-gas-refresh-ui';
 
 type Report = AuthorityPublic & { csrfToken: string };
-type Setup = { status: 'funding-required' | 'configured'; owner: string; executor: string; chainId: 1 | 100;
-  funding?: { quoteUnit: string; quoteToken: string; quoteRaw: string; ownerGasWei: string; executorGasWei: string };
-  markets: { symbol: string }[]; excluded?: { symbol: string; reason: string }[]; blockers: string[] };
+type Setup = WalletSetupView;
 type OwnerAction = (review: AuthorityReview, action: 'deploy' | 'bootstrap' | 'sign' | 'close', close?: AuthorityCloseReview)
   => Promise<{ kind: 'signature' | 'transaction' | 'batch'; value: string }>;
 const endpoint = '/api/wallet/strategy/authority';
@@ -33,14 +33,17 @@ const labels: Record<AuthorityPublic['state'], string> = {
   verified: 'تفويض محفوظ بعد التحقق؛ الجاهزية التشغيلية تُراجع منفصلة',
   closing: 'الصلاحية قيد الإغلاق؛ إنشاء صلاحيات أوامر جديدة محجوب', closed: 'اكتمل التحقق من إغلاق الصلاحية', blocked: 'المراجعة محجوبة حتى معالجة المتطلبات',
 };
-export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fundingAction, fundingAttemptResult }: { wallet: Snapshot | null; ownerAction: OwnerAction;
+export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fundingAction, fundingAttemptResult, executorGasAction, executorGasAttemptResult }: { wallet: Snapshot | null; ownerAction: OwnerAction;
   callsStatus: (id: string) => Promise<{ status: number; transactionHashes: `0x${string}`[] }>;
-  fundingAction: FundingOwnerAction; fundingAttemptResult: (result: FundingAttemptResult) => void }) {
+  fundingAction: FundingOwnerAction; fundingAttemptResult: (result: FundingAttemptResult) => void;
+  executorGasAction: ExecutorGasOwnerAction; executorGasAttemptResult: (result: ExecutorGasAttemptResult, executor: string) => void }) {
   const [report, setReport] = useState<Report | null>(null), [pending, setPending] = useState(false);
   const [notice, setNotice] = useState(''), [error, setError] = useState(''), [reviewed, setReviewed] = useState(false);
   const [submittedReferences, setSubmittedReferences] = useState<string[]>([]);
   const [setup, setSetup] = useState<Setup | null>(null);
   const [feasibility, setFeasibility] = useState<WalletFeasibility | null>(null);
+  const [executorGasBlocked, setExecutorGasBlocked] = useState(false), [reviewSuppressed, setReviewSuppressed] = useState(false);
+  const refreshedGasAttempts = useRef(new Set<string>());
   const busy = useRef(false), alive = useRef(true);
   useEffect(() => {
     alive.current = true;
@@ -68,7 +71,7 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fund
     void read();
     return () => { alive.current = false; controller.abort(); if (retryTimer) clearTimeout(retryTimer); };
   }, []);
-  const review = report?.review, close = report?.close;
+  const review = reviewSuppressed ? null : report?.review, close = report?.close;
   const walletNetwork = strategyNetwork(wallet?.chainId), reviewNetwork = strategyNetwork(review?.chainId), setupNetwork = strategyNetwork(setup?.chainId);
   const quoteAsset = review?.allowances.find(a => a.token.toLowerCase() === review.terms.quoteToken.toLowerCase());
   const matched = !!wallet && !!review && !!reviewNetwork && wallet.chainId === String(review.chainId) && wallet.address.toLowerCase() === review.owner.toLowerCase();
@@ -76,16 +79,18 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fund
   const feasibleNow = () => !!wallet && currentFeasibility(feasibility, wallet.address, wallet.chainId);
   const feasible = feasibleNow();
   const walletOwner = wallet?.address.toLowerCase(), walletChain = wallet?.chainId;
-  useEffect(() => { setReviewed(false); setSetup(null); }, [walletOwner, walletChain]);
+  useEffect(() => { setReviewed(false); setSetup(null); setExecutorGasBlocked(false); setReviewSuppressed(false); refreshedGasAttempts.current.clear(); }, [walletOwner, walletChain]);
   useEffect(() => {
     if (!feasibility) return;
     const timer = setTimeout(() => { setFeasibility(null); setReviewed(false); }, Math.min(2147483647, Math.max(0, feasibility.expiresAt - Date.now())));
     return () => clearTimeout(timer);
   }, [feasibility]);
-  const canPrepare = report && !['verified', 'closing'].includes(report.state);
-  const canBootstrap = feasible && matched && reviewed && !expiredReview && review && !review.blockers.length && !review.deploymentStep
+  const gasRequired = setup?.chainId === 100 && setup.blockers.includes('wallet_executor_gas_required');
+  const gasGate = executorGasBlocked || gasRequired;
+  const canPrepare = report && !gasGate && !['verified', 'closing'].includes(report.state);
+  const canBootstrap = !gasGate && feasible && matched && reviewed && !expiredReview && review && !review.blockers.length && !review.deploymentStep
     && ['draft', 'owner-actions-pending'].includes(report?.state ?? '');
-  const canSign = feasible && matched && reviewed && !expiredReview && review && !review.blockers.length && !review.deploymentStep
+  const canSign = !gasGate && feasible && matched && reviewed && !expiredReview && review && !review.blockers.length && !review.deploymentStep
     && report?.state === 'signature-pending';
   async function post(payload: Record<string, unknown>): Promise<Report> {
     if (!report) throw new Error('أعد قراءة سجل الصلاحية.');
@@ -94,7 +99,7 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fund
       body: JSON.stringify(payload), signal: AbortSignal.timeout(45000) });
     const value = await response.json().catch(() => null);
     if (!response.ok) throw new Error(value?.error ?? 'تعذر تأكيد الخطوة. حدّث المراجعة قبل إعادة المحاولة.');
-    if (alive.current) { setReport(value as Report); setReviewed(false); }
+    if (alive.current) { setReport(value as Report); setReviewed(false); setReviewSuppressed(false); }
     return value as Report;
   }
   async function run(action: string) {
@@ -102,6 +107,8 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fund
     busy.current = true; setPending(true); setError(''); setNotice('');
     const reference = review ? { id: review.id, digest: review.digest, expectedRevision: report.revision } : {};
     try {
+      if ((executorGasBlocked && ['setup', 'prepare', 'deploy', 'bootstrap', 'sign'].includes(action))
+        || (gasRequired && ['prepare', 'deploy', 'bootstrap', 'sign'].includes(action))) throw new Error('أكمل حسم خطوة غاز المشغّل وتجديد الإعداد قبل مراجعة الصلاحية.');
       if (['setup', 'prepare', 'deploy', 'bootstrap', 'sign'].includes(action) && !feasibleNow()) {
         throw new Error('أكمل فحص الأصول والتكلفة الحديث لهذا الحساب والشبكة قبل تجهيز الإعداد أو مراجعة صلاحية جديدة.');
       }
@@ -116,7 +123,7 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fund
         if (!alive.current) return;
         if (result?.chainId !== chainId || typeof result.owner !== 'string' || result.owner.toLowerCase() !== wallet.address.toLowerCase()) throw new Error('لم يطابق الإعداد الحساب والشبكة المطلوبين. أعد القراءة.');
         setSetup(result as Setup); setReviewed(false);
-        setNotice(result.status === 'configured' ? 'حُفظ إعداد محدود وغير مفعّل من الأصول والأسواق المتحقق منها. الخطوة التالية إعداد مراجعة الصلاحية.'
+        setNotice(result.status === 'configured' ? result.blockers.includes('wallet_executor_gas_required') ? 'حُفظ الإعداد. أكمل خطوة غاز المشغّل أدناه، ثم تُجدّد مراجعة الصلاحية.' : 'حُفظ إعداد محدود وغير مفعّل من الأصول والأسواق المتحقق منها. الخطوة التالية إعداد مراجعة الصلاحية.'
           : 'لا تتوفر متطلبات إعداد الصلاحية بعد. الأرصدة والعوائق المقروءة موضحة أدناه.');
       }
       else if (action === 'prepare') { await post({ action: 'prepare', expectedRevision: report.revision }); setNotice('أُعدت المراجعة من إعداد الخادم. راجع النطاق والمدة والمبالغ أدناه.'); }
@@ -167,13 +174,37 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fund
     } catch (failure) { if (alive.current) setError(failure instanceof Error ? failure.message : 'تعذر تأكيد الخطوة. أعد قراءة الحالة قبل المحاولة.'); }
     finally { busy.current = false; if (alive.current) setPending(false); }
   }
+  async function gasSettled(attemptId: string, funded: boolean) {
+    if (busy.current || !wallet || wallet.chainId !== '100' || !report || !setup || refreshedGasAttempts.current.has(attemptId)) return;
+    busy.current = true; setPending(true); setReviewed(false); setReviewSuppressed(true); setFeasibility(null); setError('');
+    const snapshot = structuredClone(wallet), executor = setup.executor;
+    try {
+      const fresh = await refreshAfterExecutorGas({ wallet: snapshot, executor, csrfToken: report.csrfToken, isCurrent: () => alive.current });
+      if (!alive.current) return;
+      setFeasibility(fresh.feasibility); setSetup(fresh.setup); setReport(fresh.report); setReviewSuppressed(false);
+      refreshedGasAttempts.current.add(attemptId);
+      setNotice(funded ? 'تأكد الغاز وجُدّد الفحص والإعداد والمراجعة. راجع نطاق الصلاحية قبل طلب MetaMask التالي.'
+        : 'أثبتت السلسلة فشل التحويل. جُدّد الإعداد برقم المعاملة الحالي؛ راجع خطوة الغاز مجددًا.');
+    } catch {
+      // Preparation can increment the server revision before a final cost read
+      // fails. Refresh that revision without exposing an old review for signing.
+      try {
+        const r = await fetch(endpoint, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(10000) });
+        const latest = await r.json().catch(() => null) as Report | null;
+        if (alive.current && r.ok && latest?.version === 1 && (latest.revision === null || Number.isSafeInteger(latest.revision))
+          && typeof latest.csrfToken === 'string') setReport(latest);
+      } catch { /* Keep the old review suppressed until a successful read. */ }
+      if (alive.current) setError('لم يكتمل تجديد الإعداد. أعد فحص الأصول وتجهيز الإعداد قبل مراجعة صلاحية جديدة؛ لا تُعد إرسال تحويل الغاز. إذا تعذرت قراءة الحالة، حدّث هذه الصفحة.');
+    }
+    finally { busy.current = false; if (alive.current) setPending(false); }
+  }
   return <section className={styles.panel} aria-labelledby="strategy-authority-heading">
     <div className={styles.panelHeading}><h2 id="strategy-authority-heading">صلاحية المحرك{reviewNetwork ? ' على ' + reviewNetwork.name : ''}</h2></div>
     <div className={styles.reportDetails}>
       <p role="status">{report ? labels[report.state] : 'جارٍ قراءة سجل الصلاحية…'}</p>
       <WalletGnosisReadiness csrfToken={report?.csrfToken ?? null} disabled={pending} />
       <WalletFundingReview wallet={wallet} csrfToken={report?.csrfToken ?? null} ownerAction={fundingAction} syncResult={fundingAttemptResult} disabled={pending} />
-      <WalletFeasibilityAudit wallet={wallet} csrfToken={report?.csrfToken ?? null} onAudit={setFeasibility} disabled={pending} />
+      <WalletFeasibilityAudit wallet={wallet} csrfToken={report?.csrfToken ?? null} onAudit={setFeasibility} externalAudit={feasibility} disabled={pending} />
       {!feasible && <p>لم يثبت فحص حديث يجيز إعداداً جديداً. يبقى التحقق وإغلاق الصلاحيات السابقة متاحين.</p>}
       <p>هذه الصلاحية لاستراتيجية المحرك الرئيسية. يراجع صاحب المحفظة ترقية الحساب والموافقات المحدودة والتفويض قبل أي طلب من MetaMask.</p>
       {review && <>
@@ -211,14 +242,14 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fund
         {close && <p>دفعة الإغلاق تشمل {close.outstandingUids.length} من أصل {close.remainingOrders ?? close.outstandingUids.length} أوامر تحتاج إنهاءً، وتعطيل التفويض وتصفير موافقات الرموز المحددة. عند بقاء أوامر، أعد إعداد دفعة الإغلاق بعد تأكيد السابقة. الإغلاق يُثبت بقراءة السلسلة للمجموعة المتتبعة كاملةً، ولا يُفترض من انتهاء المدة.</p>}
         {close && <details><summary>معرّفات الأوامر التي ستُبطَل</summary><ul>{close.outstandingUids.map(uid => <li key={uid}><bdi dir="ltr">{uid}</bdi></li>)}</ul>
           <p>تبقى الأصول المملوكة في المحفظة بعد إغلاق صلاحية المحرك، وتحتاج إدارة مستقلة.</p></details>}
-        <label><input type="checkbox" checked={reviewed} disabled={pending || !matched}
+        <label><input type="checkbox" checked={reviewed} disabled={pending || !matched || gasGate}
           onChange={e => setReviewed(e.target.checked)} /> راجعت الحساب والعقود والرموز والحدود والمدة والعمليات المعروضة.</label>
       </>}
       <div className={styles.controls}>
         {report && !['verified', 'closing'].includes(report.state) && <button className={styles.button} type="button"
-          disabled={pending || !wallet || !walletNetwork || !feasible} onClick={() => void run('setup')}>تجهيز إعداد المحرك من المحفظة والأسواق</button>}
+          disabled={pending || executorGasBlocked || !wallet || !walletNetwork || !feasible} onClick={() => void run('setup')}>تجهيز إعداد المحرك من المحفظة والأسواق</button>}
         {canPrepare && <button className={styles.button} type="button" disabled={pending || !feasible} onClick={() => void run('prepare')}>إعداد مراجعة حديثة</button>}
-        {review?.deploymentStep && <button className={styles.button} type="button" disabled={pending || !feasible || !matched || !reviewed || expiredReview || !review.deploymentStep.gasEstimate || !!review.deploymentStep.blocker}
+        {review?.deploymentStep && <button className={styles.button} type="button" disabled={pending || gasGate || !feasible || !matched || !reviewed || expiredReview || !review.deploymentStep.gasEstimate || !!review.deploymentStep.blocker}
           onClick={() => void run('deploy')}>مراجعة نشر عقد الحماية في MetaMask</button>}
         {review && ['draft', 'owner-actions-pending'].includes(report?.state ?? '') && <button className={styles.button} type="button" disabled={pending || !canBootstrap || !review.calls.length}
           onClick={() => void run('bootstrap')}>مراجعة الترقية والموافقات المحدودة</button>}
@@ -248,6 +279,8 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fund
         </dl>
         {setup.blockers.length > 0 && <ul>{setup.blockers.map(code => <li key={code}><bdi dir="ltr">{code}</bdi></li>)}</ul>}
       </div>}
+      {setup?.status === 'configured' && setup.chainId === 100 && <WalletExecutorGas wallet={wallet} executor={setup.executor} csrfToken={report?.csrfToken ?? null}
+        ownerAction={executorGasAction} syncResult={executorGasAttemptResult} onSettled={(id, funded) => void gasSettled(id, funded)} onStateChange={setExecutorGasBlocked} disabled={pending} />}
       {(submittedReferences.length > 0 || (report?.candidateTransactionHashes.length ?? 0) > 0 || (report?.candidateCallBatchIds.length ?? 0) > 0) && <details>
         <summary>مراجع العمليات المرسلة للتحقق</summary><p>هذه مراجع إرسال غير متحقق منها؛ لا تثبت نجاح العملية أو تكلفتها.</p>
         <ul>{[...new Set([...submittedReferences, ...(report?.candidateTransactionHashes ?? []), ...(report?.candidateCallBatchIds ?? [])])].map(value => <li key={value}><bdi dir="ltr">{value}</bdi></li>)}</ul>

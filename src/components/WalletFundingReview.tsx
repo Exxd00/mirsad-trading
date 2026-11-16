@@ -180,7 +180,8 @@ export function WalletFundingReview({ wallet, csrfToken, ownerAction, syncResult
         </dl>
         <p>مبالغ الجسر تقديرية؛ يُتحقق من الوصول على Gnosis. الرسوم المدرجة في العرض محسوبة ضمن الناتج المتوقع.</p>
         <p>تعرض MetaMask تكلفة شبكة Ethereum وعملة دفعها. عند توفر <a href="https://support.metamask.io/manage-crypto/transactions/metamask-gas-station/" target="_blank" rel="noreferrer">Gas Included</a> يمكن اختيار mUSD؛ لم يثبت التطبيق إتاحة الخدمة أو رسومها لهذا الطلب.</p>
-        <details><summary>رسوم العرض والعقود</summary><ul>{review.quotedFees.map((f, i) => <li key={`${f.name}:${i}`}>{f.name}: <bdi>{units(f.amountRaw)} mUSD</bdi>، مدرجة في العرض.</li>)}</ul>
+        {review.sourceSwap && <p>يتضمن المسار تحويلًا على Ethereum من <bdi>{units(review.sourceSwap.amountInRaw)} mUSD</bdi> إلى USDC، بحد أدنى <bdi>{units(review.sourceSwap.minimumOutRaw)} USDC</bdi> قبل الجسر. تحقّقنا من أن عقد التحويل يفرض هذا الحد على الناتج؛ لم يُتحقق من مصدر المنفّذ الداخلي للمبادلة.</p>}
+        <details><summary>رسوم العرض والعقود</summary><ul>{review.quotedFees.map((f, i) => <li key={`${f.name}:${i}`}>{f.name}: <bdi>{units(f.amountRaw)} {f.assetSymbol}</bdi>، مدرجة في العرض.</li>)}</ul>
           <p>مستلم الموافقة المحدودة: <bdi dir="ltr">{review.approval.spender}</bdi>؛ الحد <bdi>{units(review.approval.amountRaw)} mUSD</bdi>.</p>
           <p>تظل الموافقة حتى استهلاكها أو إلغائها؛ مهلة المراجعة تخص العرض.</p>
           <p>بصمة المراجعة: <bdi dir="ltr">{review.digest}</bdi>.</p></details>
