@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it,vi } from 'vitest';
 import { keccak256, stringToHex, type Hex } from 'viem';
 import { composeGnosisEurStateHistory, GnosisMarketClient, GnosisMarketError, GNOSIS_WETH_MAPPING,
   parseGnosisMarketMapping,gnosisFundingSourceId,parseStoredGnosisEurSeries,gnosisEurSeriesDigest } from '../src/lib/wallet/gnosis-market';
+import { GNOSIS_LEGACY_WETH_MAPPING,gnosisEurBarFingerprint } from '../src/lib/wallet/gnosis-market';
 import type { GnosisPoolStateBlock, GnosisPoolStateSeries } from '../src/lib/wallet/gnosis-pool-state';
 import type { GnosisStableHistory } from '../src/lib/wallet/gnosis-reference-state';
 import type { GnosisOracleHistory, GnosisUnderlyingRound } from '../src/lib/wallet/gnosis-oracle-reference';
@@ -32,6 +33,51 @@ function input(){
 }
 afterEach(()=>vi.useRealTimers());
 describe('chronological Gnosis EUR reference composition',()=>{
+  function jitter(nextAt=START+55){const x=input(),b={...block(START+55),number:String(1000+Math.floor((nextAt-START+5)/5)),timestamp:nextAt,hash:hash('block'+nextAt)};
+    x.oracle.baseline.usdcUsd.updatedAt=START+50-86405;
+    const n=x.oracle.timeline[0];n.block=b;n.transactionHash=hash('successor');n.round.availableAtBlock=b;
+    n.round.availability='transmission-block';n.round.updatedAt=nextAt;
+    return x;
+  }
+  it('qualifies the observed +5s event/+10s delivery using old FX until the actual ordered update',()=>{
+    const x=jitter(),s=composeGnosisEurStateHistory(x.pool,x.stable,x.oracle);
+    expect(s.bars[0]).toMatchObject({open:'20',low:'10',high:'40',close:'40'});
+    expect(s.coverage.historyPolicy).toMatchObject({policyId:'gnosis-ema-history-event-grace-v2',qualifications:[{
+      at:START+50,updatedAt:START+50-86405,roundId:'1',answerRaw:'100000000',successor:{roundId:'2',block:{timestamp:START+55}}}]});
+    expect(parseStoredGnosisEurSeries(s)).toEqual(s);
+    const reordered=JSON.parse(JSON.stringify(s,(_,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).reverse()):v));
+    expect(gnosisEurBarFingerprint(s.bars[0],s.marks[0],s.coverage.historyPolicy))
+      .toBe(gnosisEurBarFingerprint(reordered.bars[0],reordered.marks[0],reordered.coverage.historyPolicy));
+  });
+  it.each([START+106,START+645,CLOSE])('rejects successor availability at %s beyond the whole-delivery ceiling or strict bar close',nextAt=>{
+    const x=jitter(nextAt);x.oracle.timeline[0].round.updatedAt=START+55;
+    expect(()=>composeGnosisEurStateHistory(x.pool,x.stable,x.oracle)).toThrow();
+  });
+  it('does not use a later round when the immediate successor changes phase or is missing',()=>{
+    const x=jitter();x.oracle.timeline[0].round.roundId=((1n<<64n)+2n).toString();
+    expect(()=>composeGnosisEurStateHistory(x.pool,x.stable,x.oracle)).toThrow('gnosis_market_reference_stale');
+    const y=jitter();y.oracle.timeline=[];expect(()=>composeGnosisEurStateHistory(y.pool,y.stable,y.oracle)).toThrow('gnosis_market_reference_stale');
+  });
+  it('does not qualify an old-computed round first delivered inside the bar after another fresh opening round',()=>{
+    const x=jitter(),arrival=block(START+10),delayed=structuredClone(x.oracle.baseline.usdcUsd);
+    delayed.roundId='2';delayed.availableAtBlock=arrival;delayed.availability='transmission-block';
+    x.oracle.baseline.usdcUsd.updatedAt=START-100;x.oracle.timeline[0].round.roundId='3';
+    x.oracle.timeline.unshift({block:arrival,transactionHash:hash('delayed-old-round'),logIndex:1,round:delayed});
+    let error:unknown;try{composeGnosisEurStateHistory(x.pool,x.stable,x.oracle);}catch(e){error=e;}
+    expect(error).toMatchObject({code:'gnosis_market_reference_stale',historyDiagnostic:{at:START+50,roundId:'2',phase:'event'}});
+  });
+  it('does not extend strict minute/open/close freshness or expose v2 candles through a legacy mapping',async()=>{
+    const x=jitter(),end=block(START+55);x.pool.timeframeSeconds=60;x.pool.bars[0].closeTime=START+60;
+    x.pool.timeline.forEach(e=>{e.block=block(START+50);e.logIndex+=2;});x.oracle.points[0].at=START+60;
+    x.pool.coverage.end.block=end;x.stable.end.block=end;x.oracle.coverage.to=end;
+    expect(()=>composeGnosisEurStateHistory(x.pool,x.stable,x.oracle)).toThrow('gnosis_market_reference_stale');
+    const fetcher=vi.fn<typeof fetch>(()=>{throw Error('Unexpected network');});
+    const legacy=new GnosisMarketClient({mappings:[{...GNOSIS_LEGACY_WETH_MAPPING}],fetch:fetcher});
+    expect(()=>parseGnosisMarketMapping(GNOSIS_LEGACY_WETH_MAPPING)).toThrow('gnosis_market_mapping_invalid');
+    expect(parseGnosisMarketMapping(GNOSIS_LEGACY_WETH_MAPPING,true)).toEqual(GNOSIS_LEGACY_WETH_MAPPING);
+    await expect(legacy.candles(GNOSIS_LEGACY_WETH_MAPPING,CLOSE,START)).rejects.toMatchObject({code:'gnosis_market_history_policy_upgrade_required'});
+    expect(fetcher).not.toHaveBeenCalled();
+  });
   it.each(['open','event','close'] as const)('captures the exact historical %s point without changing stale rejection or reading the network',phase=>{
     const x=input();x.oracle.baseline.eurUsd.updatedAt=phase==='open'?START-86401:phase==='event'?START-86400:CLOSE-86401;
     let error:unknown;try{composeGnosisEurStateHistory(x.pool,x.stable,x.oracle);}catch(e){error=e;}

@@ -14,6 +14,7 @@ import { cowPolicyOrderAppData, createCowPolicyDraft } from '../src/lib/wallet/c
 import { CowExecution } from '../src/lib/wallet/cow-execution';
 import { CowExecutionJournal } from '../src/lib/wallet/cow-execution-journal';
 import { CowSubmitApi } from '../src/lib/wallet/cow-submit-api';
+import { CowExecutionError } from '../src/lib/wallet/cow-execution-types';
 import type { CowAuthority, CowExecutionRpc, CowPreparedTx, CowTxPhase, CowTxState } from '../src/lib/wallet/cow-execution-types';
 import { account, instrument, quote, signal } from './execution-fixtures';
 import { attachTestNetLimitProof } from './helpers/cow-net-limit-proof';
@@ -58,7 +59,7 @@ beforeEach(async () => { await query('TRUNCATE app_settings, audit_events RESTAR
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 afterAll(async () => { await closeDatabase(); vi.unstubAllEnvs(); });
 
-async function fixture(intent: BuyIntent | SellIntent = buy(), expiresAt = NOW + 3600) {
+async function fixture(intent: BuyIntent | SellIntent = buy(), expiresAt = NOW + 3600,assertEntrySource?:()=>void) {
   const a = authority(expiresAt), root = new SqlJournal(), lease = (await root.acquire(CONFIG.accountId))!;
   await root.save(lease, { ...initialState(), entriesEnabled: true, executionArmed: true }); await root.begin(lease, intent, NOW);
   const id = (await root.decision(lease, intent.key))!.sourceIdentity!.clientOrderId;
@@ -89,13 +90,21 @@ async function fixture(intent: BuyIntent | SellIntent = buy(), expiresAt = NOW +
   };
   const api = { post: vi.fn(async () => 'accepted' as const) }, arm = vi.fn(async () => {});
   const publish = vi.fn(async () => {});
-  const execution = new CowExecution({ journal, rpc, api, authority: a, gasLimits, markets: [market], clock: () => now, armCancellation: arm, authorizePublish: publish });
+  const execution = new CowExecution({ journal, rpc, api, authority: a, gasLimits, markets: [market], clock: () => now, armCancellation: arm, authorizePublish: publish,assertEntrySource });
   const input = { clientOrderId: id, symbol: intent.symbol, side: intent.side, type: intent.side === 'buy' ? 'limit' as const : 'market' as const,
     quantity: intent.quantity, ...(intent.side === 'buy' ? { limitPrice: intent.limitPrice } : {}) };
   return { a, root, lease, id, journal, phases, proof, rpc, api, arm, publish, execution, intent, input, setNow: (at: number) => { now = at; } };
 }
 
 describe('persistent CoW order lifecycle under the existing financial lease', () => {
+  it('keeps a protective SELL usable while the server fences new historical entry sources',async()=>{
+    const b=buy(),intent:SellIntent={side:'sell',symbol:b.symbol,positionId:'isolated-owned-position',key:'a'.repeat(64),quantity:'0.1',reason:'stop',
+      signal:null,reduceOnly:true,protectionIds:['isolated-protection'],triggerQuote:b.quote};
+    const guard=vi.fn(()=>{throw new CowExecutionError('wallet_market_history_policy_upgrade_required');});
+    const f=await fixture(intent,NOW+3600,guard),result=await f.execution.submitOrder(f.input,{lease:f.lease,intent});
+    expect(result.record.order.kind).toBe('sell');expect(result.record.postState).toBe('accepted');expect(guard).not.toHaveBeenCalled();
+    expect(f.rpc.prepare).toHaveBeenCalledTimes(1);expect(f.api.post).toHaveBeenCalledTimes(1);await f.root.release(f.lease);
+  });
   it.each(['false', 'missing', 'appdata'] as const)('blocks new buy preparation for %s pricing proof without creating a protocol order', async mode => {
     const intent = buy(), exact = intent.quote.exactSize!;
     if (mode === 'false') delete exact.netLimitProof;

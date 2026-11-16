@@ -15,7 +15,7 @@ import { normalizeCowGasLimits } from './cow-gas-limits';
 import { readExecutorGasChain, ExecutorGasReadError } from './gnosis-executor-gas-rpc';
 import { readGnosisMarketReadiness } from './gnosis-market-readiness-job';
 import { sqlGnosisEurStateStore } from './gnosis-eur-state-store';
-import { GNOSIS_REFERENCE_IDENTITY, gnosisEurBarFingerprint, parseStoredGnosisEurSeries, type GnosisEurStateStore } from './gnosis-market';
+import { GNOSIS_HISTORY_IDENTITY,GNOSIS_EMA_CACHE_PREFIX,GNOSIS_LEGACY_CACHE_PREFIX, gnosisEurBarFingerprint, parseStoredGnosisEurSeries, type GnosisEurStateStore } from './gnosis-market';
 
 export type ExecutorGasTransaction = { chainId: 100; from: Address; to: Address; value: Hex; data: '0x' };
 export type ExecutorGasReview = {
@@ -94,10 +94,10 @@ export async function lockExecutorGasContext(tx: SqlExecutor, expected: Executor
   await tx.query('SELECT key FROM app_settings WHERE key=ANY($1::text[]) FOR SHARE',
     [[STRATEGY_PROFILE_KEY, COW_RUNTIME_KEY, AUTHORITY_KEY, signerKey(), `execution:v1:${CONFIG.accountId}:state`]]);
   await assertExecutorGasContext(tx, expected);
-  const fence = await tx.query<{ value: unknown }>('SELECT value FROM app_settings WHERE key=$1 FOR SHARE',
-    [`wallet:gnosis:eur-state:v1:${GNOSIS_REFERENCE_IDENTITY}:quarantine`]);
-  const value = fence.rows[0]?.value as { version?: unknown; quarantined?: unknown } | undefined;
-  if (fence.rowCount !== 1 || !value || value.version !== 1 || value.quarantined !== false || Object.keys(value).length !== 2) return fail('wallet_executor_gas_history_required');
+  const fence = await tx.query<{key:string; value: unknown }>('SELECT key,value FROM app_settings WHERE key=ANY($1::text[]) ORDER BY key FOR SHARE',
+    [[GNOSIS_EMA_CACHE_PREFIX+'quarantine',GNOSIS_LEGACY_CACHE_PREFIX+'quarantine']]);
+  if(!fence.rows.some(r=>r.key===GNOSIS_EMA_CACHE_PREFIX+'quarantine')||fence.rows.some(r=>{const v=r.value as {version?:unknown;quarantined?:unknown}|null;
+    return !v||v.version!==1||v.quarantined!==false||Object.keys(v).length!==2;}))return fail('wallet_executor_gas_history_required');
 }
 async function historyReady(deps: ExecutorGasDependencies, now: number) {
   const end = await (deps.historyEnd ?? (async () => (await readGnosisMarketReadiness()).report?.history.lastCloseTime ?? null))();
@@ -108,12 +108,12 @@ async function historyReady(deps: ExecutorGasDependencies, now: number) {
   for (const chunk of chunks) { const s = parseStoredGnosisEurSeries(chunk); count += s.bars.length;
     if (count > 20000 || s.intervalSeconds !== 900) return fail('wallet_executor_gas_history_required');
     for (let i = 0; i < s.bars.length; i++) { const b = s.bars[i]; if (b.closeTime <= end - 900000 || b.closeTime > end) continue;
-      const f = gnosisEurBarFingerprint(b, s.marks[i]), previous = bars.get(b.closeTime);
+      const f = gnosisEurBarFingerprint(b, s.marks[i],s.coverage.historyPolicy), previous = bars.get(b.closeTime);
       if (previous && previous !== f) return fail('wallet_executor_gas_history_required'); bars.set(b.closeTime, f); }
   }
   if (bars.size !== 1000) return fail('wallet_executor_gas_history_required');
   for (let at = end - 999 * 900; at <= end; at += 900) if (!bars.has(at)) return fail('wallet_executor_gas_history_required');
-  return fundingDigest({ identity: GNOSIS_REFERENCE_IDENTITY, end, bars: [...bars].sort(([a], [b]) => a - b) });
+  return fundingDigest({ identity: GNOSIS_HISTORY_IDENTITY, end, bars: [...bars].sort(([a], [b]) => a - b) });
 }
 async function build(owner: string, executor: string, deps: ExecutorGasDependencies) {
   const clock = deps.clock ?? time, start = Date.now(); let active = true, timer: ReturnType<typeof setTimeout> | undefined;

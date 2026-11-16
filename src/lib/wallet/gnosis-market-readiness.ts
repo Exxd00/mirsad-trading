@@ -1,7 +1,7 @@
 import 'server-only';
 import { CONFIG, decimal, fresh, type Candle } from '../execution/v1/model';
-import { GnosisMarketClient, GNOSIS_MARKET_PROVIDER, GNOSIS_REFERENCE_IDENTITY, gnosisEurBarFingerprint,
-  gnosisEurSeriesDigest, parseStoredGnosisEurSeries, type GnosisEurStateSeries, type GnosisEurStateStore,
+import { GnosisMarketClient, GNOSIS_MARKET_PROVIDER, GNOSIS_REFERENCE_IDENTITY, GNOSIS_HISTORY_IDENTITY,GNOSIS_HISTORY_POLICY,gnosisEurBarFingerprint,
+  gnosisEurSeriesDigest, validGnosisHistoryPolicy,parseStoredGnosisEurSeries, type GnosisEurStateSeries, type GnosisEurStateStore,
   type GnosisMarketOptions } from './gnosis-market';
 import { sqlGnosisEurStateStore } from './gnosis-eur-state-store';
 import { gnosisHistoricalDiagnosticSchema, type GnosisHistoricalReferenceDiagnostic } from './gnosis-market-diagnostic';
@@ -17,7 +17,7 @@ export type GnosisMarketReadiness = {
   /** Provider-directed hold only; retryAt remains advisory for owner UI. */
   providerRetryAt?: number | null;
   historyDiagnostic?: GnosisHistoricalReferenceDiagnostic | null;
-  history: { requiredCandles: 1000; completedCandles: number | null; contiguousCandles: number | null;
+  history: { policyId?:typeof GNOSIS_HISTORY_POLICY.id;sourceIdentity?:string;requiredCandles: 1000; completedCandles: number | null; contiguousCandles: number | null;
     targetCloseTime: number; firstCloseTime: number | null; lastCloseTime: number | null; provenanceIds: string[]; complete: boolean };
   current: { status: 'ready' | 'unavailable'; block: CurrentReference['block'] | null; sourceAt: number | null; readAt: number | null;
     wethEur: string | null; usdceEur: string | null; xdaiEur: string | null; sourceId: string | null };
@@ -48,6 +48,8 @@ function validateHistory(s: GnosisEurStateSeries, close: number) {
   if (!s || s.version !== 1 || s.chainId !== 100 || s.method !== GNOSIS_MARKET_PROVIDER || s.referenceOnly !== true || s.executionReady !== false
     || s.intervalSeconds !== STEP || !Array.isArray(s.bars) || s.bars.length !== COUNT || !Array.isArray(s.marks) || s.marks.length !== COUNT
     || s.coverage?.identity !== GNOSIS_REFERENCE_IDENTITY || s.coverage.finalized !== true
+    ||s.coverage.historyPolicy?.policyId!==GNOSIS_HISTORY_POLICY.id||s.coverage.historyPolicy.sourceIdentity!==GNOSIS_HISTORY_IDENTITY
+    ||!validGnosisHistoryPolicy(s)
     || s.coverage.composition !== 'chronological-block-and-global-log-index'
     || s.coverage.bridgeReference !== 'explicit-transmuter-underlying-reference-not-spot-peg'
     || ![s.provenanceId, s.coverage.state, s.coverage.stable, s.coverage.oracle].every(v => typeof v === 'string' && hash.test(v))) invalid();
@@ -71,7 +73,7 @@ function historyProgress(chunks: GnosisEurStateSeries[], close: number): GnosisM
     let relevant = false;
     s.bars.forEach((b, i) => {
       if (b.closeTime <= close - COUNT * STEP || b.closeTime > close) return;
-      relevant = true; const fingerprint = gnosisEurBarFingerprint(b, s.marks[i]), previous = rows.get(b.closeTime);
+      relevant = true; const fingerprint = gnosisEurBarFingerprint(b, s.marks[i],s.coverage.historyPolicy), previous = rows.get(b.closeTime);
       if (previous && previous.fingerprint !== fingerprint) invalid();
       rows.set(b.closeTime, { bar: b, fingerprint });
     });
@@ -79,7 +81,7 @@ function historyProgress(chunks: GnosisEurStateSeries[], close: number): GnosisM
   }
   let contiguous = 0; for (let at = close; at > close - COUNT * STEP && rows.has(at); at -= STEP) contiguous++;
   const times = [...rows.keys()].sort((a, b) => a - b);
-  return { requiredCandles: COUNT, completedCandles: rows.size, contiguousCandles: contiguous, targetCloseTime: close,
+  return { policyId:GNOSIS_HISTORY_POLICY.id,sourceIdentity:GNOSIS_HISTORY_IDENTITY,requiredCandles: COUNT, completedCandles: rows.size, contiguousCandles: contiguous, targetCloseTime: close,
     firstCloseTime: times[0] ?? null, lastCloseTime: times.at(-1) ?? null, provenanceIds: [...proofs].sort(), complete: rows.size === COUNT && contiguous === COUNT };
 }
 function currentValid(v: CurrentReference, now: number) {
@@ -122,7 +124,7 @@ async function runWithin(deps: GnosisMarketReadinessDependencies, parent: AbortS
       errors.push('wallet_market_readiness_retry_invalid');
     }
   };
-  let history: GnosisMarketReadiness['history'] = { requiredCandles: COUNT, completedCandles: null, contiguousCandles: null,
+  let history: GnosisMarketReadiness['history'] = { policyId:GNOSIS_HISTORY_POLICY.id,sourceIdentity:GNOSIS_HISTORY_IDENTITY,requiredCandles: COUNT, completedCandles: null, contiguousCandles: null,
     targetCloseTime: close, firstCloseTime: null, lastCloseTime: null, provenanceIds: [], complete: false };
   let reference: CurrentReference | null = null;
   const market = (signal: AbortSignal, historyStore?: GnosisEurStateStore) => createMarket({ clock, historyStore, fetch: (input, init) => {
@@ -131,7 +133,7 @@ async function runWithin(deps: GnosisMarketReadinessDependencies, parent: AbortS
   } });
   try {
     const s = validateHistory(await bounded(HISTORY_MS, 'wallet_market_readiness_history_timeout', signal => market(signal, store).referenceSeries(now, null), parent), close);
-    history = { requiredCandles: COUNT, completedCandles: COUNT, contiguousCandles: COUNT, targetCloseTime: close,
+    history = { policyId:GNOSIS_HISTORY_POLICY.id,sourceIdentity:GNOSIS_HISTORY_IDENTITY,requiredCandles: COUNT, completedCandles: COUNT, contiguousCandles: COUNT, targetCloseTime: close,
       firstCloseTime: s.bars[0].closeTime, lastCloseTime: s.bars.at(-1)!.closeTime, provenanceIds: [s.provenanceId], complete: true };
   } catch (e) {
     captureCooldown(e);

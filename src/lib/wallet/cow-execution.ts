@@ -14,6 +14,8 @@ import { cowFail, CowExecutionError, type CowAuthority, type CowCancelContext, t
   type CowTxPhase, type CowTxRecord, type CowTxState, type CowGasLimits } from './cow-execution-types';
 
 export type CowExecutionOptions = { journal: CowExecutionJournal; rpc: CowExecutionRpc; api: CowExecutionApi;
+  /** Server-owned mapping policy fence, also applied to resumed BUY bytes. */
+  assertEntrySource?:()=>void;
   authority: CowAuthority; markets: CowExecutionMarket[]; clock?: () => number;
   gasLimits?: CowGasLimits;
   authorizePublish?: (record: CowOrderRecord) => Promise<void>;
@@ -57,6 +59,7 @@ export class CowExecution {
       || (record.chainId ?? 1) !== p.chainId || cowOrderUid(expected, p.owner, p.chainId) !== record.uid || record.cancelAt !== (record.intent.side === 'buy' ? record.intent.expiresAt : null)) return cowFail('cow_order_identity_invalid');
   }
   private frozenConversion(intent: Intent, market: CowExecutionMarket): CowConversion {
+    if(intent.side==='buy')this.options.assertEntrySource?.();
     const quote = intent.side === 'buy' ? intent.quote : intent.triggerQuote;
     const conversion = (quote as typeof quote & { conversion?: CowConversion })?.conversion;
     if (!quote || !conversion || conversion.currency !== market.quoteCurrency || !conversion.sourceId || conversion.sourceId.length > 128

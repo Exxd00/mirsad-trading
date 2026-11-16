@@ -349,6 +349,36 @@ backing/supply log replay and controls; a temporary shortfall is rejected even
 if restored before the end. This is a redemption-unit assumption with bridge
 and governance risk, not a claim that bridged assets always trade at a peg.
 
+The closed 15-minute EMA history now has an explicit separate policy,
+`gnosis-ema-history-event-grace-v2`. Every open and close retains the strict
+86,400-second round-age limit. Only an intrabar event may qualify a short
+delivery delay: the immediate next same-feed canonical transmission must arrive
+strictly before that bar closes, and its full delivery excess beyond the prior
+round's heartbeat must be at most 60 seconds. The earlier event continues to use
+the actually available old answer until the ordered transmission occurs. The
+successor qualifies the closed bar as of its decision time; its answer is never
+backdated. The 60-second ceiling is an engineering policy, not an oracle SLA.
+Current prices, minute valuations, provisional fill FX and funding conversion
+retain their existing strict checks.
+
+The observed blocking case was an actual WXDAI/USDC.e Swap at block 49262392,
+global log 32, timestamp 1794594240. USDC/USD round 73786976294838206587 was
+86,405 seconds old. Its immediate successor arrived in block 49262393, log 97,
+timestamp 1794594245: a total delivery excess of 10 seconds, within the same
+bar ending at 1794594600. Matching reads from the two configured RPC endpoints
+establish this example, not a certificate for the remaining 1,000-bar window.
+
+The historical policy has a distinct `gnosis-history:v2:` identity, SQL
+namespace and mapping/EMA source identity. Strict v1 capsules are imported only
+through validated lineage that retains the original identity, provenance and
+per-bar fingerprints with identical candle and mark values. Original evidence
+is preserved. Parent quarantine and semantic conflicts remain effective across
+imports and cold loads; a different raw contract/feed identity cannot inherit
+these old bars. Legacy runtime mappings retain current reads and protective
+cancellation/exit access, while new or resumed BUY publication and v2 EMA use
+under a legacy identity are blocked. Existing owner-attempt recovery remains
+readable. A history-method migration does not reset capital or risk state.
+
 Validated finalized EUR chunks persist in private SQL settings with compiled
 source identity, canonical digests and per-bar semantic fingerprints. A
 conflicting overlap commits a permanent global quarantine before returning an
@@ -374,6 +404,10 @@ verified chunks survive an incomplete attempt. The UI preserves observation
 times and expires freshness locally; reference completeness is expressly not
 financial readiness. Full 1,000-bar composed EUR history still requires an
 actual successful source probe and is not certified by fixture tests.
+Current-policy readiness requires the explicit historical policy and source
+identity. Older reports remain displayable but cannot certify v2 freshness.
+An active job retains its ID, attempts, lease, cooldown and original expiry;
+an already completed legacy job is not silently restarted by resume-only work.
 
 For a newly mined fill, separate provisional entry-protection FX uses an actual
 canonical block strictly before the completed minute. The original FX block

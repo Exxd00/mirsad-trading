@@ -4,6 +4,7 @@ import { createGnosisMarketReadinessJob, GNOSIS_MARKET_READINESS_JOB_KEY as KEY 
 import type { GnosisMarketReadiness } from '../src/lib/wallet/gnosis-market-readiness';
 import { randomUUID } from 'node:crypto';
 import { historyDiagnostic } from './fixtures/gnosis-history-diagnostic';
+import { GNOSIS_HISTORY_IDENTITY,GNOSIS_HISTORY_POLICY } from '../src/lib/wallet/gnosis-market';
 const NOW = 1794790000, hash = '0x' + 'a'.repeat(64);
 // Synthetic source reports exercise real PGlite coordination only. They do not
 // prove actual market history, liquidity, authority or financial readiness.
@@ -11,7 +12,7 @@ function report(now: number, ready = false): GnosisMarketReadiness {
   const close = Math.floor(now / 900) * 900;
   return { version: 1, chainId: 100, referenceOnly: true, createdExecutionState: false, financialReadiness: 'not-certified',
     status: ready ? 'ready' : 'warming', readAt: now, retryAt: now + 300, errors: [],
-    history: { requiredCandles: 1000, completedCandles: ready ? 1000 : 200, contiguousCandles: ready ? 1000 : 200,
+    history: {policyId:GNOSIS_HISTORY_POLICY.id,sourceIdentity:GNOSIS_HISTORY_IDENTITY, requiredCandles: 1000, completedCandles: ready ? 1000 : 200, contiguousCandles: ready ? 1000 : 200,
       targetCloseTime: close, firstCloseTime: close - (ready ? 999 : 199) * 900, lastCloseTime: close, provenanceIds: [hash], complete: ready },
     current: { status: 'ready', block: { number: '49300370', hash: hash as `0x${string}`, parentHash: hash as `0x${string}`, timestamp: now },
       sourceAt: now, readAt: now, wethEur: '100', usdceEur: '0.92', xdaiEur: '0.91', sourceId: 'gnosis-eur:current:v1:' + hash } };
@@ -30,6 +31,26 @@ beforeEach(async () => { await query('TRUNCATE app_settings,audit_events RESTART
 afterEach(() => { expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); });
 afterAll(async () => { await closeDatabase(); vi.unstubAllEnvs(); });
 describe('explicitly enabled, durable bounded source warmup', () => {
+  it('keeps legacy reports display-only and migrates an existing waiting job without resetting its finite identity or budget',async()=>{
+    const f=fixture();await f.job.start();const raw=(await query<{value:Record<string,unknown>}>('SELECT value FROM app_settings WHERE key=$1',[KEY])).rows[0].value;
+    const legacy=report(NOW);delete legacy.history.policyId;delete legacy.history.sourceIdentity;raw.report=legacy;
+    await query('UPDATE app_settings SET value=$2::jsonb WHERE key=$1',[KEY,JSON.stringify(raw)]);
+    const before=await f.job.read();expect(before.report?.history.policyId).toBeUndefined();expect(before.reportFresh).toBe(false);
+    f.setNow(NOW+300);f.audit.mockResolvedValue(report(NOW+300,true));
+    const next=await f.job.resumeExisting(before.job!.id);
+    expect(next.job).toMatchObject({id:before.job!.id,expiresAt:before.job!.expiresAt,maxAttempts:before.job!.maxAttempts,attempts:before.job!.attempts+1});
+    expect(next.report?.history).toMatchObject({policyId:GNOSIS_HISTORY_POLICY.id,sourceIdentity:GNOSIS_HISTORY_IDENTITY});expect(next.reportFresh).toBe(true);
+  });
+  it('does not reopen a completed legacy job or certify it as the current historical policy',async()=>{
+    const f=fixture();f.audit.mockResolvedValue(report(NOW,true));await f.job.start();
+    const raw=(await query<{value:Record<string,unknown>}>('SELECT value FROM app_settings WHERE key=$1',[KEY])).rows[0].value;
+    const legacy=report(NOW,true);delete legacy.history.policyId;delete legacy.history.sourceIdentity;raw.report=legacy;
+    await query('UPDATE app_settings SET value=$2::jsonb WHERE key=$1',[KEY,JSON.stringify(raw)]);
+    const before=await f.job.read();expect(before.job?.state).toBe('complete');expect(before.reportFresh).toBe(false);
+    f.setNow(NOW+300);const after=await f.job.resumeExisting(before.job!.id);
+    expect(after.job).toMatchObject({id:before.job!.id,attempts:before.job!.attempts,expiresAt:before.job!.expiresAt,state:'complete'});
+    expect(f.audit).toHaveBeenCalledTimes(1);
+  });
   it('persists strict historical diagnostic context without marking the fresh current reference stale', async () => {
     const f = fixture(), r = report(NOW), d = historyDiagnostic(r.history.targetCloseTime - 900);
     f.audit.mockResolvedValue({ ...r, errors: ['gnosis_market_reference_stale'], historyDiagnostic: d });

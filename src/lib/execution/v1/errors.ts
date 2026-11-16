@@ -1,6 +1,7 @@
 // Only fixed local reason codes may enter reports and durable audit records.
 // Transport exceptions may contain credentials, URLs or full response bodies.
 const localReasons = new Set([
+  'wallet_market_history_policy_upgrade_required', 'gnosis_market_history_policy_upgrade_required',
   "accounting_expense_invalid", "accounting_expense_revision", "accounting_late_expense", "accounting_expense_coverage_incomplete",
   "wallet_cow_runtime_invalid", "wallet_executor_unavailable", "wallet_gas_ceiling_exceeded", "wallet_quote_size_unavailable",
   "wallet_partial_fill_quote_unavailable", "wallet_quote_appdata_mismatch",

@@ -13,7 +13,7 @@ import { CowExecutionError } from './cow-execution-types';
 import { cowNetLimitGasUpper, createCowNetLimitProof, readCowStandardTokenEvidence, type CowNetLimitGasEvidence, type CowTokenEvidence } from './cow-net-limit-proof';
 import { readGnosisStandardTokenEvidence } from './gnosis-token-evidence';
 import { cowNetwork } from './cow-network';
-import type { GnosisProvisionalConversion } from './gnosis-market';
+import { gnosisHistoryEntryIssue,type GnosisProvisionalConversion } from './gnosis-market';
 
 export type CowMarketQuoteOptions = { config: CowRuntimeConfig; client: PublicClient; market: CowMarketPort;
   api: CowReadClient; balances(): Promise<SourceBalance[]>; clock?: () => number;
@@ -116,6 +116,8 @@ export class CowMarketQuotes {
     const blocked = (reason: string) => ({ intent: null, reason });
     try {
       const terms = this.options.config.terms, mapping = this.options.config.mappings.find(m => m.symbol === signal.symbol);
+      const sourceIssue=terms.chainId===100?gnosisHistoryEntryIssue(this.options.config.mappings):null;
+      if(sourceIssue)return blocked(sourceIssue);
       const scope = terms.markets.find(m => mapping && m.baseToken.toLowerCase() === mapping.tokenAddress.toLowerCase());
       if (!mapping || !scope || !account.funding || !referenceQuote.conversion) return blocked('funding_conversion_invalid');
       const network = cowNetwork(terms.chainId);

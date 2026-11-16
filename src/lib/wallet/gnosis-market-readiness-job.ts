@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { query, transaction, type SqlExecutor } from '../db';
 import { auditGnosisMarketReadiness, type GnosisMarketReadiness } from './gnosis-market-readiness';
 import { gnosisHistoricalDiagnosticSchema } from './gnosis-market-diagnostic';
+import { GNOSIS_HISTORY_IDENTITY,GNOSIS_HISTORY_POLICY } from './gnosis-market';
 
 export const GNOSIS_MARKET_READINESS_JOB_KEY = 'wallet:gnosis:market-readiness-job:v1';
 const KEY = GNOSIS_MARKET_READINESS_JOB_KEY, LEASE = 65, PERIOD = 300, LIFETIME = 43200, ATTEMPTS = 144;
@@ -17,13 +18,15 @@ const reportSchema = z.object({ version: z.literal(1), chainId: z.literal(100), 
   readAt: time, retryAt: time, providerRetryAt: time.nullable().optional(),
   historyDiagnostic: gnosisHistoricalDiagnosticSchema.nullable().optional(),
   errors: z.array(z.string().regex(/^(?:wallet_market_readiness|gnosis_(?:market|pool|oracle|reference))_[a-z_]{1,96}$/)).max(16),
-  history: z.object({ requiredCandles: z.literal(1000), completedCandles: count, contiguousCandles: count, targetCloseTime: time,
+  history: z.object({policyId:z.literal(GNOSIS_HISTORY_POLICY.id).optional(),sourceIdentity:z.string().regex(/^gnosis-history:v2:[0-9a-f]{64}$/).optional(), requiredCandles: z.literal(1000), completedCandles: count, contiguousCandles: count, targetCloseTime: time,
     firstCloseTime: nullableTime, lastCloseTime: nullableTime, provenanceIds: z.array(z.string().regex(/^0x[0-9a-f]{64}$/)).max(1200), complete: z.boolean() }).strict(),
   current: z.object({ status: z.enum(['ready', 'unavailable']), block: z.object({ number: z.string().regex(/^[1-9]\d{0,19}$/),
     hash, parentHash: hash, timestamp: time }).strict().nullable(), sourceAt: nullableTime, readAt: nullableTime,
     wethEur: price.nullable(), usdceEur: price.nullable(), xdaiEur: price.nullable(), sourceId: z.string().regex(/^gnosis-eur:current:v1:0x[0-9a-f]{64}$/).nullable() }).strict(),
 }).strict().superRefine((r, ctx) => {
   if (r.retryAt < r.readAt + PERIOD || (r.providerRetryAt != null && (r.providerRetryAt <= r.readAt || r.providerRetryAt > r.retryAt)) || r.history.targetCloseTime % 900
+    ||(r.history.policyId===undefined)!==(r.history.sourceIdentity===undefined)
+    ||(r.history.sourceIdentity!==undefined&&r.history.sourceIdentity!==GNOSIS_HISTORY_IDENTITY)
     || (r.history.lastCloseTime !== null && r.history.lastCloseTime > r.history.targetCloseTime)
     || (r.history.firstCloseTime !== null && (r.history.lastCloseTime === null || r.history.firstCloseTime > r.history.lastCloseTime))
     || (r.history.complete && (r.history.completedCandles !== 1000 || r.history.contiguousCandles !== 1000
@@ -61,6 +64,7 @@ const envelope = (job: Job | null, now: number): GnosisMarketReadinessEnvelope =
   const r = job?.report, currentFresh = !!r && r.current.status === 'ready' && r.current.sourceAt !== null && r.current.readAt !== null
     && r.current.sourceAt <= now && r.current.readAt <= now && now - r.current.sourceAt <= 15 && now - r.current.readAt <= 15;
   const reportFresh = currentFresh && r?.status === 'ready' && r.history.complete && r.history.lastCloseTime === Math.floor(now / 900) * 900
+    &&r.history.policyId===GNOSIS_HISTORY_POLICY.id&&r.history.sourceIdentity===GNOSIS_HISTORY_IDENTITY
     && !job?.lastError;
   return { job: job ? {
     id: job.id,
