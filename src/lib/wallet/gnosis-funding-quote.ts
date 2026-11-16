@@ -159,12 +159,17 @@ export async function parseGnosisFundingQuote(input: unknown, context: { owner: 
     for (const [i, step] of q.includedSteps.entries()) {
       const cross = i === q.includedSteps.length - 1, conversion = route === 'swap-usdc' && i === 2;
       const expected = i === 0 ? INPUT : i === 1 ? INPUT - fee : conversion ? bridgeAmount : sourceSwap ? BigInt(sourceSwap.quotedOutRaw) : bridgeAmount;
+      // Current bridge estimates may start from the source swap's exact signed
+      // minimum; older quotes use its exact expected output. The action still
+      // names that expected output. No intermediate amount is admitted.
+      const estimateInput=BigInt(step.estimate.fromAmount),estimateMatches=estimateInput===expected
+        ||(cross&&sourceSwap!==null&&estimateInput===BigInt(sourceSwap.minimumOutRaw));
       checkToken(step.action.fromToken, cross && sourceSwap ? 'sourceUsdc' : 'fromToken');
       checkToken(step.action.toToken, cross ? 'toToken' : conversion ? 'sourceUsdc' : 'fromToken');
       if (step.tool !== (cross ? 'layerswap' : conversion ? 'sushiswap' : ['feeCollection', 'gasZip'][i]) || step.type !== (cross ? 'cross' : conversion ? 'swap' : 'protocol')
         || step.action.fromChainId !== 1 || step.action.toChainId !== (cross ? 100 : 1)
         || !same(step.action.fromAddress, C.diamond.address) || !same(step.action.toAddress, cross ? owner : C.diamond.address)
-        || BigInt(step.action.fromAmount) !== expected || BigInt(step.estimate.fromAmount) !== expected
+        || BigInt(step.action.fromAmount) !== expected || !estimateMatches
         || step.estimate.toAmount !== (i === 0 ? (INPUT - fee).toString() : i === 1 ? bridgeAmount.toString() : conversion ? sourceSwap!.quotedOutRaw : q.estimate.toAmount)
         || step.estimate.toAmountMin !== (i === 0 ? (INPUT - fee).toString() : i === 1 ? bridgeAmount.toString() : conversion ? sourceSwap!.minimumOutRaw : q.estimate.toAmountMin)) return fail();
     }

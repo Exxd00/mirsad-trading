@@ -5,8 +5,23 @@ import { fundingReads, FUNDING_OWNER, FUNDING_NOW, fundingReadAbi, fundingHistor
 import policy from '../src/lib/wallet/generated/gnosis-funding-contracts.json';
 import { gnosisEurSeriesDigest } from '../src/lib/wallet/gnosis-market';
 import { parseGnosisFundingAuditUI } from '../src/lib/wallet/gnosis-funding-ui';
+import sushi from './fixtures/lifi-gnosis-sushiswap-funding-20261116.json';
+import fly from './fixtures/lifi-gnosis-fly-funding-20261116.json';
 
 describe('actual funding parser and fresh two-reader public evidence', () => {
+  it('composes the captured reviewed exchange route with fresh external-port fixtures without financial approval',async()=>{
+    const f=fundingReads({quote:sushi.response,now:Math.floor(Date.parse(sushi.receivedAt)/1000)});
+    const {audit}=await prepareGnosisFundingReview(FUNDING_OWNER,f.dependencies);
+    expect(audit).toMatchObject({status:'reviewable',executionApproved:false,ownerReviewAllowed:false,review:{route:'swap-usdc'}});
+    expect(new URL(String(f.fetcher.mock.calls[0][0])).searchParams.get('allowExchanges')).toBe('sushiswap');
+    expect(f.store.save).not.toHaveBeenCalled();
+  });
+  it('fails closed if the provider ignores the fixed reviewed-exchange filter',async()=>{
+    const f=fundingReads({quote:fly.response,now:Math.floor(Date.parse(fly.receivedAt)/1000)});
+    const {audit}=await prepareGnosisFundingReview(FUNDING_OWNER,f.dependencies);
+    expect(audit).toMatchObject({status:'blocked',blockers:['wallet_gnosis_funding_quote_invalid'],review:null,ownerReviewAllowed:false});
+    expect(f.store.load).not.toHaveBeenCalled();expect(f.seen).toEqual([]);
+  });
   it('uses only the exact fixed free GET request and actual runtime hashes/current getters, while withholding execution and arrival approval', async () => {
     const f = fundingReads(), { audit, rawQuote } = await prepareGnosisFundingReview(FUNDING_OWNER, f.dependencies);
     expect(audit).toMatchObject({ status: 'reviewable', ownerReviewAllowed: false, executionApproved: false,
@@ -20,7 +35,7 @@ describe('actual funding parser and fresh two-reader public evidence', () => {
     expect(url.origin + url.pathname).toBe('https://li.quest/v1/quote');
     expect(Object.fromEntries(url.searchParams)).toEqual({ fromChain: '1', toChain: '100', fromToken: policy.fromToken.address,
       toToken: policy.toToken.address, fromAmount: '10000000', fromAddress: audit.owner, toAddress: audit.owner,
-      fromAmountForGas: '50000', slippage: '0.0025', allowBridges: 'layerswap' });
+      fromAmountForGas: '50000', slippage: '0.0025', allowBridges: 'layerswap', allowExchanges: 'sushiswap' });
     expect(init).toMatchObject({ method: 'GET', redirect: 'error', credentials: 'omit', cache: 'no-store' });
     expect(f.store.save).not.toHaveBeenCalled(); expect(f.seen.every(v => v.call.method.startsWith('eth_get') || ['eth_call', 'eth_chainId'].includes(v.call.method))).toBe(true);
     expect(parseGnosisFundingAuditUI({ ...audit, ownerReviewAllowed: true, fence: { blocked: false, active: null, fundCompleted: false, lastApproval: null } }, FUNDING_OWNER)).not.toBeNull();

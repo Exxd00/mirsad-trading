@@ -433,6 +433,12 @@ The authenticated funding route proposes one fixed source-chain input of
 10 mUSD on Ethereum for USDC.e on Gnosis. Its 0.05-mUSD GasZip allocation is
 included in that input. Approval is exactly 10 mUSD to the pinned LI.FI Diamond;
 provider gas/nonce fields and arbitrary targets are not forwarded to MetaMask.
+The fixed quote request selects LayerSwap and the reviewed SushiSwap source
+exchange explicitly. For the source-USDC route, the bridge action names the
+quoted source output; its estimate may name only that exact output or the exact
+calldata-enforced source minimum. Other step amounts remain exact. This metadata
+compatibility does not relax router pins or the strict final aggregate slippage
+minimum, and that slippage bound is not a certificate of total funding fees.
 The LayerSwap destination amount is an off-chain quote, not a minimum enforced
 by source calldata. Gas arrival and MetaMask Gas Included eligibility/fees remain
 unproved until the owner reviews the wallet and destination balances arrive.

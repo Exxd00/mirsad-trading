@@ -271,7 +271,8 @@ export async function prepareGnosisFundingReview(ownerInput: string, deps: Fundi
     const url = new URL('https://li.quest/v1/quote');
     for (const [key, value] of Object.entries({ fromChain: '1', toChain: '100', fromToken: policy.fromToken.address, toToken: policy.toToken.address,
       // LI.FI applies this to each step; retain the separate aggregate .005 admission bound.
-      fromAmount: policy.fromAmount, fromAddress: owner, toAddress: owner, fromAmountForGas: policy.fromAmountForGas, slippage: '0.0025', allowBridges: 'layerswap' })) url.searchParams.set(key, value);
+      fromAmount: policy.fromAmount, fromAddress: owner, toAddress: owner, fromAmountForGas: policy.fromAmountForGas, slippage: '0.0025', allowBridges: 'layerswap',
+      allowExchanges: 'sushiswap' })) url.searchParams.set(key, value);
     rawQuote = await jsonRead(c, url.toString(), { method: 'GET' }, 131072); const observedAt = c.clock();
     review = await parseGnosisFundingQuote(rawQuote, { owner, observedAt, now: c.clock() });
     const freshProof = await prove(c, review, deps);
