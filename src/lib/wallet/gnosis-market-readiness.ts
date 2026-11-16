@@ -4,6 +4,7 @@ import { GnosisMarketClient, GNOSIS_MARKET_PROVIDER, GNOSIS_REFERENCE_IDENTITY, 
   gnosisEurSeriesDigest, parseStoredGnosisEurSeries, type GnosisEurStateSeries, type GnosisEurStateStore,
   type GnosisMarketOptions } from './gnosis-market';
 import { sqlGnosisEurStateStore } from './gnosis-eur-state-store';
+import { gnosisHistoricalDiagnosticSchema, type GnosisHistoricalReferenceDiagnostic } from './gnosis-market-diagnostic';
 export type { GnosisMarketReadinessEnvelope } from './gnosis-market-readiness-job';
 
 type CurrentReference = Awaited<ReturnType<GnosisMarketClient['currentReference']>>;
@@ -15,6 +16,7 @@ export type GnosisMarketReadiness = {
   status: 'ready' | 'warming' | 'unavailable'; readAt: number; retryAt: number; errors: string[];
   /** Provider-directed hold only; retryAt remains advisory for owner UI. */
   providerRetryAt?: number | null;
+  historyDiagnostic?: GnosisHistoricalReferenceDiagnostic | null;
   history: { requiredCandles: 1000; completedCandles: number | null; contiguousCandles: number | null;
     targetCloseTime: number; firstCloseTime: number | null; lastCloseTime: number | null; provenanceIds: string[]; complete: boolean };
   current: { status: 'ready' | 'unavailable'; block: CurrentReference['block'] | null; sourceAt: number | null; readAt: number | null;
@@ -108,6 +110,7 @@ async function runWithin(deps: GnosisMarketReadinessDependencies, parent: AbortS
   const started = Date.now(), now = clock(); if (!stamp(now)) throw new Error('wallet_market_readiness_time_invalid');
   const close = Math.floor(now / STEP) * STEP, errors: string[] = [];
   let providerRetryAt = 0;
+  let historyDiagnostic: GnosisHistoricalReferenceDiagnostic | undefined;
   const captureCooldown = (error: unknown) => {
     if ((error as { code?: unknown } | null)?.code !== 'gnosis_market_provider_cooldown') return;
     const at = (error as { retryAt?: unknown }).retryAt, observed = clock();
@@ -132,6 +135,14 @@ async function runWithin(deps: GnosisMarketReadinessDependencies, parent: AbortS
       firstCloseTime: s.bars[0].closeTime, lastCloseTime: s.bars.at(-1)!.closeTime, provenanceIds: [s.provenanceId], complete: true };
   } catch (e) {
     captureCooldown(e);
+    const raw = (e as { historyDiagnostic?: unknown } | null)?.historyDiagnostic;
+    if (raw !== undefined && raw !== null) {
+      const parsed = gnosisHistoricalDiagnosticSchema.safeParse(raw);
+      if ((e as { code?: unknown } | null)?.code === 'gnosis_market_reference_stale' && parsed.success
+        && parsed.data.window.intervalSeconds === STEP && parsed.data.window.openTime >= close - COUNT * STEP
+        && parsed.data.window.closeTime <= close && parsed.data.at <= clock() && parsed.data.availableAtBlock.timestamp <= clock()) historyDiagnostic = parsed.data;
+      else errors.push('wallet_market_readiness_diagnostic_invalid');
+    }
     errors.push(phaseError(e, 'wallet_market_readiness_history_unavailable', 'wallet_market_readiness_history_timeout'));
     try { history = historyProgress(await bounded(CACHE_MS, 'wallet_market_readiness_cache_timeout', () => store.load({
       intervalSeconds: STEP, startExclusive: close - COUNT * STEP, endInclusive: close }), parent), close); }
@@ -151,6 +162,7 @@ async function runWithin(deps: GnosisMarketReadinessDependencies, parent: AbortS
   return { version: 1, chainId: 100, referenceOnly: true, createdExecutionState: false, financialReadiness: 'not-certified',
     status: history.complete && reference && !errors.length ? 'ready' : history.completedCandles === null ? 'unavailable' : 'warming',
     readAt, retryAt: Math.max(readAt + 300, providerRetryAt), providerRetryAt: providerRetryAt > readAt ? providerRetryAt : null,
+    ...(historyDiagnostic ? { historyDiagnostic } : {}),
     errors: [...new Set(errors)], history,
     current: reference ? { status: 'ready', block: reference.block, sourceAt: reference.block.timestamp, readAt: reference.readAt,
       wethEur: reference.wethEur, usdceEur: reference.usdceEur, xdaiEur: reference.xdaiEur, sourceId: reference.sourceId }

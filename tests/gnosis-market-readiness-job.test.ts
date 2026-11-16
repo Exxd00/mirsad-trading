@@ -3,6 +3,7 @@ import { closeDatabase, ensureSchema, query } from '../src/lib/db';
 import { createGnosisMarketReadinessJob, GNOSIS_MARKET_READINESS_JOB_KEY as KEY } from '../src/lib/wallet/gnosis-market-readiness-job';
 import type { GnosisMarketReadiness } from '../src/lib/wallet/gnosis-market-readiness';
 import { randomUUID } from 'node:crypto';
+import { historyDiagnostic } from './fixtures/gnosis-history-diagnostic';
 const NOW = 1794790000, hash = '0x' + 'a'.repeat(64);
 // Synthetic source reports exercise real PGlite coordination only. They do not
 // prove actual market history, liquidity, authority or financial readiness.
@@ -29,6 +30,25 @@ beforeEach(async () => { await query('TRUNCATE app_settings,audit_events RESTART
 afterEach(() => { expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); });
 afterAll(async () => { await closeDatabase(); vi.unstubAllEnvs(); });
 describe('explicitly enabled, durable bounded source warmup', () => {
+  it('persists strict historical diagnostic context without marking the fresh current reference stale', async () => {
+    const f = fixture(), r = report(NOW), d = historyDiagnostic(r.history.targetCloseTime - 900);
+    f.audit.mockResolvedValue({ ...r, errors: ['gnosis_market_reference_stale'], historyDiagnostic: d });
+    const first = await f.job.start(); expect(first.report).toMatchObject({ historyDiagnostic: d, current: { status: 'ready' }, status: 'warming' });
+    expect(await createGnosisMarketReadinessJob(f.deps).read()).toEqual(first);
+  });
+  it.each(['malformed', 'out-of-range', 'ready'] as const)('refuses %s historical diagnostic reports before persistence', async fault => {
+    const f = fixture(), r = report(NOW, fault === 'ready'), d = historyDiagnostic(r.history.targetCloseTime - 900);
+    if (fault === 'malformed') Object.assign(d, { privatePayload: 'not-public' });
+    if (fault === 'out-of-range') Object.assign(d, historyDiagnostic(r.history.targetCloseTime - 1001 * 900));
+    f.audit.mockResolvedValue({ ...r, errors: ['gnosis_market_reference_stale'], historyDiagnostic: d });
+    expect(await f.job.start()).toMatchObject({ job: { lastError: 'wallet_market_readiness_unavailable' }, report: null });
+    expect(JSON.stringify((await query('SELECT value FROM app_settings')).rows)).not.toContain('not-public');
+  });
+  it('keeps reports without historical diagnostics or with explicit null compatible', async () => {
+    const f = fixture(); expect((await f.job.start()).report?.historyDiagnostic).toBeUndefined(); f.setNow(NOW + 300);
+    f.audit.mockResolvedValue({ ...report(NOW + 300), historyDiagnostic: null });
+    expect((await f.job.resume()).report?.historyDiagnostic).toBeNull();
+  });
   it('never creates missing resume-only work or accepts a different job identity', async () => {
     const f = fixture();
     for (const id of [undefined, null, '', 'invalid', randomUUID()])
