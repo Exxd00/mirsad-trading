@@ -180,7 +180,8 @@ describe('read-only wallet asset and exact-size economic audit', () => {
     const original = f.api.getQuote.getMockImplementation()!;
     f.api.getQuote.mockImplementation(async input => { f.setNow(NOW + 2000); return original(input); });
     const audit = await auditCowFeasibility(owner, 1, f.deps);
-    expect(audit.samples.every(s => s.status === 'complete' && s.expiresAt === NOW + 1000)).toBe(true);
+    expect(audit.samples.every(s => s.status === 'partial' && s.expiresAt === NOW + 1000 && s.reason === 'wallet_sample_cost_stale')).toBe(true);
+    expect(f.api.getQuote).toHaveBeenCalledTimes(2); // Expired FX never triggers a BUY or reverse leg.
     expect(audit.decision).not.toBe('eligible-for-setup');
     expect(currentFeasibility(audit, owner, '1', NOW + 2000)).toBe(false);
   });

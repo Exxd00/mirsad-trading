@@ -444,6 +444,12 @@ SELL quote as conservative headroom between independent SELL and exact BUY
 references. A nonpositive post-gas seed makes no quote request. Final paid-plus-
 entry-gas, round-trip cost, exact quantity and freshness checks remain strict;
 this is neither a budget tolerance nor a guarantee that later quotes will fit.
+Sampling uses at most three exact BUY references. An over-budget response can
+only reduce the positive integer base quantity before a new-size request; the
+same-quantity reverse SELL is requested only after BUY plus entry gas fits.
+Provider errors stop the sample without a retry. The original seed and FX
+15-second evidence bounds remain fixed throughout; resizing does not refresh
+them or change the runtime entry planner's attempt limit.
 
 ### Owner funding review (16 November 2026)
 
