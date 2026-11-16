@@ -28,15 +28,16 @@ const dexSchema = z.object({ deadline: time, sourceNativeMinimumWei: raw, source
 // Field order here reproduces the server's reviewed JSON digest, including its
 // insertion-ordered approval fields. Network responses may reorder JSON keys.
 const reviewSchema = z.object({ version: z.literal(1), method: z.literal(policy.method),
-  status: z.literal('reference-review-only-not-execution-approved'), owner: address, observedAt: time, expiresAt: time,
+  status: z.literal('reference-review-only-not-execution-approved'), route: z.enum(['direct-musd', 'swap-usdc']), owner: address, observedAt: time, expiresAt: time,
   input: z.object({ chainId: z.literal(1), token: address, decimals: z.literal(6), amountRaw: raw }).strict(),
   destination: z.object({ chainId: z.literal(100), token: address, decimals: z.literal(6), quotedAmountRaw: raw, quotedMinimumRaw: raw,
     certification: z.literal('offchain-quote-not-calldata-enforced') }).strict(),
   sourceFee: z.object({ amountRaw: raw, recipient: address }).strict(),
-  quotedFees: z.array(z.object({ name: z.string().max(100), token: address, amountRaw: raw, certification: z.literal('offchain-quote-only') }).strict()).max(8),
+  quotedFees: z.array(z.object({ name: z.string().max(100), token: address, assetSymbol: z.enum(['mUSD', 'USDC']), amountRaw: raw, certification: z.literal('offchain-quote-only') }).strict()).max(8),
   gasProvision: z.object({ amountInRaw: raw, chainId: z.literal(100), gasZipChain: z.literal(16), receiver: address,
     destinationNative: z.literal('xDAI'), arrival: z.literal('not-guaranteed'), dex: dexSchema }).strict(),
-  bridge: z.object({ requestId: hash, depositoryReceiver: address, refundRecipient: address, amountRaw: raw, deadline: time,
+  sourceSwap: z.object({ inputToken: address, outputToken: address, amountInRaw: raw, minimumOutRaw: raw, quotedOutRaw: raw, callTo: address, callDataHash: hash }).strict().nullable(),
+  bridge: z.object({ requestId: hash, depositoryReceiver: address, refundRecipient: address, token: address, assetSymbol: z.enum(['mUSD', 'USDC']), amountRaw: raw, deadline: time,
     requestSignature: z.literal('not-independently-verified') }).strict(),
   approval: z.object({ token: address, spender: address, amountRaw: raw, finite: z.literal(true), data }).strict(),
   transaction, sourceNetworkGas: z.literal('not-certified'), executionApproved: z.literal(false), contracts: z.unknown(), manifestHash: hash,
@@ -117,16 +118,21 @@ function checkedReview(value: unknown, owner: string): GnosisFundingQuoteReview 
     { requestId: Hex; depositoryReceiver: Address; refundRecipient: Address; nonEVMReceiver: Hex; signature: Hex; deadline: bigint }];
   const fee = BigInt(r.sourceFee.amountRaw);
   const fixedFees = r.quotedFees.filter(v => v.name === 'LIFI Fixed Fee');
+  const source = r.sourceSwap, converted = r.route === 'swap-usdc';
+  const bridgeToken = converted ? policy.sourceSwap.contracts.usdc.address : policy.fromToken.address;
   if (!fee || fee > BigInt(policy.maximumFeeAmount) || !same(r.sourceFee.recipient, policy.feeRecipient) || bridge.transactionId === zeroHash
-    || bridge.bridge !== 'layerswap' || bridge.integrator !== 'lifi-api' || bridge.referrer !== zeroAddress || !same(bridge.sendingAssetId, policy.fromToken.address)
+    || bridge.bridge !== 'layerswap' || bridge.integrator !== 'lifi-api' || bridge.referrer !== zeroAddress || !same(bridge.sendingAssetId, bridgeToken)
     || !same(bridge.receiver, owner) || bridge.destinationChainId !== 100n || bridge.hasSourceSwaps !== true || bridge.hasDestinationCall !== false
-    || swaps.length !== 2 || bridge.minAmount !== INPUT - fee - GAS || r.bridge.amountRaw !== bridge.minAmount.toString()
+    || swaps.length !== (converted ? 3 : 2) || !same(r.bridge.token, bridgeToken) || r.bridge.assetSymbol !== (converted ? 'USDC' : 'mUSD')
+    || (!converted && (source !== null || bridge.minAmount !== INPUT - fee - GAS)) || converted && source === null
+    || r.bridge.amountRaw !== bridge.minAmount.toString()
     || layer.requestId !== r.bridge.requestId || layer.requestId === zeroHash || !same(layer.refundRecipient, owner)
     || !same(r.bridge.refundRecipient, owner) || !same(layer.depositoryReceiver, r.bridge.depositoryReceiver)
     || layer.depositoryReceiver === zeroAddress || [owner, ...Object.values(C).map(v => v.address)].some(v => same(v, layer.depositoryReceiver)) || layer.nonEVMReceiver !== zeroHash
     || layer.deadline !== BigInt(r.bridge.deadline) || r.expiresAt > r.bridge.deadline || r.expiresAt > r.gasProvision.dex.deadline
     || !/^0x[0-9a-f]{130}$/.test(layer.signature) || fixedFees.length !== 1 || fixedFees[0].amountRaw !== fee.toString()
-    || r.quotedFees.some(v => !same(v.token, policy.fromToken.address) || BigInt(v.amountRaw) > INPUT)
+    || r.quotedFees.some(v => !same(v.token, converted && v.name !== 'LIFI Fixed Fee' ? bridgeToken : policy.fromToken.address)
+      || v.assetSymbol !== (converted && v.name !== 'LIFI Fixed Fee' ? 'USDC' : 'mUSD') || BigInt(v.amountRaw) > INPUT)
     || r.expiresAt !== Math.min(r.observedAt + policy.reviewLifetimeSeconds, r.bridge.deadline, r.gasProvision.dex.deadline)) fail();
   const layerR = BigInt(layer.signature.slice(0, 66)), layerS = BigInt('0x' + layer.signature.slice(66, 130));
   if (!layerR || !layerS || layerS > 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0n || !['1b', '1c'].includes(layer.signature.slice(130))) fail();
@@ -138,6 +144,20 @@ function checkedReview(value: unknown, owner: string): GnosisFundingQuoteReview 
   swap(gasSwap, C.gasDex.address, GAS, true, zeroAddress);
   if (gasData.receiverAddress !== '0x' + owner.slice(2).toLowerCase().padEnd(64, '0') || gasData.destinationChains !== 16n) fail();
   checkGasPayload(gasSwap.callData, r);
+  if (converted) {
+    if (!source) return fail();
+    const s = swaps[2], pins = policy.sourceSwap;
+    swap(s, pins.contracts.router.address, INPUT - fee - GAS, false, bridgeToken);
+    const [input, amountIn, recipient, output, minimum, executor, executorData] = canonical(s.callData, pins.abi.router as Abi, 'snwap') as
+      [Address, bigint, Address, Address, bigint, Address, Hex];
+    if (!same(source.inputToken, policy.fromToken.address) || !same(source.outputToken, bridgeToken) || !same(source.callTo, pins.contracts.router.address)
+      || source.callDataHash !== keccak256(s.callData) || source.amountInRaw !== (INPUT - fee - GAS).toString()
+      || !same(input, source.inputToken) || amountIn.toString() !== source.amountInRaw || !same(recipient, C.diamond.address)
+      || !same(output, source.outputToken) || minimum <= 0n || minimum.toString() !== source.minimumOutRaw || minimum !== bridge.minAmount
+      || minimum > BigInt(source.quotedOutRaw) || minimum < BigInt(source.quotedOutRaw) * 9975n / 10000n
+      || !same(executor, pins.contracts.executor.address) || !executorData.startsWith(pins.executorSelector)
+      || executorData.length <= 10 || executorData.length > 32770) fail();
+  }
   return r;
 }
 function checkedProof(value: unknown, r: GnosisFundingQuoteReview): GnosisFundingFreshProof {

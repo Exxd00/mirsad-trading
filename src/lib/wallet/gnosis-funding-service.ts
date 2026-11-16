@@ -24,7 +24,7 @@ const ABI = parseAbi(['function decimals() view returns(uint8)', 'function balan
   'function GAS_ZIP_ROUTER() view returns(address)', 'function LIFI_DIAMOND() view returns(address)',
   'function LAYERSWAP_DEPOSITORY() view returns(address)', 'function implementation() view returns(address)',
   'function isContractSelectorWhitelisted(address,bytes4) view returns(bool)', 'function facetAddress(bytes4) view returns(address)',
-  'function whitelist(address) view returns(bool)', 'function isWhitelisted(address) view returns(bool)']);
+  'function whitelist(address) view returns(bool)', 'function isWhitelisted(address) view returns(bool)', 'function safeExecutor() view returns(address)']);
 export type FundingBlock = { number: string; hash: Hex; parentHash: Hex; timestamp: number };
 type Pin = { address: Address; runtimeHash: Hex };
 type FreshChecks = { layerSwap: { depository: Pin; backendSigner: Address }; gasZipRouter: Pin; gasDexCore: Pin; weth: Pin; whitelistFacet: Pin; loupeFacet: Pin };
@@ -49,6 +49,8 @@ type Context = { fetcher: typeof fetch; clock: () => number; started: number; cl
 type Call = { method: string; params: unknown[] };
 const UNVERIFIED = ['wallet-source-gas-included-eligibility-and-fee', 'destination-minimum-not-enforced-by-source-calldata',
   'destination-gas-arrival', 'prior-owner-prompt-attempt-state'] as const;
+const unverified = (r: GnosisFundingQuoteReview | null) => [...UNVERIFIED,
+  ...(r?.route === 'swap-usdc' ? ['source-swap-inner-executor-source-unverified-runtime-and-net-wrapper-only'] : [])];
 const same = (a: unknown, b: string) => typeof a === 'string' && a.toLowerCase() === b.toLowerCase();
 const canonical = (v: unknown): string => JSON.stringify(v, (_, x) => typeof x === 'bigint' ? x.toString()
   : x !== null && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => a.localeCompare(b))) : x);
@@ -75,7 +77,8 @@ async function jsonRead(c: Context, url: string, init: RequestInit, cap = MAX_BY
     const r = await c.fetcher(url, { ...init, headers: { Accept: 'application/json', ...init.headers }, redirect: 'error',
       credentials: 'omit', cache: 'no-store', signal: control.signal });
     live(c);
-    if (!r.ok) return fail(r.status === 429 ? 'wallet_gnosis_funding_rate_limited' : 'wallet_gnosis_funding_unavailable');
+    if (!r.ok) return fail(r.status === 429 ? 'wallet_gnosis_funding_rate_limited'
+      : `wallet_gnosis_funding_${new URL(url).hostname === 'li.quest' ? 'quote' : 'rpc'}_http_${r.status}`);
     if (r.redirected || !/^application\/json(?:;|$)/i.test(r.headers.get('content-type') ?? '') || !r.body) return fail('wallet_gnosis_funding_response_invalid');
     const size = r.headers.get('content-length'); if (size !== null && (!/^\d+$/.test(size) || Number(size) > cap)) return fail('wallet_gnosis_funding_response_invalid');
     const reader = r.body.getReader(), parts: Uint8Array[] = []; let length = 0;
@@ -90,7 +93,8 @@ async function jsonRead(c: Context, url: string, init: RequestInit, cap = MAX_BY
       timer = setTimeout(() => { control.abort(); reject(new GnosisFundingError('wallet_gnosis_funding_timeout')); },
         Math.max(1, Math.min(12000, MAX_SECONDS * 1000 - (Date.now() - c.started))));
     })]);
-  } catch (e) { throw e instanceof GnosisFundingError ? e : new GnosisFundingError('wallet_gnosis_funding_unavailable'); }
+  } catch (e) { throw e instanceof GnosisFundingError ? e : new GnosisFundingError(new URL(url).hostname === 'li.quest'
+    ? 'wallet_gnosis_funding_quote_transport_unavailable' : 'wallet_gnosis_funding_rpc_transport_unavailable'); }
   finally { if (timer) clearTimeout(timer); control.abort(); }
 }
 async function rpc(c: Context, url: string, calls: Call[]): Promise<unknown[]> {
@@ -173,7 +177,9 @@ async function historyProof(c: Context, deps: FundingReadDependencies): Promise<
 async function prove(c: Context, review: GnosisFundingQuoteReview, deps: FundingReadDependencies): Promise<GnosisFundingFreshProof> {
   const history = await historyProof(c, deps), pins = trust(), sourceBlock = await head(c, SOURCE, 1, 60);
   const at = toHex(BigInt(sourceBlock.number));
-  const contracts = [...Object.values(policy.contracts), pins.gasZipRouter, pins.gasDexCore, pins.weth, pins.whitelistFacet, pins.loupeFacet, pins.layerSwap.depository];
+  const sourceSwap = review.route === 'swap-usdc' ? policy.sourceSwap : null;
+  const contracts = [...Object.values(policy.contracts), pins.gasZipRouter, pins.gasDexCore, pins.weth, pins.whitelistFacet, pins.loupeFacet, pins.layerSwap.depository,
+    ...(sourceSwap ? Object.values(sourceSwap.contracts) : [])];
   const code = await pair(c, SOURCE, contracts.map(p => ({ method: 'eth_getCode', params: [p.address, at] })));
   if (code.some((v, i) => keccak256(hex(v)) !== contracts[i].runtimeHash.toLowerCase())) return fail('wallet_gnosis_funding_contract_changed');
   const [bridge, , layer] = decodeFunctionData({ abi: policy.abi.facet as Abi, data: review.transaction.data }).args as unknown as [Record<string, unknown>, unknown, Record<string, unknown>];
@@ -215,6 +221,15 @@ async function prove(c: Context, review: GnosisFundingQuoteReview, deps: Funding
     || decode(q[19], 'paused') !== false || decode(q[20], 'whitelist') !== true || decode(q[21], 'paused') !== false
     || decode(q[22], 'isWhitelisted') !== true || !same(decode(q[23], 'facetAddress'), policy.contracts.facet.address)
     || !same(decode(q[24], 'facetAddress'), pins.whitelistFacet.address) || !same(facet(q[25]), pins.loupeFacet.address)) return fail('wallet_gnosis_funding_mutable_state_changed');
+  const swapChecks = sourceSwap ? await pair(c, SOURCE, [
+    call(sourceSwap.contracts.router.address, 'safeExecutor', sourceBlock),
+    call(review.transaction.to, 'isContractSelectorWhitelisted', sourceBlock, [sourceSwap.contracts.router.address, sourceSwap.selector]),
+    { method: 'eth_getStorageAt', params: [sourceSwap.contracts.usdc.address, sourceSwap.usdc.implementationSlot, at] },
+    call(sourceSwap.contracts.usdc.address, 'decimals', sourceBlock), call(sourceSwap.contracts.usdc.address, 'paused', sourceBlock),
+  ]) : [];
+  if (sourceSwap && (!same(decode(swapChecks[0], 'safeExecutor'), sourceSwap.contracts.safeExecutor.address)
+    || decode(swapChecks[1], 'isContractSelectorWhitelisted') !== true || !same(facet(swapChecks[2]), sourceSwap.contracts.usdcImplementation.address)
+    || decode(swapChecks[3], 'decimals') !== 6 || decode(swapChecks[4], 'paused') !== false)) return fail('wallet_gnosis_funding_mutable_state_changed');
   // Read the short-lived destination inventory after the longer source checks.
   const destinationBlock = await head(c, DESTINATION, 100, 15), dst = toHex(BigInt(destinationBlock.number));
   const d = await pair(c, DESTINATION, [call(review.destination.token, 'decimals', destinationBlock), call(review.destination.token, 'balanceOf', destinationBlock, [review.owner]),
@@ -237,7 +252,7 @@ async function prove(c: Context, review: GnosisFundingQuoteReview, deps: Funding
   if (expiresAt <= readAt || readAt - history.closeTime > 86400) return fail('wallet_gnosis_funding_stale');
   const base = { version: 1 as const, owner: review.owner, reviewDigest: review.digest, manifestHash: review.manifestHash, sourceBlock, destinationBlock, readAt, expiresAt,
     sourceBalanceRaw: sourceBalance.toString(), sourceAllowanceRaw: allowance.toString(), sourceNativeBalanceWei: uint(q[16]).toString(), sourceNonce: Number(nonce), sourcePendingNonce: Number(pendingNonce),
-    destinationTokenBalanceRaw: destBalance.toString(), destinationNativeBalanceWei: uint(d[2]).toString(), checksDigest: fundingDigest({ code, q, d, layerDigest }), history,
+    destinationTokenBalanceRaw: destBalance.toString(), destinationNativeBalanceWei: uint(d[2]).toString(), checksDigest: fundingDigest({ code, q, swapChecks, d, layerDigest }), history,
     scope: 'current-canonical-snapshot-not-future-contract-or-arrival-guarantee' as const };
   return { ...base, digest: fundingDigest(base) };
 }
@@ -254,16 +269,18 @@ export async function prepareGnosisFundingReview(ownerInput: string, deps: Fundi
   try {
     const url = new URL('https://li.quest/v1/quote');
     for (const [key, value] of Object.entries({ fromChain: '1', toChain: '100', fromToken: policy.fromToken.address, toToken: policy.toToken.address,
-      fromAmount: policy.fromAmount, fromAddress: owner, toAddress: owner, fromAmountForGas: policy.fromAmountForGas, slippage: policy.maximumSlippage, allowBridges: 'layerswap' })) url.searchParams.set(key, value);
+      // LI.FI applies this to each step; retain the separate aggregate .005 admission bound.
+      fromAmount: policy.fromAmount, fromAddress: owner, toAddress: owner, fromAmountForGas: policy.fromAmountForGas, slippage: '0.0025', allowBridges: 'layerswap' })) url.searchParams.set(key, value);
     rawQuote = await jsonRead(c, url.toString(), { method: 'GET' }, 131072); const observedAt = c.clock();
     review = await parseGnosisFundingQuote(rawQuote, { owner, observedAt, now: c.clock() });
     const freshProof = await prove(c, review, deps);
     return { rawQuote, audit: { version: 1, owner, sourceChainId: 1, destinationChainId: 100, status: 'reviewable', readAt: freshProof.readAt, expiresAt: review.expiresAt,
-      review, freshProof, blockers: [], executionApproved: false, ownerReviewAllowed: false, unverified: UNVERIFIED } };
+      review, freshProof, blockers: [], executionApproved: false, ownerReviewAllowed: false, unverified: unverified(review) } };
   } catch (e) {
     const code = e instanceof GnosisFundingError ? e.code : e instanceof Error && e.message === 'wallet_gnosis_funding_quote_invalid' ? e.message : 'wallet_gnosis_funding_unavailable';
-    return { rawQuote: null, audit: { version: 1, owner, sourceChainId: 1, destinationChainId: 100, status: code === 'wallet_gnosis_funding_unavailable' || code === 'wallet_gnosis_funding_timeout' || code === 'wallet_gnosis_funding_rate_limited' ? 'unavailable' : 'blocked',
-      readAt: c.clock(), expiresAt: c.clock(), review, freshProof: null, blockers: [code], executionApproved: false, ownerReviewAllowed: false, unverified: UNVERIFIED } };
+    return { rawQuote: null, audit: { version: 1, owner, sourceChainId: 1, destinationChainId: 100, status: code === 'wallet_gnosis_funding_unavailable' || code === 'wallet_gnosis_funding_timeout' || code === 'wallet_gnosis_funding_rate_limited'
+      || /^wallet_gnosis_funding_(?:quote|rpc)_(?:http_\d{3}|transport_unavailable)$/.test(code) ? 'unavailable' : 'blocked',
+      readAt: c.clock(), expiresAt: c.clock(), review, freshProof: null, blockers: [code], executionApproved: false, ownerReviewAllowed: false, unverified: unverified(review) } };
   } finally { c.closed = true; }
 }
 export async function auditGnosisFunding(owner: string, deps: FundingReadDependencies = {}): Promise<GnosisFundingAudit> { return (await prepareGnosisFundingReview(owner, deps)).audit; }
@@ -291,6 +308,7 @@ export async function proveGnosisFundingNoSourceEffect(input: Omit<FundingResolu
 
 const EVENTS = parseAbi(['event Approval(address indexed owner,address indexed spender,uint256 value)',
   'event Transfer(address indexed from,address indexed to,uint256 value)',
+  'event Deposited(bytes32 indexed id,address indexed token,address indexed receiver,uint256 amount)',
   'event LiFiTransferStarted((bytes32 transactionId,string bridge,string integrator,address referrer,address sendingAssetId,address receiver,uint256 minAmount,uint256 destinationChainId,bool hasSourceSwaps,bool hasDestinationCall) bridgeData)']);
 /** Resolve the selected owner action, including a relayed/wrapped transaction.
  * A hash alone, API status, changed balance or outer relayer identity cannot
@@ -298,7 +316,7 @@ const EVENTS = parseAbi(['event Approval(address indexed owner,address indexed s
 export async function resolveGnosisFundingReceipt(input: FundingResolutionInput, deps: FundingReadDependencies = {}): Promise<GnosisFundingResolution | null> {
   const c = context(deps), owner = ownerAddress(input.owner), r = input.review;
   try {
-    if (owner !== r.owner || input.freshProof.owner !== owner || input.freshProof.reviewDigest !== r.digest
+    if (owner !== r.owner || input.freshProof.owner !== owner || input.freshProof.reviewDigest !== r.digest || (r.route === 'swap-usdc' && !r.sourceSwap)
       || !/^0x[0-9a-f]{64}$/.test(input.transactionHash)) return fail('wallet_gnosis_funding_attempt_invalid');
     const [chain] = await pair(c, SOURCE, [{ method: 'eth_chainId', params: [] }]);
     if (uint(chain) !== 1n) return fail('wallet_gnosis_funding_chain_mismatch');
@@ -334,6 +352,8 @@ export async function resolveGnosisFundingReceipt(input: FundingResolutionInput,
       return await checkedResult('0', 'reverted', tx);
     }
     const approvals: bigint[] = [], outgoing: { to: Address; value: bigint }[] = [], bridges: Record<string, unknown>[] = [];
+    const swap = r.route === 'swap-usdc' ? r.sourceSwap : null;
+    const sourceTransfers: { to: Address; value: bigint }[] = [], deposits: Record<string, unknown>[] = [];
     const logIndexes = new Set<string>();
     for (const rawLog of receipt.logs) {
       const log = object(rawLog), index = uint(log.logIndex).toString();
@@ -342,7 +362,8 @@ export async function resolveGnosisFundingReceipt(input: FundingResolutionInput,
         || log.topics.length > 4) return fail('wallet_gnosis_funding_receipt_invalid');
       logIndexes.add(index);
       const topics = log.topics.map(t => hex(t, 32)), data = hex(log.data); if (data.length > 65538) return fail('wallet_gnosis_funding_receipt_invalid');
-      if (!same(log.address, r.input.token) && !same(log.address, r.transaction.to)) continue;
+      if (!same(log.address, r.input.token) && !same(log.address, r.transaction.to)
+        && !(swap && (same(log.address, policy.sourceSwap.contracts.usdc.address) || same(log.address, policy.freshChecks.contracts.depository.address)))) continue;
       let decoded: ReturnType<typeof decodeEventLog>;
       try { decoded = decodeEventLog({ abi: EVENTS, topics: topics as [Hex, ...Hex[]], data, strict: true }); }
       catch { continue; }
@@ -350,6 +371,9 @@ export async function resolveGnosisFundingReceipt(input: FundingResolutionInput,
       if (same(log.address, r.input.token) && decoded.eventName === 'Approval' && same(a.owner, owner) && same(a.spender, r.approval.spender)) approvals.push(a.value as bigint);
       if (same(log.address, r.input.token) && decoded.eventName === 'Transfer' && same(a.from, owner)) outgoing.push({ to: a.to as Address, value: a.value as bigint });
       if (same(log.address, r.transaction.to) && decoded.eventName === 'LiFiTransferStarted') bridges.push(a.bridgeData as Record<string, unknown>);
+      if (swap && same(log.address, policy.sourceSwap.contracts.usdc.address) && decoded.eventName === 'Transfer'
+        && same(a.from, r.transaction.to)) sourceTransfers.push({ to: a.to as Address, value: a.value as bigint });
+      if (swap && same(log.address, policy.freshChecks.contracts.depository.address) && decoded.eventName === 'Deposited') deposits.push(a);
     }
     const at = toHex(receiptNumber), [code, binding] = await pair(c, SOURCE, [
       { method: 'eth_getCode', params: [r.transaction.to, at] },
@@ -363,8 +387,30 @@ export async function resolveGnosisFundingReceipt(input: FundingResolutionInput,
     } else {
       const args = decodeFunctionData({ abi: policy.abi.facet as Abi, data: r.transaction.data }).args!;
       const expectedBridge = args[0] as unknown as Record<string, unknown>;
-      if (bridges.length !== 1 || canonical(bridges[0]) !== canonical(expectedBridge)
+      // The source DEX is bounded by its signed minimum. LayerSwap's verified
+      // _depositAndSwap replaces that minimum with the actual positive USDC
+      // balance delta before emitting the bridge event. All other identities
+      // remain exact; old records without route retain the direct-mUSD rule.
+      const actualBridge = bridges[0];
+      const matches = swap && actualBridge && typeof actualBridge.minAmount === 'bigint'
+        ? actualBridge.minAmount >= BigInt(swap.minimumOutRaw) && same(actualBridge.sendingAssetId, policy.sourceSwap.contracts.usdc.address)
+          && canonical({ ...actualBridge, minAmount: expectedBridge.minAmount }) === canonical(expectedBridge)
+        : canonical(actualBridge) === canonical(expectedBridge);
+      if (bridges.length !== 1 || !matches
         || outgoing.filter(t => same(t.to, r.transaction.to) && t.value === BigInt(r.input.amountRaw)).length !== 1) return null;
+      if (swap) {
+        const amount = actualBridge.minAmount as bigint, p = policy.sourceSwap;
+        if (sourceTransfers.filter(t => same(t.to, r.bridge.depositoryReceiver) && t.value === amount).length !== 1
+          || deposits.length !== 1 || !same(deposits[0].id, r.bridge.requestId) || !same(deposits[0].token, p.contracts.usdc.address)
+          || !same(deposits[0].receiver, r.bridge.depositoryReceiver) || deposits[0].amount !== amount) return null;
+        const [proxyCode, implementationSlot, implementationCode] = await pair(c, SOURCE, [
+          { method: 'eth_getCode', params: [p.contracts.usdc.address, at] },
+          { method: 'eth_getStorageAt', params: [p.contracts.usdc.address, p.usdc.implementationSlot, at] },
+          { method: 'eth_getCode', params: [p.contracts.usdcImplementation.address, at] },
+        ]);
+        if (keccak256(hex(proxyCode)) !== p.contracts.usdc.runtimeHash || !same('0x' + hex(implementationSlot, 32).slice(-40), p.contracts.usdcImplementation.address)
+          || keccak256(hex(implementationCode)) !== p.contracts.usdcImplementation.runtimeHash) return null;
+      }
       const [used] = await pair(c, SOURCE, [{ method: 'eth_getStorageAt', params: [r.transaction.to, fundingRequestUsedSlot(r.bridge.requestId), at] }]);
       if (BigInt(hex(used, 32)) !== 1n) return null;
     }

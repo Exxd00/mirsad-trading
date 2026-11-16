@@ -1,21 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { decodeFunctionData, encodeAbiParameters, encodeEventTopics, getAbiItem, parseAbi, toHex, type Abi, type AbiEvent, type Address, type Hex } from 'viem';
+import { decodeFunctionData, encodeAbiParameters, encodeEventTopics, getAbiItem, keccak256, parseAbi, stringToHex, toHex, type Abi, type AbiEvent, type Address, type Hex } from 'viem';
 import { prepareGnosisFundingReview, resolveGnosisFundingReceipt } from '../src/lib/wallet/gnosis-funding-service';
+import type { GnosisFundingQuoteReview } from '../src/lib/wallet/gnosis-funding-quote';
 import { parseGnosisFundingAttemptResultUI } from '../src/lib/wallet/gnosis-funding-ui';
 import { fundingReads, FUNDING_OWNER, FUNDING_NOW } from './helpers/gnosis-funding';
 import policy from '../src/lib/wallet/generated/gnosis-funding-contracts.json';
+import capturedSwap from './fixtures/lifi-gnosis-swap-funding-quote.json';
 const TX = ('0x' + '11'.repeat(32)) as Hex, OTHER = '0x1111111111111111111111111111111111111111' as Address;
 const EVENTS = parseAbi(['event Approval(address indexed owner,address indexed spender,uint256 value)',
   'event Transfer(address indexed from,address indexed to,uint256 value)',
+  'event Deposited(bytes32 indexed id,address indexed token,address indexed receiver,uint256 amount)',
   'event LiFiTransferStarted((bytes32 transactionId,string bridge,string integrator,address referrer,address sendingAssetId,address receiver,uint256 minAmount,uint256 destinationChainId,bool hasSourceSwaps,bool hasDestinationCall) bridgeData)']);
 async function fixture(phase: 'approve' | 'fund') {
   const f = fundingReads(), { audit } = await prepareGnosisFundingReview(FUNDING_OWNER, f.dependencies), review = audit.review!, freshProof = audit.freshProof!;
   expect(audit.status).toBe('reviewable'); f.setNow(FUNDING_NOW + 10); f.state.finalizedNumber++;
   const block = f.header(f.state.finalizedNumber), args = decodeFunctionData({ abi: policy.abi.facet as Abi, data: review.transaction.data }).args!;
   const bridge = structuredClone(args[0]) as Record<string, unknown>;
-  const log = (name: 'Approval' | 'Transfer' | 'LiFiTransferStarted', address: Address, values: Record<string, unknown>, index: number) => {
+  const log = (name: 'Approval' | 'Transfer' | 'LiFiTransferStarted' | 'Deposited', address: Address, values: Record<string, unknown>, index: number) => {
     const abi = getAbiItem({ abi: EVENTS as Abi, name }) as AbiEvent;
-    const data = encodeAbiParameters(abi.inputs.filter(v => !v.indexed), name === 'LiFiTransferStarted' ? [values.bridgeData] as never : [values.value] as never);
+    const data = encodeAbiParameters(abi.inputs.filter(v => !v.indexed), name === 'LiFiTransferStarted' ? [values.bridgeData] as never : [name === 'Deposited' ? values.amount : values.value] as never);
     return { address, topics: encodeEventTopics({ abi: EVENTS as Abi, eventName: name, args: values }), data, logIndex: toHex(index),
       blockNumber: block.number, blockHash: block.hash, transactionHash: TX, removed: false };
   };
@@ -29,7 +32,56 @@ async function fixture(phase: 'approve' | 'fund') {
   return { ...f, review, freshProof, bridge, log, approval, transfer, started,
     input: { phase, owner: review.owner, transactionHash: TX, review, freshProof } };
 }
+/** Receipt-only replay of captured calldata with a synthetic stored review.
+ * The captured API estimate is ineligible and is NOT admitted by the parser.
+ * This isolates canonical event semantics; it is no quote/readiness proof. */
+async function swapReceiptFixture() {
+  const f = await fixture('fund'), data = capturedSwap.quote.transactionRequest.data as Hex;
+  const [bridge, swaps] = decodeFunctionData({ abi: policy.abi.facet as Abi, data }).args! as unknown as [Record<string, unknown>, { callData: Hex }[]];
+  const [inputToken, amountIn, , outputToken, minimumOut] = decodeFunctionData({ abi: policy.sourceSwap.abi.router as Abi, data: swaps[2].callData }).args! as
+    unknown as [Address, bigint, Address, Address, bigint, Address, Hex];
+  const sourceSwap = { inputToken, outputToken, amountInRaw: amountIn.toString(), minimumOutRaw: minimumOut.toString(),
+    quotedOutRaw: capturedSwap.quote.includedSteps[2].estimate.toAmount, callTo: policy.sourceSwap.contracts.router.address as Address,
+    callDataHash: keccak256(swaps[2].callData) };
+  const review = { ...f.review, route: 'swap-usdc', sourceSwap, bridge: { ...f.review.bridge, token: outputToken, assetSymbol: 'USDC' },
+    transaction: { ...f.review.transaction, data } } as GnosisFundingQuoteReview;
+  const decoded = decodeFunctionData({ abi: policy.abi.facet as Abi, data }).args!;
+  const layer = decoded[2] as { requestId: Hex; depositoryReceiver: Address; refundRecipient: Address };
+  review.bridge = { ...review.bridge, requestId: layer.requestId, depositoryReceiver: layer.depositoryReceiver, refundRecipient: layer.refundRecipient, amountRaw: minimumOut.toString() };
+  const { digest: _oldDigest, ...basis } = review;
+  review.digest = keccak256(stringToHex(JSON.stringify(basis))); const freshProof = { ...f.freshProof, reviewDigest: review.digest };
+  const actual = { ...bridge, minAmount: minimumOut + 123n }, input = { ...f.input, review, freshProof };
+  const logs = () => [f.transfer(), f.log('LiFiTransferStarted', review.transaction.to, { bridgeData: actual }, 1),
+    f.log('Transfer', outputToken, { from: review.transaction.to, to: review.bridge.depositoryReceiver, value: actual.minAmount }, 2),
+    f.log('Deposited', policy.freshChecks.contracts.depository.address as Address,
+      { id: review.bridge.requestId, token: outputToken, receiver: review.bridge.depositoryReceiver, amount: actual.minAmount }, 3)];
+  f.state.receipt!.logs = logs();
+  return { ...f, review, freshProof, actual, logs, input };
+}
 describe('actual two-reader canonical receipt resolver and public DTO', () => {
+  it('recognizes a greater actual source-USDC bridge output only with matching canonical token and Depository request events', async () => {
+    const f = await swapReceiptFixture(), result = await resolveGnosisFundingReceipt(f.input, f.dependencies);
+    expect(result).toMatchObject({ outcome: 'confirmed', sourceTokenOutflowRaw: '10000000', destinationArrival: 'not-certified' });
+    expect(f.actual.minAmount).toBeGreaterThan(BigInt(f.review.sourceSwap!.minimumOutRaw));
+  });
+  it.each(['minimum', 'deposit-request', 'deposit-token', 'deposit-receiver', 'deposit-amount', 'transfer', 'implementation'] as const)(
+    'holds a swapped route with mismatched %s evidence', async fault => {
+      const f = await swapReceiptFixture();
+      if (fault === 'minimum') f.actual.minAmount = BigInt(f.review.sourceSwap!.minimumOutRaw) - 1n;
+      const logs = f.logs();
+      if (fault.startsWith('deposit-')) {
+        const values = { id: f.review.bridge.requestId, token: f.review.bridge.token, receiver: f.review.bridge.depositoryReceiver, amount: f.actual.minAmount };
+        if (fault === 'deposit-request') values.id = TX;
+        if (fault === 'deposit-token') values.token = f.review.input.token;
+        if (fault === 'deposit-receiver') values.receiver = OTHER;
+        if (fault === 'deposit-amount') values.amount--;
+        logs[3] = f.log('Deposited', policy.freshChecks.contracts.depository.address as Address, values, 3);
+      }
+      f.state.receipt!.logs = fault === 'transfer' ? logs.filter((_, i) => i !== 2) : logs;
+      if (fault === 'implementation') f.state.mutate = (call, _url, value) => call.method === 'eth_getStorageAt'
+        && call.params[1] === policy.sourceSwap.usdc.implementationSlot ? ('0x' + OTHER.slice(2).padStart(64, '0')) : value;
+      expect(await resolveGnosisFundingReceipt(f.input, f.dependencies)).toBeNull();
+    });
   it.each(['approve', 'fund'] as const)('recognizes a wrapped %s by exact canonical owner events, without claiming destination arrival', async phase => {
     const f = await fixture(phase), resolution = await resolveGnosisFundingReceipt(f.input, f.dependencies);
     expect(resolution).toMatchObject({ transactionHash: TX, outcome: 'confirmed', destinationArrival: 'not-certified',

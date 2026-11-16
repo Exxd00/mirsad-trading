@@ -65,6 +65,11 @@ export function WalletConnection() {
       return session.current.fundingAction(reservation, phase);
     }} fundingAttemptResult={result => {
       session.current?.fundingAttemptResult(result);
+    }} executorGasAction={(reservation, executor) => {
+      if (!session.current) throw new Error('أعد ربط المحفظة.');
+      return session.current.executorGasAction(reservation, executor);
+    }} executorGasAttemptResult={(result, executor) => {
+      session.current?.executorGasAttemptResult(result, executor);
     }} callsStatus={id => {
       if (!session.current) throw new Error('أعد ربط المحفظة.');
       return session.current.authorityCallsStatus(id);

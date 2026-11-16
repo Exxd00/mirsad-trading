@@ -28,8 +28,8 @@ function above(a: string, b: string) {
 const roleLabel = { gas: 'عملة رسوم الشبكة', 'configured-quote': 'عملة التسعير في الإعداد الحالي', 'held-unconfigured': 'أصل موجود وغير مهيأ كعملة تنفيذ حالية' };
 const decisionLabel = { blocked: 'المسار الحالي محجوب', unproven: 'جدوى التشغيل لم تثبت', 'eligible-for-setup': 'يمكن الانتقال إلى مراجعة الإعداد' };
 
-export function WalletFeasibilityAudit({ wallet, csrfToken, onAudit, disabled = false }: {
-  wallet: Snapshot | null; csrfToken: string | null; onAudit: (audit: WalletFeasibility | null) => void; disabled?: boolean;
+export function WalletFeasibilityAudit({ wallet, csrfToken, onAudit, externalAudit, disabled = false }: {
+  wallet: Snapshot | null; csrfToken: string | null; onAudit: (audit: WalletFeasibility | null) => void; externalAudit?: WalletFeasibility | null; disabled?: boolean;
 }) {
   const [audit, setAudit] = useState<WalletFeasibility | null>(null), [pending, setPending] = useState(false);
   const [invalidated, setInvalidated] = useState(true), [error, setError] = useState('');
@@ -41,6 +41,11 @@ export function WalletFeasibilityAudit({ wallet, csrfToken, onAudit, disabled = 
     setAudit(null); setPending(false); setInvalidated(true); setError(''); onAudit(null);
     return () => { epoch.current++; request.current?.abort(); };
   }, [owner, chain, onAudit]);
+  useEffect(() => {
+    if (!externalAudit || !wallet || !validWalletFeasibility(externalAudit, wallet) || externalAudit.expiresAt <= Date.now()) return;
+    epoch.current++; request.current?.abort(); busy.current = false; setPending(false);
+    setAudit(externalAudit); setInvalidated(false); setError('');
+  }, [externalAudit, owner, chain]);
   useEffect(() => {
     if (!audit) return;
     const timer = setTimeout(() => { setInvalidated(true); onAudit(null); }, Math.min(2147483647, Math.max(0, audit.expiresAt - Date.now())));

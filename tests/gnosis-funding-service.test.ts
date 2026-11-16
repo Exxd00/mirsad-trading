@@ -20,7 +20,7 @@ describe('actual funding parser and fresh two-reader public evidence', () => {
     expect(url.origin + url.pathname).toBe('https://li.quest/v1/quote');
     expect(Object.fromEntries(url.searchParams)).toEqual({ fromChain: '1', toChain: '100', fromToken: policy.fromToken.address,
       toToken: policy.toToken.address, fromAmount: '10000000', fromAddress: audit.owner, toAddress: audit.owner,
-      fromAmountForGas: '50000', slippage: '0.005', allowBridges: 'layerswap' });
+      fromAmountForGas: '50000', slippage: '0.0025', allowBridges: 'layerswap' });
     expect(init).toMatchObject({ method: 'GET', redirect: 'error', credentials: 'omit', cache: 'no-store' });
     expect(f.store.save).not.toHaveBeenCalled(); expect(f.seen.every(v => v.call.method.startsWith('eth_get') || ['eth_call', 'eth_chainId'].includes(v.call.method))).toBe(true);
     expect(parseGnosisFundingAuditUI({ ...audit, ownerReviewAllowed: true, fence: { blocked: false, active: null, fundCompleted: false, lastApproval: null } }, FUNDING_OWNER)).not.toBeNull();
@@ -79,5 +79,15 @@ describe('actual funding parser and fresh two-reader public evidence', () => {
       const { audit } = await prepareGnosisFundingReview(FUNDING_OWNER, f.dependencies);
       expect(audit.status).not.toBe('reviewable'); expect(audit.freshProof).toBeNull(); expect(f.seen).toEqual([]);
     }
+  });
+  it('distinguishes quote HTTP failure from transport failure without exposing upstream bodies or errors', async () => {
+    const f = fundingReads(); f.fetcher.mockResolvedValueOnce(new Response('private-upstream-detail', { status: 403 }));
+    const http = await prepareGnosisFundingReview(FUNDING_OWNER, f.dependencies);
+    expect(http.audit).toMatchObject({ status: 'unavailable', ownerReviewAllowed: false, blockers: ['wallet_gnosis_funding_quote_http_403'] });
+    expect(JSON.stringify(http)).not.toContain('private-upstream-detail'); expect(f.seen).toEqual([]);
+    const g = fundingReads(); g.fetcher.mockRejectedValueOnce(new Error('private-transport-detail'));
+    const transport = await prepareGnosisFundingReview(FUNDING_OWNER, g.dependencies);
+    expect(transport.audit).toMatchObject({ status: 'unavailable', blockers: ['wallet_gnosis_funding_quote_transport_unavailable'] });
+    expect(JSON.stringify(transport)).not.toContain('private-transport-detail'); expect(g.seen).toEqual([]);
   });
 });

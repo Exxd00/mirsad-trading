@@ -3,6 +3,8 @@ import type { AuthorityCloseReview, AuthorityReview } from './authority';
 import type { GnosisFundingReservation, GnosisFundingPhase } from './gnosis-funding-attempts';
 import { assertGnosisFundingReservationFresh, parseGnosisFundingReservationUI, parseGnosisFundingAttemptResultUI,
   type GnosisFundingAttemptResultUI } from './gnosis-funding-ui';
+import { assertExecutorGasReservationFresh, parseExecutorGasReservationUI, parseExecutorGasAttemptResultUI,
+  type ExecutorGasAttemptResultUI, type ExecutorGasReservation } from './gnosis-executor-gas-ui';
 // Connection and refresh only read the wallet. The separate owner action below is
 // restricted to a locally reconstructed Base Sepolia grant or its revocation.
 type Method = 'eth_requestAccounts' | 'eth_accounts' | 'eth_chainId' | 'eth_getBalance' | 'eth_getTransactionCount' | 'eth_signTypedData_v4' | 'eth_sendTransaction'
@@ -28,6 +30,18 @@ export const isUnsentFundingActionError = (error: unknown): error is FundingActi
 export class FundingOwnerRejectedError extends FundingActionError {
   readonly code = 4001;
   constructor() { super('wallet_gnosis_funding_owner_rejected', true); this.name = 'FundingOwnerRejectedError'; }
+}
+type ExecutorGasPending = { id: string; snapshotDigest: string; runtimeDigest: string; profileRevision: number;
+  valueWei: string | null; hash: string | null; requestIssued: boolean };
+const executorGasPending = new WeakMap<WalletProvider, Map<string, ExecutorGasPending>>();
+export class ExecutorGasActionError extends Error {
+  constructor(message: string, readonly requestIssued: boolean) { super(message); this.name = 'ExecutorGasActionError'; }
+}
+export const isUnsentExecutorGasActionError = (error: unknown): error is ExecutorGasActionError =>
+  error instanceof ExecutorGasActionError && error.requestIssued === false;
+export class ExecutorGasOwnerRejectedError extends ExecutorGasActionError {
+  readonly code = 4001;
+  constructor() { super('wallet_executor_gas_owner_rejected', true); this.name = 'ExecutorGasOwnerRejectedError'; }
 }
 export interface Snapshot { address: string; chainId: string; nativeBalance: string; }
 export type WalletView =
@@ -176,6 +190,82 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
   target.addEventListener('pageshow', scheduleRefresh);
   target.dispatchEvent(new Event('eip6963:requestProvider'));
   return {
+    /** One explicitly reviewed native transfer to the setup's verified executor.
+     * No automatic topup, network switch, wallet connection or fee wrapping. */
+    async executorGasAction(input: ExecutorGasReservation, expectedExecutor: string) {
+      let requestIssued = false;
+      const provider = current;
+      // Check prior invocation identity BEFORE cloning: even a malformed second
+      // invocation must not attest an earlier in-flight prompt as unsent.
+      if (provider && [...(executorGasPending.get(provider)?.values() ?? [])].some(v => v.id === input?.attempt?.id)) requestIssued = true;
+      try {
+        const copy: unknown = structuredClone(input), epoch = session;
+        if (!alive || !provider || !requested || asking || !snapshot) throw new Error('wallet_executor_gas_wallet_changed');
+        const owner = snapshot.address.toLowerCase(), executor = expectedExecutor.toLowerCase(), key = owner + ':' + executor;
+        const reservation = parseExecutorGasReservationUI(copy, owner, executor);
+        if (!reservation) throw new Error('wallet_executor_gas_review_invalid');
+        const locks = executorGasPending.get(provider) ?? new Map<string, ExecutorGasPending>(); executorGasPending.set(provider, locks);
+        if (locks.has(key)) { requestIssued = true; throw new Error('wallet_executor_gas_attempt_pending'); }
+        if (ownerRequests.has(provider)) throw new Error('wallet_executor_gas_wallet_changed');
+        const pending: ExecutorGasPending = { id: reservation.attempt.id, snapshotDigest: reservation.attempt.snapshotDigest,
+          runtimeDigest: reservation.attempt.runtimeDigest, profileRevision: reservation.attempt.profileRevision,
+          valueWei: reservation.review.shortfallWei, hash: null, requestIssued: false };
+        locks.set(key, pending); ownerRequests.add(provider);
+        try {
+          assertExecutorGasReservationFresh(reservation);
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          let bound: Awaited<ReturnType<typeof binding>>, pendingNonce: unknown;
+          try {
+            [bound, pendingNonce] = await Promise.race([Promise.all([binding(provider), provider.request({ method: 'eth_getTransactionCount',
+              params: [reservation.review.owner, 'pending'] })]), new Promise<never>((_, reject) => {
+              timer = setTimeout(() => reject(new Error('wallet_executor_gas_wallet_read_timeout')), 5000);
+            })]);
+          } finally { if (timer !== undefined) clearTimeout(timer); }
+          if (!alive || current !== provider || session !== epoch || !requested || bound.chainId !== '100' || bound.address?.toLowerCase() !== owner)
+            throw new Error('wallet_executor_gas_wallet_changed');
+          if (quantity(pendingNonce) !== BigInt(reservation.freshProof.sourcePendingNonce)) throw new Error('wallet_executor_gas_nonce_changed');
+          const checked = parseExecutorGasReservationUI(reservation, owner, executor);
+          if (!checked || checked.attempt.snapshotDigest !== pending.snapshotDigest) throw new Error('wallet_executor_gas_review_invalid');
+          assertExecutorGasReservationFresh(checked);
+          const tx = checked.transaction;
+          let value: unknown;
+          try {
+            requestIssued = true; pending.requestIssued = true;
+            value = await provider.request({ method: 'eth_sendTransaction', params: [{ chainId: '0x64', from: tx.from,
+              to: tx.to, value: tx.value, data: '0x' }] });
+          } catch (error) {
+            if ((error as { code?: unknown } | null)?.code === 4001) throw new ExecutorGasOwnerRejectedError();
+            throw new Error('wallet_executor_gas_result_unknown');
+          }
+          if (typeof value !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(value)) throw new Error('wallet_executor_gas_result_unknown');
+          pending.hash = value.toLowerCase();
+          return { kind: 'transaction' as const, value: pending.hash as `0x${string}` };
+        } finally { ownerRequests.delete(provider); if (queued) scheduleRefresh(); }
+      } catch (error) {
+        if (error instanceof ExecutorGasOwnerRejectedError && requestIssued) throw error;
+        throw new ExecutorGasActionError(requestIssued && !(error instanceof Error && error.message === 'wallet_executor_gas_attempt_pending')
+          ? 'wallet_executor_gas_result_unknown' : error instanceof Error ? error.message : 'wallet_executor_gas_review_invalid', requestIssued);
+      }
+    },
+    /** Read-only synchronization of the separately persisted gas attempt. */
+    executorGasAttemptResult(input: ExecutorGasAttemptResultUI, expectedExecutor: string) {
+      const provider = current; if (!provider || !alive) return;
+      const owner = input.attempt?.owner ?? input.fence.active?.owner ?? input.fence.last?.owner ?? snapshot?.address;
+      if (!owner) return;
+      const result = parseExecutorGasAttemptResultUI(input, owner, expectedExecutor); if (!result) return;
+      const key = owner.toLowerCase() + ':' + expectedExecutor.toLowerCase(), locks = executorGasPending.get(provider) ?? new Map<string, ExecutorGasPending>();
+      executorGasPending.set(provider, locks);
+      const local = locks.get(key), a = result.attempt ?? result.fence.last;
+      if (local && a && a.id === local.id && a.snapshotDigest === local.snapshotDigest && a.runtimeDigest === local.runtimeDigest
+        && a.profileRevision === local.profileRevision && (!local.hash || a.transactionHash === local.hash)
+        && (a.status === 'owner-rejected' && !local.hash || a.status === 'owner-cancelled-unsent' && !local.hash && !local.requestIssued
+          || a.status === 'confirmed' && (local.valueWei === null || a.resolution?.valueWei === local.valueWei)
+          || a.status === 'reverted' && a.resolution?.valueWei === '0')) locks.delete(key);
+      const active = result.fence.active;
+      if (active && !locks.has(key)) locks.set(key, { id: active.id, snapshotDigest: active.snapshotDigest,
+        runtimeDigest: active.runtimeDigest, profileRevision: active.profileRevision, valueWei: null, hash: active.transactionHash,
+        requestIssued: active.status !== 'reserved' });
+    },
     /** Explicit owner click only, after authenticated server reservation. This
      * method never connects, switches chain, approves twice, or retries sends. */
     async fundingAction(input: GnosisFundingReservation, phase: GnosisFundingPhase) {
