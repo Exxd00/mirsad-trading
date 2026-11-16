@@ -5,6 +5,7 @@ import { composeGnosisEurStateHistory, GnosisMarketClient, GnosisMarketError, GN
 import type { GnosisPoolStateBlock, GnosisPoolStateSeries } from '../src/lib/wallet/gnosis-pool-state';
 import type { GnosisStableHistory } from '../src/lib/wallet/gnosis-reference-state';
 import type { GnosisOracleHistory, GnosisUnderlyingRound } from '../src/lib/wallet/gnosis-oracle-reference';
+import { gnosisHistoricalDiagnosticSchema } from '../src/lib/wallet/gnosis-market-diagnostic';
 
 // Deliberately synthetic mathematical state timelines; no liquidity, EVM,
 // historical market value, financial cycle or on-chain authority is claimed.
@@ -14,7 +15,7 @@ const block=(at:number):GnosisPoolStateBlock=>({number:String(1000+(at-START+5)/
 function input(){
   const from=block(START-5),to=block(CLOSE-5),stableBlock=block(START+50),poolBlock=block(START+100),fxBlock=block(START+150);
   const round=(feed:'eurUsd'|'usdcUsd'|'daiUsd',value:string,id:string,b=from):GnosisUnderlyingRound=>({feed,value,roundId:id,answerRaw:String(Number(value)*100000000),
-    updatedAt:START-100,heartbeatSeconds:86400,availableAtBlock:b} as GnosisUnderlyingRound);
+    updatedAt:START-100,heartbeatSeconds:86400,availableAtBlock:b,availability:'observed-at-block'} as GnosisUnderlyingRound);
   const baseline={eurUsd:round('eurUsd','1','1'),usdcUsd:round('usdcUsd','1','1'),daiUsd:round('daiUsd','1','1')};
   const next=round('usdcUsd','2','2',fxBlock);
   const pool={chainId:100,referenceOnly:true,executionReady:false,timeframeSeconds:900,provenanceId:hash('pool'),
@@ -31,6 +32,28 @@ function input(){
 }
 afterEach(()=>vi.useRealTimers());
 describe('chronological Gnosis EUR reference composition',()=>{
+  it.each(['open','event','close'] as const)('captures the exact historical %s point without changing stale rejection or reading the network',phase=>{
+    const x=input();x.oracle.baseline.eurUsd.updatedAt=phase==='open'?START-86401:phase==='event'?START-86400:CLOSE-86401;
+    let error:unknown;try{composeGnosisEurStateHistory(x.pool,x.stable,x.oracle);}catch(e){error=e;}
+    const at=phase==='open'?START:phase==='event'?START+50:CLOSE;
+    expect(error).toBeInstanceOf(GnosisMarketError);expect(error).toMatchObject({code:'gnosis_market_reference_stale',historyDiagnostic:{
+      version:1,feed:'eurUsd',reason:'heartbeat-exceeded',roundId:'1',at,updatedAt:x.oracle.baseline.eurUsd.updatedAt,
+      heartbeatSeconds:86400,availability:'observed-at-block',availableAtBlock:{number:block(START-5).number,hash:block(START-5).hash,timestamp:START-5},
+      phase,window:{openTime:START,closeTime:CLOSE,intervalSeconds:900},bar:{openTime:START,closeTime:CLOSE}}});
+    const d=(error as GnosisMarketError).historyDiagnostic!;expect(gnosisHistoricalDiagnosticSchema.safeParse(d).success).toBe(true);
+    for(const change of [{at:phase==='event'?CLOSE:at+1},{roundId:'private-provider-payload'},{roundId:(1n<<80n).toString()},{heartbeatSeconds:86401},{extra:'secret'}])
+      expect(gnosisHistoricalDiagnosticSchema.safeParse({...d,...change}).success).toBe(false);
+  });
+  it.each(['future-round','future-availability'] as const)('distinguishes %s from historical age while keeping the rejection',reason=>{
+    const x=input(),r=x.oracle.baseline.usdcUsd;r.availableAtBlock=block(START+5);if(reason==='future-round')r.updatedAt=START+1;
+    try{composeGnosisEurStateHistory(x.pool,x.stable,x.oracle);throw Error('Expected stale rejection');}catch(e){
+      expect(e).toMatchObject({code:'gnosis_market_reference_stale',historyDiagnostic:{feed:'usdcUsd',reason,at:START,phase:'open'}});}
+  });
+  it('does not emit malformed round metadata or reinterpret a heartbeat policy mismatch as accepted data',()=>{
+    const x=input();Object.assign(x.oracle.baseline.eurUsd,{updatedAt:START-86401,roundId:'private-provider-payload',heartbeatSeconds:86401});
+    try{composeGnosisEurStateHistory(x.pool,x.stable,x.oracle);throw Error('Expected stale rejection');}catch(e){
+      expect(e).toMatchObject({code:'gnosis_market_reference_stale',historyDiagnostic:undefined});expect(JSON.stringify(e)).not.toContain('private-provider-payload');}
+  });
   it('replays all three sources instead of multiplying unrelated OHLC extrema',()=>{
     const x=input(),out=composeGnosisEurStateHistory(x.pool,x.stable,x.oracle);
     // Path:10*2*1=20 ->10*1*1=10 ->20*1*1=20 ->20*1*2=40.

@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONFIG } from '../src/lib/execution/v1/model';
 import { auditGnosisMarketReadiness } from '../src/lib/wallet/gnosis-market-readiness';
 import { GNOSIS_MARKET_PROVIDER, GNOSIS_REFERENCE_IDENTITY, gnosisEurSeriesDigest, type GnosisEurStateSeries,
-  type GnosisEurStateStore, type GnosisMarketClient, type GnosisMarketOptions } from '../src/lib/wallet/gnosis-market';
+  GnosisMarketError, type GnosisEurStateStore, type GnosisMarketClient, type GnosisMarketOptions } from '../src/lib/wallet/gnosis-market';
+import { historyDiagnostic } from './fixtures/gnosis-history-diagnostic';
 
 // Synthetic external market-port evidence tests the preflight boundary. These
 // prices, blocks and bars claim no real liquidity, capital or financial cycle.
@@ -42,6 +43,29 @@ beforeEach(() => { vi.stubGlobal('fetch', vi.fn(() => { throw new Error('no exte
 afterEach(() => { expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('Gnosis reference-only preflight with no execution prerequisites', () => {
+  it('reports the historical failed tuple separately from a fresh current reference, preserving actual cached coverage', async () => {
+    for (const count of [200, 1000]) {
+      const f = fixture(), d = historyDiagnostic(CLOSE - 900); f.history.mockRejectedValue(new GnosisMarketError('gnosis_market_reference_stale', undefined, d));
+      f.store.load.mockResolvedValue(chunks(series(count))); const result = await auditGnosisMarketReadiness(f.deps);
+      expect(result).toMatchObject({ status: 'warming', readAt: NOW, historyDiagnostic: d, errors: ['gnosis_market_reference_stale'],
+        current: { status: 'ready', readAt: NOW }, history: { completedCandles: count, complete: count === 1000 } });
+      expect(result.historyDiagnostic!.at).not.toBe(result.readAt); expect(f.history).toHaveBeenCalledOnce(); expect(f.current).toHaveBeenCalledOnce();
+      expect(f.store.save).not.toHaveBeenCalled();
+    }
+  });
+  it.each(['extra', 'future-window', 'future-block', 'wrong-interval', 'old-window', 'wrong-reason'] as const)('rejects %s diagnostic metadata without exposing a provider payload', async fault => {
+    const f = fixture(), d = historyDiagnostic(CLOSE - 900) as unknown as Record<string, unknown>;
+    if (fault === 'extra') d.privateProviderPayload = 'sensitive-url-must-not-be-returned';
+    if (fault === 'future-window') Object.assign(d, historyDiagnostic(CLOSE + 900));
+    if (fault === 'future-block') { d.availableAtBlock = { ...(d.availableAtBlock as object), timestamp: NOW + 60 }; d.reason = 'future-availability'; }
+    if (fault === 'old-window') Object.assign(d, historyDiagnostic(CLOSE - 1001 * 900));
+    if (fault === 'wrong-interval') { d.window = { openTime: CLOSE - 60, closeTime: CLOSE, intervalSeconds: 60 }; d.bar = { openTime: CLOSE - 60, closeTime: CLOSE }; d.at = CLOSE; }
+    if (fault === 'wrong-reason') d.reason = 'future-round';
+    f.history.mockRejectedValue({ code: 'gnosis_market_reference_stale', historyDiagnostic: d });
+    const result = await auditGnosisMarketReadiness(f.deps);
+    expect(result.status).not.toBe('ready'); expect(result.historyDiagnostic).toBeUndefined();
+    expect(result.errors).toContain('wallet_market_readiness_diagnostic_invalid'); expect(JSON.stringify(result)).not.toContain('sensitive-url');
+  });
   it('requires 1000 actual contiguous completed reference bars and a fresh current block, without certifying finance', async () => {
     const f = fixture(), result = await auditGnosisMarketReadiness(f.deps);
     expect(result).toMatchObject({ status: 'ready', chainId: 100, referenceOnly: true, financialReadiness: 'not-certified', createdExecutionState: false,

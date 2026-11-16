@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { GnosisMarketReadinessEnvelope } from '@/lib/wallet/gnosis-market-readiness';
+import { gnosisHistoricalDiagnosticSchema } from '@/lib/wallet/gnosis-market-diagnostic';
 import styles from '@/app/automation/page.module.css';
 
 const endpoint = '/api/wallet/strategy/market-readiness';
@@ -28,6 +29,12 @@ function valid(v: unknown): v is GnosisMarketReadinessEnvelope {
     || h.provenanceIds.length > 1200 || !h.provenanceIds.every(id => typeof id === 'string' && /^0x[0-9a-f]{64}$/.test(id))) return false;
   if (h.complete && (h.completedCandles !== 1000 || h.contiguousCandles !== 1000 || h.lastCloseTime !== h.targetCloseTime
     || h.firstCloseTime !== h.targetCloseTime - 999 * 900)) return false;
+  if (r.historyDiagnostic !== undefined && r.historyDiagnostic !== null) {
+    const d = gnosisHistoricalDiagnosticSchema.safeParse(r.historyDiagnostic);
+    if (!d.success || r.status === 'ready' || !r.errors.includes('gnosis_market_reference_stale') || d.data.at > r.readAt || d.data.availableAtBlock.timestamp > r.readAt
+      || d.data.window.intervalSeconds !== 900 || d.data.window.openTime < h.targetCloseTime - 1000 * 900
+      || d.data.window.closeTime > h.targetCloseTime) return false;
+  }
   if (!record(c) || !['ready', 'unavailable'].includes(String(c.status))) return false;
   if (c.status === 'ready' && (!record(c.block) || !time(c.block.timestamp) || !time(c.readAt) || c.sourceAt !== c.block.timestamp
     || typeof c.block.number !== 'string' || !/^[1-9]\d{0,19}$/.test(c.block.number)
@@ -105,6 +112,19 @@ export function WalletGnosisReadiness({ csrfToken, disabled = false }: { csrfTok
       <p>آخر قراءة: <bdi dir="ltr">{stamp(report.readAt)}</bdi>. نهاية الفترة المطلوبة: <bdi dir="ltr">{stamp(report.history.targetCloseTime)}</bdi>.</p>
       {report.current.status === 'ready' && <p>آخر أسعار مرجعية باليورو: WETH <bdi>{report.current.wethEur}</bdi>؛ USDC.e <bdi>{report.current.usdceEur}</bdi>؛ xDAI <bdi>{report.current.xdaiEur}</bdi>.</p>}
       {report.errors.length > 0 && <details><summary>سبب عدم اكتمال التحقق</summary><ul>{report.errors.map(e => <li key={e}><bdi dir="ltr">{e}</bdi></li>)}</ul></details>}
+      {report.historyDiagnostic && <details><summary>تشخيص الجولة التاريخية المرفوضة</summary>
+        <p>هذا تشخيص لتقييم شمعة تاريخية؛ لا يستبدل الجولة ولا يصف حداثة السعر الحالي.</p>
+        <dl>
+          <dt>المرجع والجولة</dt><dd><bdi dir="ltr">{report.historyDiagnostic.feed === 'eurUsd' ? 'EUR / USD' : 'USDC / USD'} · {report.historyDiagnostic.roundId}</bdi></dd>
+          <dt>سبب الرفض والمرحلة</dt><dd><bdi dir="ltr">{report.historyDiagnostic.reason} · {report.historyDiagnostic.phase}</bdi></dd>
+          <dt>وقت التقييم التاريخي</dt><dd><bdi dir="ltr">{stamp(report.historyDiagnostic.at)}</bdi></dd>
+          <dt>وقت تحديث الجولة</dt><dd><bdi dir="ltr">{stamp(report.historyDiagnostic.updatedAt)}</bdi></dd>
+          <dt>العمر وقت التقييم وحدّه بالثواني</dt><dd><bdi dir="ltr">{report.historyDiagnostic.at - report.historyDiagnostic.updatedAt} / {report.historyDiagnostic.heartbeatSeconds}</bdi></dd>
+          <dt>نافذة الدفعة والشمعة</dt><dd><bdi dir="ltr">{stamp(report.historyDiagnostic.window.openTime)} — {stamp(report.historyDiagnostic.window.closeTime)}; {stamp(report.historyDiagnostic.bar.openTime)} — {stamp(report.historyDiagnostic.bar.closeTime)}</bdi></dd>
+          <dt>{report.historyDiagnostic.availability === 'observed-at-block' ? 'كتلة لوحظ توفر الجولة عندها، وليست إثباتًا لوقت بثها' : 'كتلة بث الجولة'}</dt>
+          <dd><bdi dir="ltr">{report.historyDiagnostic.availableAtBlock.number} · {report.historyDiagnostic.availableAtBlock.hash} · {stamp(report.historyDiagnostic.availableAtBlock.timestamp)}</bdi></dd>
+        </dl>
+      </details>}
     </>}
     {job?.lastError && <p>لم تكتمل آخر محاولة ضمن وقت الفحص؛ ستبقى الدفعات المتحقق منها محفوظة.</p>}
     <p>اكتمال البيانات وحده لا يثبت جاهزية التداول. يُراجع الرصيد وتكلفة الدورة وصلاحية المحفظة في الخطوات التالية.</p>

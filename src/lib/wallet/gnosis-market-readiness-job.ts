@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { query, transaction, type SqlExecutor } from '../db';
 import { auditGnosisMarketReadiness, type GnosisMarketReadiness } from './gnosis-market-readiness';
+import { gnosisHistoricalDiagnosticSchema } from './gnosis-market-diagnostic';
 
 export const GNOSIS_MARKET_READINESS_JOB_KEY = 'wallet:gnosis:market-readiness-job:v1';
 const KEY = GNOSIS_MARKET_READINESS_JOB_KEY, LEASE = 65, PERIOD = 300, LIFETIME = 43200, ATTEMPTS = 144;
@@ -14,6 +15,7 @@ const nullableTime = time.nullable(), count = z.number().int().min(0).max(1000).
 const reportSchema = z.object({ version: z.literal(1), chainId: z.literal(100), referenceOnly: z.literal(true),
   createdExecutionState: z.literal(false), financialReadiness: z.literal('not-certified'), status: z.enum(['ready', 'warming', 'unavailable']),
   readAt: time, retryAt: time, providerRetryAt: time.nullable().optional(),
+  historyDiagnostic: gnosisHistoricalDiagnosticSchema.nullable().optional(),
   errors: z.array(z.string().regex(/^(?:wallet_market_readiness|gnosis_(?:market|pool|oracle|reference))_[a-z_]{1,96}$/)).max(16),
   history: z.object({ requiredCandles: z.literal(1000), completedCandles: count, contiguousCandles: count, targetCloseTime: time,
     firstCloseTime: nullableTime, lastCloseTime: nullableTime, provenanceIds: z.array(z.string().regex(/^0x[0-9a-f]{64}$/)).max(1200), complete: z.boolean() }).strict(),
@@ -26,6 +28,9 @@ const reportSchema = z.object({ version: z.literal(1), chainId: z.literal(100), 
     || (r.history.firstCloseTime !== null && (r.history.lastCloseTime === null || r.history.firstCloseTime > r.history.lastCloseTime))
     || (r.history.complete && (r.history.completedCandles !== 1000 || r.history.contiguousCandles !== 1000
       || r.history.lastCloseTime !== r.history.targetCloseTime || r.history.firstCloseTime !== r.history.targetCloseTime - 999 * 900))
+    || (r.historyDiagnostic && (r.status === 'ready' || !r.errors.includes('gnosis_market_reference_stale')
+      || r.historyDiagnostic.at > r.readAt || r.historyDiagnostic.availableAtBlock.timestamp > r.readAt || r.historyDiagnostic.window.intervalSeconds !== 900
+      || r.historyDiagnostic.window.openTime < r.history.targetCloseTime - 1000 * 900 || r.historyDiagnostic.window.closeTime > r.history.targetCloseTime))
     || (r.status === 'ready' && (!r.history.complete || r.current.status !== 'ready' || r.errors.length))
     || (r.current.status === 'ready' && (!r.current.block || r.current.readAt === null || r.current.sourceAt !== r.current.block.timestamp
       || r.current.block.timestamp > r.current.readAt || r.current.readAt > r.readAt || r.readAt - r.current.block.timestamp > 15 || r.readAt - r.current.readAt > 15

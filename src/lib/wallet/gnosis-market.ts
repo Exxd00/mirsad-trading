@@ -10,6 +10,7 @@ import { GnosisReferenceStateClient, type GnosisStableHistory } from './gnosis-r
 import pins from './generated/gnosis-contracts.json';
 import redemption from './generated/gnosis-usdce-reference.json';
 import stablePins from './generated/gnosis-market-reference.json';
+import { gnosisHistoricalDiagnosticSchema, type GnosisHistoricalReferenceDiagnostic } from './gnosis-market-diagnostic';
 
 export const GNOSIS_MARKET_PROVIDER = 'gnosis-canonical-state-eur-reference-v1' as const;
 export const GNOSIS_REFERENCE_IDENTITY = 'gnosis-reference:v1:'+createHash('sha256').update(JSON.stringify([
@@ -42,7 +43,8 @@ export function parseGnosisMarketMapping(raw: unknown): GnosisMarketMapping {
 type Code = 'gnosis_market_range_invalid' | 'gnosis_market_mapping_invalid' | 'gnosis_market_history_incomplete'
   | 'gnosis_market_reference_stale' | 'gnosis_market_read_timeout' | 'gnosis_market_read_unavailable'
   | 'gnosis_market_provider_cooldown' | 'gnosis_provisional_fx_reorganized';
-export class GnosisMarketError extends Error { constructor(readonly code: Code,readonly retryAt?:number) { super(code); this.name = 'GnosisMarketError'; } }
+export class GnosisMarketError extends Error { constructor(readonly code: Code,readonly retryAt?:number,
+  readonly historyDiagnostic?:GnosisHistoricalReferenceDiagnostic) { super(code); this.name = 'GnosisMarketError'; } }
 const fail = (code: Code): never => { throw new GnosisMarketError(code); };
 const digest = (v: unknown): Hex => keccak256(stringToHex(JSON.stringify(v,(_,x)=>x!==null&&typeof x==='object'&&!Array.isArray(x)
   ?Object.fromEntries(Object.entries(x).sort(([a],[b])=>a.localeCompare(b))):x)));
@@ -132,15 +134,22 @@ export function composeGnosisEurStateHistory(pool: GnosisPoolStateSeries, stable
     || !Number.isSafeInteger(c.ix)||c.ix<0) return fail('gnosis_market_history_incomplete');
     const known=seenBlocks.get(c.block.number);if(known&&!sameBlock(known,c.block))return fail('gnosis_market_history_incomplete');
     seenBlocks.set(c.block.number,c.block);previousTime=c.block.timestamp; }
-  const prices = (at:number) => {
+  const prices = (at:number,phase:'open'|'event'|'close',bar:{openTime:number;closeTime:number}) => {
     const check=(r:GnosisUnderlyingRound) => { if(r.updatedAt>at || r.availableAtBlock.timestamp>at || at-r.updatedAt>r.heartbeatSeconds
-      || r.heartbeatSeconds!==86400) return fail('gnosis_market_reference_stale');return positive(r.value); };
+      || r.heartbeatSeconds!==86400) {
+      const d=gnosisHistoricalDiagnosticSchema.safeParse({version:1,feed:r.feed,reason:r.updatedAt>at?'future-round'
+        :r.availableAtBlock.timestamp>at?'future-availability':'heartbeat-exceeded',roundId:r.roundId,updatedAt:r.updatedAt,at,
+        heartbeatSeconds:r.heartbeatSeconds,availability:r.availability,availableAtBlock:{number:r.availableAtBlock.number,
+          hash:r.availableAtBlock.hash,timestamp:r.availableAtBlock.timestamp},phase,window:{openTime:start,closeTime:finish,intervalSeconds:step},
+        bar:{openTime:bar.openTime,closeTime:bar.closeTime}});
+      throw new GnosisMarketError('gnosis_market_reference_stale',undefined,d.success?d.data:undefined);
+    }return positive(r.value); };
     const usdce=check(rounds.usdcUsd).div(check(rounds.eurUsd));
     // DAI is deliberately absent: xDAI is priced through the actual WXDAI pool.
     const xdai=usdce.div(wxdaiPerUsdce); return {weth:wxdaiPerWeth.mul(xdai),usdce,xdai};
   };
   const bars:Candle[]=[],marks:GnosisEurStateSeries['marks']=[];let ix=0;
-  for(const [barIndex,raw] of pool.bars.entries()){ const open=prices(raw.openTime).weth;let high=open,low=open,volume=0n;
+  for(const [barIndex,raw] of pool.bars.entries()){ const open=prices(raw.openTime,'open',raw).weth;let high=open,low=open,volume=0n;
     while(ix<changes.length&&changes[ix].block.timestamp<raw.closeTime){const c=changes[ix++];
       if(c.block.timestamp<raw.openTime)return fail('gnosis_market_history_incomplete');
       if(c.kind==='pool'){if(c.event.kind==='sync')wxdaiPerWeth=positive(c.event.quotePerBase);else{
@@ -148,9 +157,9 @@ export function composeGnosisEurStateHistory(pool: GnosisPoolStateSeries, stable
         if(!/^(0|[1-9]\d*)$/.test(c.event.baseVolumeRaw))return fail('gnosis_market_history_incomplete');volume+=BigInt(c.event.baseVolumeRaw);}}
       else if(c.kind==='stable')wxdaiPerUsdce=positive(c.event.state.wxdaiPerUsdce);
       else rounds[c.event.round.feed]=structuredClone(c.event.round);
-      const p=prices(c.block.timestamp).weth;high=D.max(high,p);low=D.min(low,p);
+      const p=prices(c.block.timestamp,'event',raw).weth;high=D.max(high,p);low=D.min(low,p);
     }
-    const close=prices(raw.closeTime);
+    const close=prices(raw.closeTime,'close',raw);
     for(const key of ['eurUsd','usdcUsd','daiUsd'] as const){const expected=oracle.points[barIndex].feeds[key];
       if(rounds[key].roundId!==expected.roundId||rounds[key].answerRaw!==expected.answerRaw||rounds[key].updatedAt!==expected.updatedAt)
         return fail('gnosis_market_history_incomplete');}
