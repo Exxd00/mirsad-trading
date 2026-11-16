@@ -286,9 +286,10 @@ export async function prepareGnosisFundingReview(ownerInput: string, deps: Fundi
       review, freshProof, blockers: [], executionApproved: false, ownerReviewAllowed: false, unverified: unverified(review) } };
   } catch (e) {
     const code = e instanceof GnosisFundingError||e instanceof GnosisFundingRouteError ? e.code : e instanceof Error && e.message === 'wallet_gnosis_funding_quote_invalid' ? e.message : 'wallet_gnosis_funding_unavailable';
+    const reasons=e instanceof GnosisFundingRouteError?[`wallet_gnosis_funding_route_${e.reason}`]:[];
     return { rawQuote: null, audit: { version: 1, owner, sourceChainId: 1, destinationChainId: 100, status: code === 'wallet_gnosis_funding_unavailable' || code === 'wallet_gnosis_funding_timeout' || code === 'wallet_gnosis_funding_rate_limited'
       || /^wallet_gnosis_funding_(?:quote|rpc)_(?:http_\d{3}|transport_unavailable)$/.test(code) ? 'unavailable' : 'blocked',
-      readAt: c.clock(), expiresAt: c.clock(), review, freshProof: null, blockers: [code], executionApproved: false, ownerReviewAllowed: false, unverified: unverified(review) } };
+      readAt: c.clock(), expiresAt: c.clock(), review, freshProof: null, blockers: [code,...reasons], executionApproved: false, ownerReviewAllowed: false, unverified: unverified(review) } };
   } finally { c.closed = true; }
 }
 export async function auditGnosisFunding(owner: string, deps: FundingReadDependencies = {}): Promise<GnosisFundingAudit> { return (await prepareGnosisFundingReview(owner, deps)).audit; }

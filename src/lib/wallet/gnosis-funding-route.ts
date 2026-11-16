@@ -1,11 +1,16 @@
 import 'server-only';
 import policy from './generated/gnosis-funding-contracts.json';
 
+const ROUTE_REASONS=['selection_empty','selection_shape','selection_no_match','selection_oversize',
+  'step_profile_mismatch','step_id_mismatch','step_source_asset_mismatch']as const;
+export type GnosisFundingRouteReason=typeof ROUTE_REASONS[number];
 export class GnosisFundingRouteError extends Error {
   readonly code='wallet_gnosis_funding_route_unavailable';
-  constructor(){super('wallet_gnosis_funding_route_unavailable');}
+  readonly reason:GnosisFundingRouteReason;
+  constructor(reason:GnosisFundingRouteReason){super('wallet_gnosis_funding_route_unavailable');
+    this.reason=ROUTE_REASONS.includes(reason)?reason:'selection_shape';}
 }
-const fail=():never=>{throw new GnosisFundingRouteError();};
+const fail=(reason:GnosisFundingRouteReason):never=>{throw new GnosisFundingRouteError(reason);};
 const object=(v:unknown):v is Record<string,any>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const same=(a:unknown,b:string)=>typeof a==='string'&&a.toLowerCase()===b.toLowerCase();
 const amount=(v:unknown):bigint|null=>typeof v==='string'&&/^(?:0|[1-9]\d{0,77})$/.test(v)&&BigInt(v)<(1n<<256n)?BigInt(v):null;
@@ -54,18 +59,20 @@ function matchesStep(step:unknown,owner:string):step is Record<string,any>{
 
 export type SelectedGnosisFundingStep={readonly id:string;readonly owner:string;readonly body:string};
 export function selectGnosisFundingStep(raw:unknown,owner:string):SelectedGnosisFundingStep{
-  if(!object(raw)||!Array.isArray(raw.routes)||raw.routes.length>3)return fail();
+  if(!object(raw)||!Array.isArray(raw.routes)||raw.routes.length>3)return fail('selection_shape');
+  if(raw.routes.length===0)return fail('selection_empty');
   for(const route of raw.routes){
     if(!object(route)||route.fromChainId!==1||route.toChainId!==100||route.fromAmount!==policy.fromAmount
       ||!same(route.fromAddress,owner)||!same(route.toAddress,owner)||!token(route.fromToken,'input')||!token(route.toToken,'destination')
       ||!Array.isArray(route.steps)||route.steps.length!==1||!matchesStep(route.steps[0],owner))continue;
-    const step=route.steps[0],body=JSON.stringify(step);if(Buffer.byteLength(body)>131072)return fail();
+    const step=route.steps[0],body=JSON.stringify(step);if(Buffer.byteLength(body)>131072)return fail('selection_oversize');
     return Object.freeze({id:step.id,owner,body}); // Unmodified Step, never reconstructed calls.
   }
-  return fail();
+  return fail('selection_no_match');
 }
 export function assertGnosisFundingStepResult(selected:SelectedGnosisFundingStep,raw:unknown):void{
   const original=JSON.parse(selected.body);
-  if(!matchesStep(original,selected.owner)||!matchesStep(raw,selected.owner)||raw.id!==selected.id
-    ||!same(raw.includedSteps[2].action.toToken.address,original.includedSteps[2].action.toToken.address))return fail();
+  if(!matchesStep(original,selected.owner)||!matchesStep(raw,selected.owner))return fail('step_profile_mismatch');
+  if(raw.id!==selected.id)return fail('step_id_mismatch');
+  if(!same(raw.includedSteps[2].action.toToken.address,original.includedSteps[2].action.toToken.address))return fail('step_source_asset_mismatch');
 }

@@ -20,6 +20,12 @@ const statuses = { reserved: 'حُفظ الطلب؛ قد تكون نافذة ا�
   'owner-cancelled-unsent': 'أُغلق الطلب قبل إرساله إلى المحفظة بعد التحقق من حالة المصدر',
   confirmed: 'تأكدت عملية المصدر', reverted: 'أثبتت السلسلة فشل العملية' };
 
+export function FundingReviewAvailability({ audit, fresh }: { audit: Pick<GnosisFundingAudit, 'review' | 'status'>; fresh: boolean }) {
+  if (!audit.review) return <p role="status">لم يتوفر عرض تمويل صالح في هذه القراءة، لذلك لا يظهر مربع مراجعة المبلغ والرسوم أو أزرار الموافقة والتحويل. قراءة العرض نفسها لا تطلب توقيعًا أو إرسالًا من MetaMask.</p>;
+  if (audit.status === 'reviewable' && !fresh) return <p role="status">انتهت صلاحية عرض التمويل المعروض. مربع المراجعة وأزرار الموافقة والتحويل معطّلة؛ يلزم عرض حديث قبل المتابعة.</p>;
+  return null;
+}
+
 export function FundingRouteAmounts({ review }: { review: GnosisFundingQuoteReview }) {
   const symbol = review.route === 'swap-eth' ? 'ETH' : 'USDC';
   return <>
@@ -165,7 +171,7 @@ export function WalletFundingReview({ wallet, csrfToken, ownerAction, syncResult
       <button type="button" className={styles.button} disabled={disabled || pending || !owner || !csrfToken || wallet?.chainId !== '1'} onClick={() => void quote()}>قراءة عرض التمويل والرسوم</button>
       <button type="button" className={styles.button} disabled={pending || !owner} onClick={() => void read()}>تحديث الحالة المحفوظة</button>
     </div>
-    {pending && <p role="status">جارٍ إكمال الخطوة؛ راجع MetaMask إذا ظهرت نافذة موافقة.</p>}
+    {pending && <p role="status">جارٍ إكمال الخطوة الحالية…</p>}
     {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     {active && <div role="status">
       <p>{phases[active.phase]}: {statuses[active.status]}.</p>
@@ -180,6 +186,7 @@ export function WalletFundingReview({ wallet, csrfToken, ownerAction, syncResult
     {fence?.fundCompleted && <p role="status">تأكدت عملية التمويل على شبكة المصدر. يُثبت وصول USDC.e وxDAI بفحص الأرصدة على Gnosis قبل إعداد المحرك.</p>}
     {fence?.lastApproval && <p>تأكدت الموافقة المحدودة على المصدر. اقرأ عرضًا حديثًا لمراجعة التحويل.</p>}
     {audit && <>
+      <FundingReviewAvailability audit={audit} fresh={fresh} />
       <p role="status">{audit.ownerReviewAllowed && fresh ? 'اكتملت متطلبات عرض الطلب على صاحب المحفظة.' : 'متطلبات فتح طلب المحفظة لم تكتمل بعد.'}</p>
       <p>وقت القراءة: <bdi dir="ltr">{stamp(audit.readAt)}</bdi>؛ نهاية المراجعة: <bdi dir="ltr">{stamp(audit.expiresAt)}</bdi>.</p>
       {review && <>
