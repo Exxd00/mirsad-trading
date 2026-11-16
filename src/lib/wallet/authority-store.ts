@@ -1,6 +1,7 @@
 import 'server-only';
 import { z } from 'zod';
-import type { SqlExecutor } from '../db';
+import { query, transaction, type SqlExecutor } from '../db';
+import { assertAuthorityActionIdle } from './authority-action-fence';
 import { decryptSecret, encryptSecret } from '../secrets';
 import { AuthorityError, authorityDigest, authoritySignatureValid, createAuthorityCloseReview, parseAuthorityReview, type AuthorityCloseReview, type AuthorityReview } from './authority';
 
@@ -50,7 +51,11 @@ export async function loadAuthority(tx: SqlExecutor): Promise<AuthorityRecord | 
   return result.rowCount ? parseRecord(result.rows[0].value) : null;
 }
 export async function saveAuthority(tx: SqlExecutor, value: Omit<AuthorityRecord, 'storageVersion' | 'revision'>,
-  expectedRevision: number | null): Promise<AuthorityRecord> {
+  expectedRevision: number | null, permitAttemptId?: string): Promise<AuthorityRecord> {
+  // The production {query} caller is promoted to a real transaction so the
+  // shared attempt fence stays locked until the revision CAS commits.
+  if (tx.query === query) return transaction(t => saveAuthority(t, value, expectedRevision, permitAttemptId));
+  await assertAuthorityActionIdle(tx, true, permitAttemptId);
   if (expectedRevision !== null && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1 || expectedRevision >= Number.MAX_SAFE_INTEGER)) {
     throw new AuthorityError('wallet_authority_revision_invalid');
   }

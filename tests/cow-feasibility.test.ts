@@ -245,9 +245,9 @@ describe('setup feasibility before server state creation', () => {
     vi.spyOn(runtime, 'loadCowRuntime').mockResolvedValue(null);
     const guard = vi.spyOn(feasibility, 'assertCowSetupFeasible').mockRejectedValue(new AuthorityError('wallet_authority_feasibility_blocked'));
     const executor = vi.spyOn(runtime, 'cowExecutor');
-    const save = vi.spyOn(profile, 'saveStrategyProfile'), transaction = vi.spyOn(db, 'transaction');
+    const save = vi.spyOn(profile, 'saveStrategyProfile'), transaction = vi.spyOn(db, 'transaction'), query = vi.spyOn(db, 'query');
     await expect(prepareCowSetup(owner, 1)).rejects.toThrow('wallet_authority_feasibility_blocked');
     expect(guard).toHaveBeenCalledWith(owner, 1); expect(executor).not.toHaveBeenCalled();
-    expect(save).not.toHaveBeenCalled(); expect(transaction).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled(); expect(transaction).not.toHaveBeenCalled(); expect(query).not.toHaveBeenCalled();
   });
 });

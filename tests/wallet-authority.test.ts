@@ -83,7 +83,8 @@ describe('authority CAS, private grant and closure lifecycle', () => {
     await expect(prepareAuthority(tx, null, null, NOW)).rejects.toThrow('wallet_authority_environment_missing');
     expect(await loadAuthority(tx)).toBeNull();
     const r = await prepared(); expect(r.state).toBe('draft');
-    expect((await tx.query<{ key: string }>('SELECT key FROM app_settings ORDER BY key')).rows.map(r => r.key)).toEqual([AUTHORITY_KEY, 'wallet:strategy:profile:v1']);
+    expect((await tx.query<{ key: string }>('SELECT key FROM app_settings ORDER BY key')).rows.map(r => r.key)).toEqual([
+      'wallet:strategy:authority-action:v1:metamask-strategy-v1:fence', AUTHORITY_KEY, 'wallet:strategy:profile:v1']);
     expect(await loadVerifiedAuthorityForRuntime(tx, NOW)).toBeNull();
   });
   it('does not accept incomplete chain verification or a signature before owner actions are verified', async () => {

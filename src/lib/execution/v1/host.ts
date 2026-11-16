@@ -17,6 +17,7 @@ import { runMarketObservation } from './market-observation';
 import { query } from '../../db';
 import { loadStrategyProfile } from '../../wallet/strategy-profile';
 import { resumeGnosisMarketReadiness } from '../../wallet/gnosis-market-readiness-job';
+import { loadAuthority } from '../../wallet/authority-store';
 export const journal = new SqlJournal();
 export async function connectedVenue(): Promise<ConnectedWalletVenue | null> {
   const source = await ensureCowWalletSource();
@@ -114,11 +115,18 @@ export async function runProtection() {
   return port ? protectionCycle(port, journal) : { ...unavailable(), retryAt: Math.floor(Date.now() / 1000) + CONFIG.protectionPollSeconds };
 }
 export async function runTick() {
-  // An owner-enabled, market-only warmup can continue before a financial
-  // profile exists. Its own bounded job never creates authority or arms entries.
+  // An owner-enabled warmup also survives an unsigned Gnosis setup candidate.
+  // Its bounded job never creates authority or arms entries.
   // Keep it outside the 10-second protection path and isolate read failures.
   const marketReadiness = Promise.resolve().then(async () => {
-    if (await loadStrategyProfile({ query })) return undefined;
+    const profile = await loadStrategyProfile({ query });
+    if (profile) {
+      if (profile.profile.chainId !== 100) return undefined;
+      const authority = await loadAuthority({ query });
+      if (authority?.state === 'verified' && authority.review.chainId === 100
+        && authority.review.profileRevision === profile.revision
+        && authority.review.owner.toLowerCase() === profile.profile.owner.toLowerCase()) return undefined;
+    }
     return await resumeGnosisMarketReadiness();
   }).catch(() => ({ status: 'unavailable' as const, reason: 'wallet_market_readiness_unavailable' }));
   // Public reference measurement has its own bounded lease and state. It never

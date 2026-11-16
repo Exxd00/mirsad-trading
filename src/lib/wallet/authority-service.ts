@@ -7,6 +7,7 @@ import { AuthorityError, authorityBlockCurrent, authorityNow, authoritySignature
   verificationReady, type AuthorityPreparation, type AuthorityReview, type AuthorityVerification,
   type AuthorityCloseInputs, type AuthorityCloseReview, type AuthorityCloseVerification } from './authority';
 import { loadAuthority, saveAuthority, sealAuthoritySignature, type AuthorityRecord } from './authority-store';
+import { assertAuthorityActionIdle } from './authority-action-fence';
 
 /** Root-owned production adapter. All methods read canonical chain evidence.
  * prepareClose additionally acquires the real account lease and durably fences
@@ -63,6 +64,7 @@ async function current(tx: SqlExecutor, id: string, digest: Hex, revision: numbe
   return record;
 }
 export async function prepareAuthority(tx: SqlExecutor, env: AuthorityEnvironment | null, expectedRevision: number | null, now: number) {
+  await assertAuthorityActionIdle(tx);
   authorityNow(now); const e = environment(env), existing = await loadAuthority(tx);
   if ((existing?.revision ?? null) !== expectedRevision) throw new AuthorityError('wallet_authority_revision_conflict');
   // Replacing an active or closing bearer grant would lose its cleanup ledger.
@@ -109,6 +111,7 @@ export async function recordAuthorityOwnerActions(tx: SqlExecutor,
 }
 export async function verifyAuthorityOwnerActions(tx: SqlExecutor, env: AuthorityEnvironment | null,
   input: { id: string; digest: Hex; expectedRevision: number; transactionHashes?: Hex[] }, now: number) {
+  await assertAuthorityActionIdle(tx);
   const e = environment(env), record = await current(tx, input.id, input.digest, input.expectedRevision, now, true);
   if (['closing', 'closed', 'verified'].includes(record.state)) throw new AuthorityError('wallet_authority_state_invalid');
   await profileFor(tx, record.review, now);
@@ -122,6 +125,7 @@ export async function verifyAuthorityOwnerActions(tx: SqlExecutor, env: Authorit
 }
 export async function acceptAuthoritySignature(tx: SqlExecutor, env: AuthorityEnvironment | null,
   input: { id: string; digest: Hex; expectedRevision: number; signature: Hex }, now: number) {
+  await assertAuthorityActionIdle(tx);
   const e = environment(env), record = await current(tx, input.id, input.digest, input.expectedRevision, now);
   if (record.state !== 'signature-pending') throw new AuthorityError('wallet_authority_state_invalid');
   if (!authoritySignatureValid(input.signature)) throw new AuthorityError('wallet_authority_signature_invalid');
@@ -165,6 +169,7 @@ export async function recheckAuthority(tx: SqlExecutor, env: AuthorityEnvironmen
 }
 export async function prepareAuthorityClose(tx: SqlExecutor, env: AuthorityEnvironment | null,
   input: { id: string; digest: Hex; expectedRevision: number }, now: number) {
+  await assertAuthorityActionIdle(tx);
   authorityNow(now); const e = environment(env), record = await current(tx, input.id, input.digest, input.expectedRevision, now, true);
   if (record.state === 'closed') throw new AuthorityError('wallet_authority_state_invalid');
   // Persist a runtime-readable fence before any asynchronous network work.

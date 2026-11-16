@@ -1,5 +1,7 @@
 import type { Plan, Side } from './mandate';
 import type { AuthorityCloseReview, AuthorityReview } from './authority';
+import { assertAuthorityActionReservationFresh, parseAuthorityActionReservationUI, parseAuthorityActionStateUI,
+  type AuthorityActionReservation } from './authority-action-ui';
 import type { GnosisFundingReservation, GnosisFundingPhase } from './gnosis-funding-attempts';
 import { assertGnosisFundingReservationFresh, parseGnosisFundingReservationUI, parseGnosisFundingAttemptResultUI,
   type GnosisFundingAttemptResultUI } from './gnosis-funding-ui';
@@ -19,6 +21,18 @@ export interface WalletProvider {
 // Survives a component remount while MetaMask still owns an unresolved prompt.
 // Releasing a view does not cancel or prove failure of a submitted transaction.
 const ownerRequests = new WeakSet<WalletProvider>();
+type AuthorityPending = { id: string; snapshotDigest: string; issued: boolean; reference: string | null };
+const authorityPending = new WeakMap<WalletProvider, Map<string, AuthorityPending>>();
+export class AuthorityActionError extends Error {
+  constructor(message: string, readonly requestIssued: boolean) { super(message); this.name = 'AuthorityActionError'; }
+}
+export const isUnsentAuthorityActionError = (error: unknown): error is AuthorityActionError =>
+  error instanceof AuthorityActionError && error.requestIssued === false;
+export class AuthorityOwnerRejectedError extends AuthorityActionError {
+  readonly code = 4001;
+  constructor() { super('wallet_authority_owner_rejected', true); this.name = 'AuthorityOwnerRejectedError'; }
+}
+export const isAuthorityOwnerRejectedError = (error: unknown): error is AuthorityOwnerRejectedError => error instanceof AuthorityOwnerRejectedError;
 type FundingPending = { id: string; phase: GnosisFundingPhase; snapshotDigest: string; hash: string | null; requestIssued: boolean; completed?: boolean };
 // A quote or component remount cannot release an unresolved financial prompt.
 // The durable server fence additionally covers a full browser/page restart.
@@ -118,7 +132,10 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
     }
     queued = false; clearTimer(); lastReadAt = Date.now();
     const ticket = ++revision;
-    send({ status: 'pending' });
+    // A passive read is not a disconnect. Keep the last verified identity while
+    // refreshing so owner reviews are not unmounted on focus/pageshow. Explicit
+    // provider events and read failures still clear it immediately below.
+    if (!requested || !snapshot) send({ status: 'pending' });
     const pending = (async () => {
       let readTimer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<never>((_, reject) => {
@@ -130,6 +147,10 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
         if (!alive || current !== provider || ticket !== revision) return;
         if (!wallet || (snapshot && (snapshot.address.toLowerCase() !== wallet.address.toLowerCase()
           || snapshot.chainId !== wallet.chainId))) session++;
+        // Address casing carries no new identity; avoid remounting the owner
+        // flow when the same provider returns a different checksum format.
+        if (wallet && snapshot && wallet.address.toLowerCase() === snapshot.address.toLowerCase()
+          && wallet.chainId === snapshot.chainId) wallet.address = snapshot.address;
         requested = wallet !== null; snapshot = wallet ?? undefined;
         send(wallet ? { status: 'connected', wallet } : { status: 'ready' });
       } catch {
@@ -347,13 +368,38 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
     },
     /** Production strategy actions are always explicit owner clicks. No call
      * originates from passive restoration, focus, page load or provider events. */
-    async authorityAction(inputReview: AuthorityReview, action: 'deploy' | 'bootstrap' | 'sign' | 'close', inputClose?: AuthorityCloseReview) {
+    authorityActionState(value: unknown) {
+      const parsed = parseAuthorityActionStateUI(value), provider = current;
+      if (!parsed || !provider) return;
+      const locks = authorityPending.get(provider); if (!locks) return;
+      const a = parsed.actionAttempt ?? parsed.actionFence.last;
+      if (!a) return;
+      const key = a.owner.toLowerCase() + ':' + a.chainId, local = locks.get(key);
+      if (!local || local.id !== a.id || local.snapshotDigest !== a.snapshotDigest) return;
+      if (local.reference && ![...a.transactionHashes, ...a.callBatchIds].some(v => v.toLowerCase() === local.reference!.toLowerCase())) return;
+      if (a.status === 'confirmed' || a.status === 'reverted' || a.status === 'owner-rejected' && !local.reference
+        || a.status === 'owner-cancelled-unsent' && !local.issued && !local.reference) locks.delete(key);
+    },
+    async authorityAction(inputReview: AuthorityReview, action: 'deploy' | 'bootstrap' | 'sign' | 'close', inputClose?: AuthorityCloseReview,
+      inputReservation?: AuthorityActionReservation) {
+      if (current && (ownerRequests.has(current) || (authorityPending.get(current)?.size ?? 0) > 0)) {
+        throw new AuthorityActionError('راجع اتصال محفظة الاستراتيجية. توجد محاولة غير محسومة.', true);
+      }
       // Snapshot before any await: callers cannot change the reviewed request
       // while an account read, lazy import or wallet prompt is pending.
-      const review = structuredClone(inputReview), close = inputClose ? structuredClone(inputClose) : undefined;
+      let review: AuthorityReview, close: AuthorityCloseReview | undefined, reserved: AuthorityActionReservation | undefined;
+      try { review = structuredClone(inputReview); close = inputClose ? structuredClone(inputClose) : undefined;
+        reserved = inputReservation ? structuredClone(inputReservation) : undefined; }
+      catch { throw new AuthorityActionError('wallet_authority_action_invalid', false); }
       const provider = current, epoch = session;
-      if (!alive || !provider || !requested || asking || ownerRequests.has(provider) || ![1, 100].includes(review.chainId)) throw new Error('راجع اتصال محفظة الاستراتيجية.');
+      if (provider && ownerRequests.has(provider)) throw new AuthorityActionError('راجع اتصال محفظة الاستراتيجية.', true);
+      if (!alive || !provider || !requested || asking || ![1, 100].includes(review.chainId)) throw new AuthorityActionError('راجع اتصال محفظة الاستراتيجية.', false);
       const chainId = String(review.chainId), chainHex = review.chainId === 100 ? '0x64' : '0x1';
+      const key = review.owner.toLowerCase() + ':' + review.chainId;
+      const locks = authorityPending.get(provider) ?? new Map<string, AuthorityPending>(); authorityPending.set(provider, locks);
+      if (locks.has(key)) throw new AuthorityActionError('wallet_authority_action_pending', true);
+      const local: AuthorityPending | null = action === 'sign' ? null : { id: reserved?.attempt.id ?? '', snapshotDigest: reserved?.attempt.snapshotDigest ?? '', issued: false, reference: null };
+      if (local) locks.set(key, local);
       ownerRequests.add(provider);
       const assertOwner = async () => {
         const bound = await binding(provider);
@@ -368,6 +414,11 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
         if (action === 'sign' && (now < review.terms.startsAt || now >= review.terms.expiresAt)) throw new Error('انتهت نافذة التفويض. حدّث المراجعة.');
       };
       try {
+        if (action !== 'sign') {
+          const parsed = await parseAuthorityActionReservationUI(reserved, review, action, close);
+          if (!parsed) throw new Error('wallet_authority_action_reservation_invalid');
+          reserved = parsed; assertAuthorityActionReservationFresh(parsed);
+        }
         const { authorityDigest, authoritySignatureValid, createAuthorityCloseReview, parseAuthorityReview } = await import('./authority');
         parseAuthorityReview(review);
         const now = Math.floor(Date.now() / 1000);
@@ -391,10 +442,13 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
           await assertOwner();
           if (nonce !== BigInt(deployment.transaction.nonce)) throw new Error('تغيّر ترتيب معاملات الحساب. أنشئ مراجعة نشر جديدة.');
           assertFresh();
+          assertAuthorityActionReservationFresh(reserved!); local!.issued = true;
           const hash = await provider.request({ method: 'eth_sendTransaction', params: [{ from: review.owner,
             chainId: chainHex, data: deployment.transaction.data, value: '0x0', nonce: deployment.transaction.nonce }] });
-          await assertOwner();
+          // A returned transaction reference is evidence to record against the
+          // captured review, even if the view/account changed during the popup.
           if (typeof hash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(hash)) throw new Error('تعذّر التحقق من رد المحفظة.');
+          local!.reference = hash;
           return { kind: 'transaction' as const, value: hash };
         }
         let calls = review.calls;
@@ -413,12 +467,18 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
         const capability = (result as Record<string, { atomic?: { status?: unknown } }> | null)?.[chainHex]?.atomic?.status;
         if (capability !== 'supported' && capability !== 'ready') throw new Error('المحفظة لا تؤكد دعم المعاملة الذرّية المطلوبة.');
         assertFresh();
+        assertAuthorityActionReservationFresh(reserved!); local!.issued = true;
         const sent = await provider.request({ method: 'wallet_sendCalls', params: [{ version: '2.0.0', chainId: chainHex,
           from: review.owner, atomicRequired: true, calls }] });
-        await assertOwner();
         const id = typeof sent === 'string' ? sent : (sent as { id?: unknown } | null)?.id;
         if (typeof id !== 'string' || !/^0x[0-9a-fA-F]{1,256}$/.test(id)) throw new Error('تعذّر التحقق من معرّف العملية.');
+        local!.reference = id;
         return { kind: 'batch' as const, value: id };
+      } catch (error) {
+        if (action === 'sign') throw error;
+        if (!local!.issued) locks.delete(key);
+        if (local!.issued && (error as { code?: unknown } | null)?.code === 4001) throw new AuthorityOwnerRejectedError();
+        throw new AuthorityActionError(error instanceof Error ? error.message : 'wallet_authority_action_unknown', local!.issued);
       } finally { ownerRequests.delete(provider); if (queued) scheduleRefresh(); }
     },
     /** Explicit owner button only. Passive restoration never switches or adds a

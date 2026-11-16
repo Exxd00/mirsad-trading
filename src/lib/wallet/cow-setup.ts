@@ -17,6 +17,7 @@ import type { CowOrderChainId } from './cow-order';
 import { assertCowSetupFeasible } from './cow-feasibility';
 import { COW_SETUP_GAS_LIMITS, COW_GNOSIS_SETUP_GAS_LIMITS } from './wallet-feasibility';
 import { cowGasWeiPerLeg } from './cow-gas-limits';
+import { assertAuthorityActionIdle } from './authority-action-fence';
 
 const abi = parseAbi(['function decimals() view returns(uint8)', 'function balanceOf(address) view returns(uint256)']);
 const journal = new SqlJournal();
@@ -58,6 +59,7 @@ async function refreshUnusedDeployment(profile: NonNullable<Awaited<ReturnType<t
   try {
     if ((await journal.sourceWrites(lease)).some(w => w.settledAt === null)) throw new AuthorityError('wallet_authority_source_write_pending');
     return await transaction(async tx => {
+      await assertAuthorityActionIdle(tx, true);
       const current = await loadAuthority(tx);
       if ((current?.revision ?? null) !== (grant?.revision ?? null)) throw new AuthorityError('wallet_authority_revision_conflict');
       const owned = await tx.query("SELECT key FROM app_settings WHERE key=$1 AND value->>'owner'=$2 AND (value->>'expires')::numeric>EXTRACT(EPOCH FROM clock_timestamp()) FOR UPDATE", [lease.key, lease.owner]);
@@ -112,6 +114,7 @@ export async function prepareCowSetup(ownerInput: string, chainId: number) {
   // Read-only gate precedes executor creation, candidate writes and wallet
   // funding/grant prompts. The client cannot attest its own feasibility.
   await assertCowSetupFeasible(owner, chainId);
+  await assertAuthorityActionIdle(tx);
   if (existing && existingRuntime && existing.profile.authority.expiresAt > now && grant?.state !== 'closed') {
     const refreshed = await refreshUnusedDeployment(existing, existingRuntime, grant);
     const blockers = chainId === 100 && executorGasMissing(await gnosisSetupExecutorGas(refreshed), chainId, refreshed.gasLimits)
@@ -195,6 +198,7 @@ export async function prepareCowSetup(ownerInput: string, chainId: number) {
     const proposedIdentity = walletBindingIdentity(cowBinding(parseCowRuntime(proposed)));
     if (state.walletIdentity && state.walletIdentity !== proposedIdentity) throw new AuthorityError('wallet_authority_account_changed');
     const saved = await transaction(async t => {
+      await assertAuthorityActionIdle(t, true);
       const owned = await t.query("SELECT key FROM app_settings WHERE key=$1 AND value->>'owner'=$2 AND (value->>'expires')::numeric>EXTRACT(EPOCH FROM clock_timestamp()) FOR UPDATE", [lease.key, lease.owner]);
       if (owned.rowCount !== 1) throw new AuthorityError('wallet_authority_account_busy');
       // A second request cannot replace either a profile or a newly active grant.
