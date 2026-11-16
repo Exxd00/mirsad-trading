@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FundingOwnerRejectedError, isUnsentFundingActionError, watchMetaMask, type WalletProvider, type WalletView } from '../src/lib/wallet/metamask';
 import { emptyFundingFence, fundingAt, fundingOwner, fundingReservation, fundingResolved, H } from './fixtures/gnosis-funding-ui';
+import { parseGnosisFundingQuote } from '../src/lib/wallet/gnosis-funding-quote';
+import native from './fixtures/lifi-gnosis-native-intermediate-20261116.json';
 
 const clients: ReturnType<typeof watchMetaMask>[] = [];
 afterEach(() => { for (const client of clients.splice(0)) client.close(); vi.useRealTimers(); });
@@ -26,6 +28,14 @@ async function fixture() {
   return { client, state, request, target, provider, views, send, event: (name: string) => events.get(name)?.forEach(cb => cb()) };
 }
 describe('explicit owner funding wallet transport (all wallet calls simulated)', () => {
+  it.each(['approve', 'fund'] as const)('keeps the actual native-intermediate %s request limited to10mUSD and zero owner value', async phase => {
+    const at=Math.floor(Date.parse(native.receivedAt)/1000),review=await parseGnosisFundingQuote(native.response,{owner:fundingOwner,observedAt:at,now:at});
+    const r=await fundingReservation(phase,review),f=await fixture();vi.setSystemTime(at*1000);
+    expect(review.route).toBe('swap-eth');expect(review.approval.amountRaw).toBe('10000000');
+    expect(await f.client.fundingAction(r,phase)).toEqual({kind:'transaction',value:H});
+    expect(f.send()).toEqual([[{method:'eth_sendTransaction',params:[{chainId:'0x1',from:r.transaction.from,to:r.transaction.to,value:'0x0',data:r.transaction.data}]}]]);
+    expect(f.request.mock.calls.every(([q])=>['eth_accounts','eth_chainId','eth_getBalance','eth_sendTransaction'].includes(q.method))).toBe(true);
+  });
   it.each(['approve', 'fund'] as const)('sends only the exact reserved %s payload without API gas/nonce or passive prompt', async phase => {
     const r = await fundingReservation(phase), f = await fixture();
     expect(f.send()).toHaveLength(0);

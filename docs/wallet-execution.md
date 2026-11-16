@@ -454,15 +454,27 @@ provider gas/nonce fields and arbitrary targets are not forwarded to MetaMask.
 The fixed routes request selects LayerSwap and the reviewed SushiSwap source
 exchange explicitly. Among at most three returned routes, the server selects
 only a single-step route with the fixed owner, chains, input, GasZip allocation
-and reviewed USDC bridge asset. One unsigned step-transaction request uses that
+and a reviewed USDC or native-ETH bridge branch. One unsigned step-transaction
+request uses that
 exact step. Its returned identity and full calldata must pass the existing
 parser before any fresh-chain proof or owner reservation. No matching route or
-asset drift fails closed; there is no retry or native-asset fallback.
-For the source-USDC route, the bridge action names the
+asset drift fails closed; there is no retry or unreviewed-asset fallback.
+For either source-swap route, the bridge action names the
 quoted source output; its estimate may name only that exact output or the exact
 calldata-enforced source minimum. Other step amounts remain exact. This metadata
 compatibility does not relax router pins or the strict final aggregate slippage
 minimum, and that slippage bound is not a certificate of total funding fees.
+The explicit native branch uses zeroAddress only for the API, outer SwapData,
+bridge and deposit event, and the exact Eeee sentinel only inside the pinned
+RedSnwapper call. ETH amounts and fees use 18 decimals; mUSD and USDC remain at
+six. Combined quoted ETH fees cannot exceed the signed native bridge minimum.
+The fixed mUSD fee cap and input stay unchanged. A native source receipt must
+match the pinned depository's native Deposited event and actual bridge amount;
+an ERC20 Transfer or a balance difference cannot substitute for that proof.
+The intermediate ETH is produced inside the swap with owner transaction value
+zero. This does not prove eligibility for paying the owner's Ethereum gas.
+Existing direct-mUSD and USDC review serialization and digests are retained so
+saved owner attempts remain recoverable after adding the separate native branch.
 The LayerSwap destination amount is an off-chain quote, not a minimum enforced
 by source calldata. Gas arrival and MetaMask Gas Included eligibility/fees remain
 unproved until the owner reviews the wallet and destination balances arrive.

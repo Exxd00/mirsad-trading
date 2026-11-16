@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { decodeFunctionData, encodeFunctionResult } from 'viem';
+import { decodeFunctionData, encodeFunctionData, encodeFunctionResult, zeroAddress, type Abi, type Hex } from 'viem';
 import { prepareGnosisFundingReview, fundingDigest } from '../src/lib/wallet/gnosis-funding-service';
-import { fundingReads,FUNDING_QUOTE, FUNDING_OWNER, FUNDING_NOW, fundingReadAbi, fundingHistory } from './helpers/gnosis-funding';
+import { fundingReads,FUNDING_QUOTE, FUNDING_OWNER, FUNDING_NOW, NATIVE_FUNDING_QUOTE, NATIVE_FUNDING_NOW, fundingReadAbi, fundingHistory } from './helpers/gnosis-funding';
 import policy from '../src/lib/wallet/generated/gnosis-funding-contracts.json';
 import { gnosisEurSeriesDigest } from '../src/lib/wallet/gnosis-market';
 import { parseGnosisFundingAuditUI } from '../src/lib/wallet/gnosis-funding-ui';
@@ -11,6 +11,50 @@ import capturedRoutes from './fixtures/lifi-gnosis-reviewed-routes-20261116.json
 import capturedStep from './fixtures/lifi-gnosis-reviewed-step-20261116.json';
 
 describe('actual funding parser and fresh two-reader public evidence', () => {
+  it('composes the captured native intermediate with the same finite mUSD input and fresh router/depository proof, without treating ETH as an ERC20 or owner capital',async()=>{
+    const f=fundingReads({quote:NATIVE_FUNDING_QUOTE,now:NATIVE_FUNDING_NOW});
+    const {audit}=await prepareGnosisFundingReview(FUNDING_OWNER,f.dependencies);
+    expect(audit).toMatchObject({status:'reviewable',executionApproved:false,ownerReviewAllowed:false,
+      review:{route:'swap-eth',input:{amountRaw:'10000000'},transaction:{value:'0x0'},bridge:{token:zeroAddress,assetSymbol:'ETH'},
+        gasProvision:{amountInRaw:'50000',arrival:'not-guaranteed'}},freshProof:{sourceNativeBalanceWei:'0'}});
+    expect(audit.unverified).toContain('source-swap-inner-executor-source-unverified-runtime-and-net-wrapper-only');
+    expect(audit.unverified).toContain('wallet-source-gas-included-eligibility-and-fee');
+    expect(audit.review!.quotedFees.find(f=>f.assetSymbol==='ETH')?.amountRaw).toBe('40750000000000');
+    expect(audit.review!.approval.amountRaw).toBe('10000000');
+    expect(f.seen.some(({call})=>call.method==='eth_getCode'&&String(call.params[0]).toLowerCase()===policy.sourceSwap.contracts.router.address.toLowerCase())).toBe(true);
+    expect(f.seen.some(({call})=>call.method==='eth_call'&&decodeFunctionData({abi:fundingReadAbi,data:(call.params[0]as{data:`0x${string}`}).data}).functionName==='safeExecutor')).toBe(true);
+    expect(f.seen.some(({call})=>['eth_getCode','eth_getStorageAt'].includes(call.method)
+      &&[policy.sourceSwap.contracts.usdc.address,policy.sourceSwap.contracts.usdcImplementation.address,zeroAddress].some(a=>a.toLowerCase()===String(call.params[0]).toLowerCase()))).toBe(false);
+    expect(f.seen.some(({call})=>call.method==='eth_call'&&/^(?:0x0{40}|0xe{40})$/i.test((call.params[0]as{to:string}).to))).toBe(false);
+    expect(parseGnosisFundingAuditUI({...audit,ownerReviewAllowed:true,fence:{blocked:false,active:null,fundCompleted:false,lastApproval:null}},FUNDING_OWNER)).not.toBeNull();
+    expect(f.store.save).not.toHaveBeenCalled();
+  });
+  it.each(['router-code','executor-code','safe-executor','source-whitelist','depository-pause','depository-receiver','layer-signature','provider-disagreement','reorg'] as const)(
+    'refuses a native intermediate after changed %s evidence',async fault=>{
+      const quote=structuredClone(NATIVE_FUNDING_QUOTE);
+      if(fault==='layer-signature'){
+        const args=decodeFunctionData({abi:policy.abi.facet as Abi,data:quote.transactionRequest.data as Hex}).args!;
+        quote.transactionRequest.data=encodeFunctionData({abi:policy.abi.facet as Abi,functionName:'swapAndStartBridgeTokensViaLayerSwap',
+          args:[args[0],args[1],{...(args[2]as object),signature:'0x'+'11'.repeat(64)+'1b'}]});
+      }
+      const f=fundingReads({quote,now:NATIVE_FUNDING_NOW});let headReads=0;
+      f.state.mutate=(call,url,value)=>{
+        const target=String(call.params[0]).toLowerCase();
+        if(call.method==='eth_getCode'&&target===(fault==='router-code'?policy.sourceSwap.contracts.router.address:fault==='executor-code'?policy.sourceSwap.contracts.executor.address:'').toLowerCase())return'0x6000';
+        if(fault==='provider-disagreement'&&url==='https://eth.drpc.org'&&call.method==='eth_getBalance')return'0x1';
+        if(fault==='reorg'&&call.method==='eth_getBlockByNumber'&&call.params[0]!=='latest'&&url==='https://ethereum-rpc.publicnode.com'&&++headReads>1)
+          return{...(value as object),hash:'0x'+'bb'.repeat(32)};
+        if(call.method!=='eth_call')return value;
+        const request=call.params[0]as{to:string;data:`0x${string}`},d=decodeFunctionData({abi:fundingReadAbi,data:request.data});let answer:unknown;
+        if(fault==='safe-executor'&&d.functionName==='safeExecutor')answer=FUNDING_OWNER;
+        if(fault==='source-whitelist'&&d.functionName==='isContractSelectorWhitelisted'&&String(d.args?.[0]).toLowerCase()===policy.sourceSwap.contracts.router.address.toLowerCase())answer=false;
+        if(fault==='depository-pause'&&d.functionName==='paused'&&request.to.toLowerCase()===policy.freshChecks.contracts.depository.address.toLowerCase())answer=true;
+        if(fault==='depository-receiver'&&d.functionName==='isWhitelisted')answer=false;
+        return answer===undefined?value:encodeFunctionResult({abi:fundingReadAbi,functionName:d.functionName,result:answer as never});
+      };
+      const {audit}=await prepareGnosisFundingReview(FUNDING_OWNER,f.dependencies);
+      expect(audit.status).not.toBe('reviewable');expect(audit.freshProof).toBeNull();expect(audit.ownerReviewAllowed).toBe(false);expect(f.store.save).not.toHaveBeenCalled();
+    });
   it('composes the captured reviewed exchange route with fresh external-port fixtures without financial approval',async()=>{
     const f=fundingReads({quote:sushi.response,now:Math.floor(Date.parse(sushi.receivedAt)/1000)});
     const {audit}=await prepareGnosisFundingReview(FUNDING_OWNER,f.dependencies);

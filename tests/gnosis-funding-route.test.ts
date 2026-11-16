@@ -17,16 +17,18 @@ describe('bounded USDC route selection before the existing calldata verifier',()
     expect(JSON.parse(selected.body)).toEqual(built.requestStep);expect(selected.id).toBe(built.response.id);
     expect(()=>assertGnosisFundingStepResult(selected,built.response)).not.toThrow();
   });
-  it('filters an actual native-ETH candidate and selects the matching USDC candidate within a bounded set',()=>{
+  it('selects only the explicitly reviewed native-ETH or USDC variants within the bounded set',()=>{
     const combined={routes:[fundingRouteWrapper(native.response).routes[0],routes.response.routes[0]]};
-    expect(selectGnosisFundingStep(combined,FUNDING_OWNER).id).toBe(built.response.id);
-    expect(()=>selectGnosisFundingStep(fundingRouteWrapper(native.response),FUNDING_OWNER)).toThrow('wallet_gnosis_funding_route_unavailable');
+    expect(selectGnosisFundingStep(combined,FUNDING_OWNER).id).toBe(native.response.id);
+    const nativeRoutes=fundingRouteWrapper(native.response),selected=selectGnosisFundingStep(nativeRoutes,FUNDING_OWNER);
+    expect(JSON.parse(selected.body)).toEqual(nativeRoutes.routes[0].steps[0]);
+    expect(()=>assertGnosisFundingStepResult(selected,{...built.response,id:selected.id})).toThrow('wallet_gnosis_funding_route_unavailable');
   });
-  it.each(['none','native-only','too-many','wrong-owner','wrong-amount','wrong-chain','multiple-steps','gas-delta','oversized-step']as const)
+  it.each(['none','unknown-intermediate','too-many','wrong-owner','wrong-amount','wrong-chain','multiple-steps','gas-delta','oversized-step']as const)
     ('does not build or start RPC verification for %s route input',async fault=>{
       const input=structuredClone(routes.response);
       if(fault==='none')input.routes=[];
-      if(fault==='native-only')input.routes=fundingRouteWrapper(native.response).routes as typeof input.routes;
+      if(fault==='unknown-intermediate')input.routes[0].steps[0].includedSteps[2].action.toToken.address='0x1111111111111111111111111111111111111111';
       if(fault==='too-many')input.routes=Array.from({length:4},()=>structuredClone(routes.response.routes[0]));
       if(fault==='wrong-owner')input.routes[0].toAddress='0x1111111111111111111111111111111111111111';
       if(fault==='wrong-amount')input.routes[0].fromAmount='10000001';

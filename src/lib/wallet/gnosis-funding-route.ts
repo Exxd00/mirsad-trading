@@ -9,9 +9,10 @@ const fail=():never=>{throw new GnosisFundingRouteError();};
 const object=(v:unknown):v is Record<string,any>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const same=(a:unknown,b:string)=>typeof a==='string'&&a.toLowerCase()===b.toLowerCase();
 const amount=(v:unknown):bigint|null=>typeof v==='string'&&/^(?:0|[1-9]\d{0,77})$/.test(v)&&BigInt(v)<(1n<<256n)?BigInt(v):null;
-const token=(v:unknown,side:'input'|'source'|'destination')=>{
+const token=(v:unknown,side:'input'|'source'|'source-native'|'destination')=>{
   if(!object(v))return false;
   const expected=side==='input'?policy.fromToken:side==='destination'?policy.toToken:
+    side==='source-native'?{address:'0x0000000000000000000000000000000000000000',symbol:'ETH',decimals:18}:
     {address:policy.sourceSwap.contracts.usdc.address,symbol:'USDC',decimals:6};
   return same(v.address,expected.address)&&v.symbol===expected.symbol&&v.decimals===expected.decimals&&v.chainId===(side==='destination'?100:1);
 };
@@ -28,6 +29,7 @@ function matchesStep(step:unknown,owner:string):step is Record<string,any>{
   if(!object(step)||typeof step.id!=='string'||!step.id.length||step.id.length>128||step.type!=='lifi'||step.tool!=='layerswap'
     ||!object(step.action)||!object(step.estimate)||!Array.isArray(step.includedSteps)||step.includedSteps.length!==4)return false;
   const a=step.action,s=step.includedSteps;
+  const sourceSide=token(s[2]?.action?.toToken,'source-native')?'source-native':'source';
   if(a.fromChainId!==1||a.toChainId!==100||a.fromAmount!==policy.fromAmount||a.slippage!==0.0025
     ||!same(a.fromAddress,owner)||!same(a.toAddress,owner)||!token(a.fromToken,'input')||!token(a.toToken,'destination'))return false;
   const tools=['feeCollection','gasZip','sushiswap','layerswap'],types=['protocol','protocol','swap','cross'];
@@ -36,7 +38,7 @@ function matchesStep(step:unknown,owner:string):step is Record<string,any>{
     const c=v.action;
     if(c.fromChainId!==1||c.toChainId!==(i===3?100:1)||c.slippage!==0.0025
       ||!same(c.fromAddress,policy.contracts.diamond.address)||!same(c.toAddress,i===3?owner:policy.contracts.diamond.address)
-      ||!token(c.fromToken,i===3?'source':'input')||!token(c.toToken,i===3?'destination':i===2?'source':'input'))return false;
+      ||!token(c.fromToken,i===3?sourceSide:'input')||!token(c.toToken,i===3?'destination':i===2?sourceSide:'input'))return false;
   }
   const input=BigInt(policy.fromAmount),gas=BigInt(policy.fromAmountForGas),feeOut=amount(s[0].estimate.toAmount),sourceOut=amount(s[2].estimate.toAmount),sourceMin=amount(s[2].estimate.toAmountMin);
   if(feeOut===null||sourceOut===null||sourceMin===null||input-feeOut<=0n||input-feeOut>BigInt(policy.maximumFeeAmount)
@@ -63,5 +65,7 @@ export function selectGnosisFundingStep(raw:unknown,owner:string):SelectedGnosis
   return fail();
 }
 export function assertGnosisFundingStepResult(selected:SelectedGnosisFundingStep,raw:unknown):void{
-  if(!matchesStep(raw,selected.owner)||raw.id!==selected.id)return fail();
+  const original=JSON.parse(selected.body);
+  if(!matchesStep(original,selected.owner)||!matchesStep(raw,selected.owner)||raw.id!==selected.id
+    ||!same(raw.includedSteps[2].action.toToken.address,original.includedSteps[2].action.toToken.address))return fail();
 }

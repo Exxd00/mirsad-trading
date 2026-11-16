@@ -29,8 +29,10 @@ const slippageDigits = policy.maximumSlippage.split('.')[1], SLIPPAGE_SCALE = 10
 // Fixed observed LI.FI fee recipient for this narrowly reviewed route. A changed
 // recipient requires a new source review, even if the amount remains small.
 const FEE_RECIPIENT = '0xc06ebbefd94032b85424d51906e2a335efae264b';
-const checkToken = (t: z.infer<typeof token>, side: 'fromToken' | 'toToken' | 'sourceUsdc') => {
-  const expected = side === 'sourceUsdc' ? { address: policy.sourceSwap.contracts.usdc.address, decimals: 6, symbol: 'USDC' } : policy[side];
+const RED_NATIVE = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' as Address;
+const checkToken = (t: z.infer<typeof token>, side: 'fromToken' | 'toToken' | 'sourceUsdc' | 'sourceEth') => {
+  const expected = side === 'sourceEth' ? { address: zeroAddress, decimals: 18, symbol: 'ETH' }
+    : side === 'sourceUsdc' ? { address: policy.sourceSwap.contracts.usdc.address, decimals: 6, symbol: 'USDC' } : policy[side];
   const chain = side === 'toToken' ? 100 : 1;
   if (!same(t.address, expected.address) || t.chainId !== chain || t.decimals !== expected.decimals || t.symbol !== expected.symbol) fail();
 };
@@ -83,14 +85,14 @@ async function gasDex(data: Hex, now: number) {
 export type GnosisFundingSourceSwap = { inputToken: Address; outputToken: Address; amountInRaw: string; minimumOutRaw: string;
   quotedOutRaw: string; callTo: Address; callDataHash: Hex };
 export type GnosisFundingQuoteReview = {
-  version: 1; method: typeof policy.method; status: 'reference-review-only-not-execution-approved'; route: 'direct-musd' | 'swap-usdc'; owner: Address; observedAt: number; expiresAt: number;
+  version: 1; method: typeof policy.method; status: 'reference-review-only-not-execution-approved'; route: 'direct-musd' | 'swap-usdc' | 'swap-eth'; owner: Address; observedAt: number; expiresAt: number;
   input: { chainId: 1; token: Address; decimals: 6; amountRaw: string };
   destination: { chainId: 100; token: Address; decimals: 6; quotedAmountRaw: string; quotedMinimumRaw: string; certification: 'offchain-quote-not-calldata-enforced' };
   sourceFee: { amountRaw: string; recipient: Address };
-  quotedFees: { name: string; token: Address; assetSymbol: 'mUSD' | 'USDC'; amountRaw: string; certification: 'offchain-quote-only' }[];
+  quotedFees: { name: string; token: Address; assetSymbol: 'mUSD' | 'USDC' | 'ETH'; amountRaw: string; certification: 'offchain-quote-only' }[];
   gasProvision: { amountInRaw: string; chainId: 100; gasZipChain: 16; receiver: Address; destinationNative: 'xDAI'; arrival: 'not-guaranteed'; dex: Awaited<ReturnType<typeof gasDex>> };
   sourceSwap: GnosisFundingSourceSwap | null;
-  bridge: { requestId: Hex; depositoryReceiver: Address; refundRecipient: Address; token: Address; assetSymbol: 'mUSD' | 'USDC'; amountRaw: string; deadline: number; requestSignature: 'not-independently-verified' };
+  bridge: { requestId: Hex; depositoryReceiver: Address; refundRecipient: Address; token: Address; assetSymbol: 'mUSD' | 'USDC' | 'ETH'; amountRaw: string; deadline: number; requestSignature: 'not-independently-verified' };
   approval: { token: Address; spender: Address; amountRaw: string; data: Hex; finite: true };
   transaction: { chainId: 1; from: Address; to: Address; value: '0x0'; data: Hex };
   sourceNetworkGas: 'not-certified'; executionApproved: false; contracts: typeof policy.contracts; manifestHash: Hex; digest: Hex;
@@ -115,12 +117,14 @@ export async function parseGnosisFundingQuote(input: unknown, context: { owner: 
       || !same(q.transactionRequest.from, owner) || !same(q.transactionRequest.to, C.diamond.address)
       || !BigInt(q.estimate.toAmountMin) || BigInt(q.estimate.toAmountMin) > BigInt(q.estimate.toAmount)
       || BigInt(q.estimate.toAmountMin) < (BigInt(q.estimate.toAmount) * (SLIPPAGE_SCALE - SLIPPAGE_RAW) + SLIPPAGE_SCALE - 1n) / SLIPPAGE_SCALE) return fail();
-    const route = q.includedSteps.length === 4 ? 'swap-usdc' as const : 'direct-musd' as const;
-    const bridgeToken = route === 'swap-usdc' ? policy.sourceSwap.contracts.usdc.address : policy.fromToken.address;
+    const converted = q.includedSteps.length === 4, native = converted && same(q.includedSteps[2].action.toToken.address, zeroAddress);
+    const route = converted ? native ? 'swap-eth' as const : 'swap-usdc' as const : 'direct-musd' as const;
+    const bridgeToken = native ? zeroAddress : converted ? policy.sourceSwap.contracts.usdc.address : policy.fromToken.address;
+    const sourceTokenSide = native ? 'sourceEth' as const : 'sourceUsdc' as const;
     const [bridge, swaps, layer] = canonical(q.transactionRequest.data, policy.abi.facet as Abi, 'swapAndStartBridgeTokensViaLayerSwap') as [Bridge, Swap[], LayerSwap];
     if (bridge.transactionId === zeroHash || bridge.bridge !== 'layerswap' || bridge.integrator !== 'lifi-api' || bridge.referrer !== zeroAddress
       || !same(bridge.sendingAssetId, bridgeToken) || !same(bridge.receiver, owner) || bridge.destinationChainId !== 100n
-      || bridge.hasSourceSwaps !== true || bridge.hasDestinationCall !== false || swaps.length !== (route === 'swap-usdc' ? 3 : 2)) return fail();
+      || bridge.hasSourceSwaps !== true || bridge.hasDestinationCall !== false || swaps.length !== (converted ? 3 : 2)) return fail();
     swapBound(swaps[0], C.feeForwarder.address, INPUT, true);
     const [feeToken, distributions] = canonical(swaps[0].callData, policy.abi.feeForwarder as Abi, 'forwardERC20Fees') as [Address, { recipient: Address; amount: bigint }[]];
     if (!same(feeToken, policy.fromToken.address) || distributions.length !== 1 || !same(distributions[0].recipient, FEE_RECIPIENT)
@@ -131,7 +135,7 @@ export async function parseGnosisFundingQuote(input: unknown, context: { owner: 
     swapBound(gasSwap, C.gasDex.address, GAS, true, zeroAddress);
     const receiver32 = ('0x' + owner.slice(2).toLowerCase().padEnd(64, '0')) as Hex;
     let sourceSwap: GnosisFundingSourceSwap | null = null;
-    if (route === 'swap-usdc') {
+    if (converted) {
       const source = q.includedSteps[2], s = swaps[2], pins = policy.sourceSwap;
       if (q.action.slippage > Number(pins.maximumPerStepSlippage) || source.action.slippage > Number(pins.maximumPerStepSlippage)
         || q.includedSteps[3].action.slippage > Number(pins.maximumPerStepSlippage)) return fail();
@@ -140,13 +144,13 @@ export async function parseGnosisFundingQuote(input: unknown, context: { owner: 
         [Address, bigint, Address, Address, bigint, Address, Hex];
       const quoted = BigInt(source.estimate.toAmount);
       if (!same(inputToken, policy.fromToken.address) || amountIn !== bridgeAmount || !same(recipient, C.diamond.address)
-        || !same(outputToken, bridgeToken) || !same(executor, pins.contracts.executor.address) || minimumOut <= 0n || minimumOut > quoted
+        || !same(outputToken, native ? RED_NATIVE : bridgeToken) || !same(executor, pins.contracts.executor.address) || minimumOut <= 0n || minimumOut > quoted
         // The source DEX floors its token minimum to whole atoms. The FINAL
         // aggregate minimum above still uses the unchanged strict ceil(.995).
         || minimumOut < quoted * 9975n / 10000n || minimumOut.toString() !== source.estimate.toAmountMin
         || !executorData.startsWith(pins.executorSelector) || executorData.length <= 10 || executorData.length > 32770
         || bridge.minAmount !== minimumOut) return fail();
-      sourceSwap = { inputToken, outputToken, amountInRaw: amountIn.toString(), minimumOutRaw: minimumOut.toString(),
+      sourceSwap = { inputToken, outputToken: native ? zeroAddress : outputToken, amountInRaw: amountIn.toString(), minimumOutRaw: minimumOut.toString(),
         quotedOutRaw: source.estimate.toAmount, callTo: getAddress(pins.contracts.router.address), callDataHash: keccak256(s.callData) };
     } else if (bridge.minAmount !== bridgeAmount) return fail();
     if (!same(gasData.receiverAddress, receiver32) || gasData.destinationChains !== 16n
@@ -157,15 +161,15 @@ export async function parseGnosisFundingQuote(input: unknown, context: { owner: 
       layerS = BigInt('0x' + layerSig.subarray(32, 64).toString('hex'));
     if (![27, 28].includes(layerSig[64]) || !layerR || !layerS || layerS > 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0n) return fail();
     for (const [i, step] of q.includedSteps.entries()) {
-      const cross = i === q.includedSteps.length - 1, conversion = route === 'swap-usdc' && i === 2;
+      const cross = i === q.includedSteps.length - 1, conversion = converted && i === 2;
       const expected = i === 0 ? INPUT : i === 1 ? INPUT - fee : conversion ? bridgeAmount : sourceSwap ? BigInt(sourceSwap.quotedOutRaw) : bridgeAmount;
       // Current bridge estimates may start from the source swap's exact signed
       // minimum; older quotes use its exact expected output. The action still
       // names that expected output. No intermediate amount is admitted.
       const estimateInput=BigInt(step.estimate.fromAmount),estimateMatches=estimateInput===expected
         ||(cross&&sourceSwap!==null&&estimateInput===BigInt(sourceSwap.minimumOutRaw));
-      checkToken(step.action.fromToken, cross && sourceSwap ? 'sourceUsdc' : 'fromToken');
-      checkToken(step.action.toToken, cross ? 'toToken' : conversion ? 'sourceUsdc' : 'fromToken');
+      checkToken(step.action.fromToken, cross && sourceSwap ? sourceTokenSide : 'fromToken');
+      checkToken(step.action.toToken, cross ? 'toToken' : conversion ? sourceTokenSide : 'fromToken');
       if (step.tool !== (cross ? 'layerswap' : conversion ? 'sushiswap' : ['feeCollection', 'gasZip'][i]) || step.type !== (cross ? 'cross' : conversion ? 'swap' : 'protocol')
         || step.action.fromChainId !== 1 || step.action.toChainId !== (cross ? 100 : 1)
         || !same(step.action.fromAddress, C.diamond.address) || !same(step.action.toAddress, cross ? owner : C.diamond.address)
@@ -175,7 +179,16 @@ export async function parseGnosisFundingQuote(input: unknown, context: { owner: 
     }
     const fixedFee = q.estimate.feeCosts.filter(f => f.name === 'LIFI Fixed Fee');
     if (fixedFee.length !== 1 || fixedFee[0].amount !== fee.toString()) return fail();
-    for (const f of q.estimate.feeCosts) { checkToken(f.token, route === 'swap-usdc' && f.name !== 'LIFI Fixed Fee' ? 'sourceUsdc' : 'fromToken'); if (BigInt(f.amount) > INPUT) return fail(); }
+    let nativeFees = 0n;
+    for (const f of q.estimate.feeCosts) {
+      const sourceFee = converted && f.name !== 'LIFI Fixed Fee';
+      checkToken(f.token, sourceFee ? sourceTokenSide : 'fromToken');
+      if (native && sourceFee) nativeFees += BigInt(f.amount);
+      else if (BigInt(f.amount) > INPUT) return fail();
+    }
+    // Native fee metadata is in wei, not six-decimal mUSD atoms. Its combined
+    // included amount is bounded by the signed native source minimum only.
+    if (nativeFees > bridge.minAmount) return fail();
     const dex = await gasDex(gasSwap.callData, now);
     const base = { version: 1 as const, method: policy.method, status: 'reference-review-only-not-execution-approved' as const, route, owner, observedAt,
       expiresAt: Math.min(observedAt + policy.reviewLifetimeSeconds, Number(layer.deadline), dex.deadline),
@@ -183,12 +196,12 @@ export async function parseGnosisFundingQuote(input: unknown, context: { owner: 
       destination: { chainId: 100 as const, token: getAddress(policy.toToken.address), decimals: 6 as const,
         quotedAmountRaw: q.estimate.toAmount, quotedMinimumRaw: q.estimate.toAmountMin, certification: 'offchain-quote-not-calldata-enforced' as const },
       sourceFee: { amountRaw: fee.toString(), recipient: distributions[0].recipient },
-      quotedFees: q.estimate.feeCosts.map(f => ({ name: f.name, token: f.token.address, assetSymbol: f.token.symbol as 'mUSD' | 'USDC', amountRaw: f.amount, certification: 'offchain-quote-only' as const })),
+      quotedFees: q.estimate.feeCosts.map(f => ({ name: f.name, token: f.token.address, assetSymbol: f.token.symbol as 'mUSD' | 'USDC' | 'ETH', amountRaw: f.amount, certification: 'offchain-quote-only' as const })),
       gasProvision: { amountInRaw: GAS.toString(), chainId: 100 as const, gasZipChain: 16 as const, receiver: owner,
         destinationNative: 'xDAI' as const, arrival: 'not-guaranteed' as const, dex },
       sourceSwap,
       bridge: { requestId: layer.requestId, depositoryReceiver: layer.depositoryReceiver, refundRecipient: layer.refundRecipient,
-        token: getAddress(bridgeToken), assetSymbol: route === 'swap-usdc' ? 'USDC' as const : 'mUSD' as const,
+        token: getAddress(bridgeToken), assetSymbol: native ? 'ETH' as const : converted ? 'USDC' as const : 'mUSD' as const,
         amountRaw: bridge.minAmount.toString(), deadline: Number(layer.deadline), requestSignature: 'not-independently-verified' as const },
       approval: { token: getAddress(policy.fromToken.address), spender: getAddress(C.diamond.address), amountRaw: INPUT.toString(), finite: true as const,
         data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [getAddress(C.diamond.address), INPUT] }) },
