@@ -5,6 +5,7 @@
   "main": "execution-v1-worker.mjs",
   "compatibility_date": "2026-09-26",
   "workers_dev": true,
+  "preview_urls": false,
   // Keep the 300s period; allow finalized Gnosis bars to arrive before the
   // first scan after each 15m close. Signal timestamps and 300s TTL stay fixed.
   "triggers": { "crons": ["3-58/5 * * * *"] },

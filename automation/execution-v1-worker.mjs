@@ -1,5 +1,6 @@
 // Cloudflare scheduler + persistent deadline wakeups; the Next.js host owns the
 // strategy cycle. Never sleep for 60 seconds inside a request or cron callback.
+const PROTECTION_ACCOUNT = 'metamask-strategy-v1';
 async function authorized(request, env) {
   if (!env.EXECUTION_SCHEDULER_TOKEN) return false;
   const encoder = new TextEncoder();
@@ -55,8 +56,8 @@ export class OrderDeadline {
   async fetch(request) {
     const job = await request.json(), old = await this.ctx.storage.get('job');
     if (new URL(request.url).pathname === '/watch' && job.kind === 'protection') {
-      if (old && old.kind !== 'protection') return new Response('Job mismatch', { status: 409 });
-      await this.ctx.storage.put('job', { kind: 'protection' });
+      if (old && (old.kind !== 'protection' || old.accountId !== PROTECTION_ACCOUNT)) return new Response('Job mismatch', { status: 409 });
+      await this.ctx.storage.put('job', { kind: 'protection', accountId: PROTECTION_ACCOUNT });
       // Never move an earlier scheduled check forward on duplicate wakeups.
       const alarm = await this.ctx.storage.getAlarm();
       if (alarm === null || alarm > Date.now() + 1000) await this.ctx.storage.setAlarm(Date.now() + 1000);
@@ -71,6 +72,12 @@ export class OrderDeadline {
   async alarm() {
     const job = await this.ctx.storage.get('job'); if (!job) return;
     if (job.kind === 'protection') {
+      if (job.accountId !== PROTECTION_ACCOUNT) {
+        // Existing account objects keep their original storage. A code update
+        // must not adopt an unscoped/retired watch into the current wallet.
+        console.warn(JSON.stringify({ type: 'execution.v1.protection_quarantined', reason: 'protection_account_unverified' }));
+        return;
+      }
       // Persist the next wakeup before external I/O. Process death, retries and
       // browser closure cannot silently remove the account's protection watch.
       await this.ctx.storage.setAlarm(Date.now() + 10000);
@@ -85,12 +92,23 @@ export class OrderDeadline {
       }
       return;
     }
+    // The job remains armed even if the process dies after the host receives
+    // the cancellation request but before its response can be acknowledged.
+    await this.ctx.storage.setAlarm(Date.now() + 5000);
     try {
       const result = await dispatch(this.env, 'deadline', { key: job.key });
       console.log(JSON.stringify({ type: 'execution.v1.deadline', status: result.status, reason: result.reason ?? null, retryAt: result.retryAt ?? null }));
-      if (result.retryAt) await this.ctx.storage.setAlarm(Math.max(Date.now() + 1000, result.retryAt * 1000));
-      else if (result.reason === 'order_api_not_connected') await this.ctx.storage.setAlarm(Date.now() + 60000);
-      else await this.ctx.storage.delete('job');
+      // These are the only authoritative terminal results in cancelDeadline.
+      // A blocked source, unknown result or missing journal intent cannot prove
+      // that a previously accepted order no longer needs its wakeup.
+      if (['filled', 'cancelled', 'rejected', 'expired', 'absent'].includes(result.status)
+        && result.retryAt === null && (result.reason === undefined || result.reason === null)) await this.ctx.storage.delete('job');
+      else {
+        const now = Date.now(), retry = result.retryAt;
+        const validRetry = Number.isSafeInteger(retry) && retry > 0 && retry <= Math.floor(now / 1000) + 60;
+        const fallback = result.status === 'not_an_entry' || ['order_api_not_connected', 'wallet_execution_transport_missing'].includes(result.reason) ? 60000 : 5000;
+        await this.ctx.storage.setAlarm(validRetry ? Math.max(now + 1000, retry * 1000) : now + fallback);
+      }
     } catch (error) {
       console.warn(JSON.stringify({ type: 'execution.v1.deadline_retry', error: error instanceof Error ? error.name : 'unknown', reason: error instanceof Error ? error.message.slice(0, 200) : 'deadline_dispatch_failed' }));
       await this.ctx.storage.setAlarm(Date.now() + 5000);

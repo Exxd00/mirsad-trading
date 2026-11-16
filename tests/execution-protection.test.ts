@@ -215,10 +215,10 @@ describe('persistent protection wakeups in the existing Worker', () => {
     const first = alarm; await watch.fetch(request()); expect(alarm).toBe(first);
     const fetcher = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => Response.json({ status: 'idle' })); vi.stubGlobal('fetch', fetcher);
     await new OrderDeadline({ storage }, env).alarm();
-    expect(data.get('job')).toEqual({ kind: 'protection' }); expect(String(fetcher.mock.calls[0][0])).toContain('/api/execution/protect');
+    expect(data.get('job')).toEqual({ kind: 'protection', accountId: CONFIG.accountId }); expect(String(fetcher.mock.calls[0][0])).toContain('/api/execution/protect');
     fetcher.mockResolvedValueOnce(new Response('unavailable', { status: 503 }));
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     await new OrderDeadline({ storage }, env).alarm();
-    expect(data.get('job')).toEqual({ kind: 'protection' }); expect(alarm).toBeGreaterThan(Date.now());
+    expect(data.get('job')).toEqual({ kind: 'protection', accountId: CONFIG.accountId }); expect(alarm).toBeGreaterThan(Date.now());
   });
 });
