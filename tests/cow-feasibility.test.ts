@@ -141,6 +141,9 @@ describe('read-only wallet asset and exact-size economic audit', () => {
     const f = fixture(), audit = await auditCowFeasibility(owner, 1, f.deps);
     expect(audit.decision).toBe('blocked'); expect(audit.samples.every(s => s.status === 'complete')).toBe(true);
     expect(audit.samples.every(s => s.gasCostUpperFraction === null && s.totalCostUpperFraction === null)).toBe(true);
+    expect(audit.samples.every(s => s.reason === 'wallet_sample_gas_cost_unproven')).toBe(true);
+    expect(f.api.getQuote.mock.calls.filter(([q]) => q.kind === 'sell' && same(q.sellToken, METAMASK_MUSD)).map(([q]) => q.amount))
+      .toEqual(['1080725', '540362']);
     expect(audit.blockers).toContain('wallet_musd_execution_unconfigured');
     expect(f.market.fundingConversion).not.toHaveBeenCalled();
     expect(currentFeasibility(audit, owner, '1', NOW)).toBe(false);
@@ -186,7 +189,10 @@ describe('read-only wallet asset and exact-size economic audit', () => {
     expect((await auditCowFeasibility(owner, 1, noGas.deps)).decision).not.toBe('eligible-for-setup');
     const small = fixture({ usdc: 1_000_000000n, musd: 0n, eth: 1n });
     const audit = await auditCowFeasibility(owner, 1, small.deps);
-    expect(audit.decision).toBe('blocked'); expect(audit.samples.every(s => s.reason === 'wallet_sample_cost_ceiling_exceeded')).toBe(true);
+    expect(audit.decision).toBe('blocked');
+    expect(audit.samples[0]).toMatchObject({ status: 'complete', reason: 'wallet_sample_cost_ceiling_exceeded' });
+    expect(audit.samples[1]).toMatchObject({ status: 'unavailable', reason: 'wallet_sample_entry_budget_exceeded' });
+    expect(small.api.getQuote).toHaveBeenCalledTimes(3);
   });
   it.each(['unverified', 'stale', 'provider', 'wrong-buy-size', 'wrong-sell-size'] as const)('cannot become eligible from %s quote evidence', async scenario => {
     const f = fixture({ usdc: 1_000_000_000000n, musd: 0n, eth: 1n }), base = f.api.getQuote.getMockImplementation()!;
