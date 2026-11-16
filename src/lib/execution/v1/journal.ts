@@ -5,6 +5,7 @@ import type { SourceTransaction } from './source-model';
 import { VERSION, type IndicatorState, type Intent, type RiskState, type Signal, type SourceOrder } from './model';
 import type { ProtectionLevels } from './protection';
 import type { AccountingEvidence } from './accounting';
+import { validateProvisionalProtection, type ProvisionalProtection } from './provisional-protection';
 export type RuntimeState = { risk: RiskState; indicators: Record<string, IndicatorState>; pendingSignals: Signal[]; entriesEnabled: boolean; scanCursor?: number;
   walletIdentity?: string;
   // Armed by the owner's execution switch, never by deployment or a scheduler.
@@ -22,7 +23,7 @@ export type ManagedProtection = ProtectionLevels & { entryKey: string; entryOrde
   trigger: { reason: 'stop' | 'target' | 'reverse_cross'; at: number; bid: string | null } | null;
   lastError: string | null };
 export type ProtectionHeartbeat = { at: number; status: 'idle' | 'watching' | 'blocked' | 'busy';
-  managedPositions: number; checkedPositions: number; errors: { symbol?: string; reason: string }[] };
+  managedPositions: number; checkedPositions: number; provisionalPositions?: number; errors: { symbol?: string; reason: string }[] };
 export type SourceWrite = { id: string; decisionKey: string; symbol: string; kind: 'submit' | 'cancel';
   sourceOrderId: string | null; startedAt: number; settledAt: number | null };
 export type SourceArchiveState = { version: 1; observedFromMs: number; windowStartMs: number; windowEndMs: number;
@@ -43,6 +44,8 @@ export interface Journal {
   saveSourceArchive(lease: Lease, state: SourceArchiveState, records: SourceTransaction[]): Promise<void>;
   protections(accountId: string): Promise<ManagedProtection[]>;
   saveProtection(lease: Lease, value: ManagedProtection): Promise<void>;
+  provisionalProtections?(accountId: string): Promise<ProvisionalProtection[]>;
+  saveProvisionalProtection?(lease: Lease, value: ProvisionalProtection): Promise<void>;
   protectionHeartbeat(accountId: string): Promise<ProtectionHeartbeat | null>;
   saveProtectionHeartbeat(lease: Lease, value: ProtectionHeartbeat): Promise<void>;
   sourceWrites(lease: Lease): Promise<SourceWrite[]>;
@@ -157,6 +160,27 @@ export class SqlJournal implements Journal {
   async protectionHeartbeat(accountId: string) {
     const r = await query<{ value: ProtectionHeartbeat }>('SELECT value FROM app_settings WHERE key=$1', [`${root(accountId)}:protection_heartbeat`]);
     return r.rows[0]?.value ?? null;
+  }
+  async provisionalProtections(accountId: string) {
+    const r = await query<{ key: string; value: ProvisionalProtection }>('SELECT key,value FROM app_settings WHERE key LIKE $1 ORDER BY key', [`${root(accountId)}:provisional_protection:%`]);
+    return r.rows.map(row => {
+      const value = validateProvisionalProtection(row.value);
+      if (row.key !== `${root(accountId)}:provisional_protection:${value.entryKey}`) throw new Error('provisional_protection_identity_mismatch');
+      return value;
+    });
+  }
+  async saveProvisionalProtection(lease: Lease, value: ProvisionalProtection) {
+    const copy = validateProvisionalProtection(value);
+    await transaction(async tx => {
+      await this.owned(tx, lease);
+      const r = await tx.query<{ value: DecisionRecord }>('SELECT value FROM app_settings WHERE key=$1', [this.path(lease, `decision:${copy.entryKey}`)]);
+      const decision = r.rows[0]?.value;
+      if (!decision || decision.intent.side !== 'buy' || decision.protectionMode !== 'mirsad'
+        || decision.intent.symbol !== copy.symbol || !decision.sourceIdentity
+        || (decision.source?.id ?? decision.sourceIdentity.venueOrderId) !== copy.entryOrderId) throw new Error('provisional_protection_identity_mismatch');
+      await tx.query('INSERT INTO app_settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=NOW()',
+        [this.path(lease, `provisional_protection:${copy.entryKey}`), JSON.stringify(copy)]);
+    });
   }
   async saveProtectionHeartbeat(lease: Lease, value: ProtectionHeartbeat) {
     await transaction(async tx => { await this.owned(tx, lease);

@@ -14,7 +14,9 @@ export function protectionForFill(entry: SourceOrder, position: Position, instru
   const initial = price.mul(new D(1).sub(CONFIG.stopFraction)).div(tick).ceil().mul(tick);
   const stop = D.max(initial, previous?.stop ?? position.stop ?? initial);
   const target = price.mul(new D(1).add(CONFIG.targetFraction)).div(tick).ceil().mul(tick);
-  if (!stop.lt(target)) throw new Error('protection_levels_invalid');
+  // A better additional fill can lower the average/target below a previously
+  // tightened stop. Both independent thresholds remain valid; planExit gives
+  // the stop priority when a bid satisfies both. Never widen the old stop.
   return { quantity: quantity.toFixed(), averageFillPrice: price.toFixed(), stop: stop.toFixed(), target: target.toFixed(),
     originalStop: previous?.originalStop ?? position.originalStop ?? initial.toFixed() };
 }

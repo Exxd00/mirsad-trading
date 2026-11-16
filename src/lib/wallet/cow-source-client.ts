@@ -2,7 +2,7 @@ import 'server-only';
 import type { Address, Hex } from 'viem';
 import { CONFIG, D, decimal } from '../execution/v1/model';
 import { SourceApiError, SourceUnknownOutcomeError, type SourceBalance, type SourceCancellation,
-  type SourceClient, type ReportedFill, type ReportedOrder, type ExternalExpenseEvidence } from '../execution/v1/source-model';
+  type SourceClient, type ReportedFill, type ReportedOrder, type ExternalExpenseEvidence, type EntryProtectionEvidence } from '../execution/v1/source-model';
 import type { CowExecution } from './cow-execution';
 import type { CowExecutionJournal } from './cow-execution-journal';
 import type { CowExecutionMarket, CowFinalizedTrade, CowOrderInspection } from './cow-execution-types';
@@ -29,7 +29,7 @@ const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const iso = (at: number) => new Date(at * 1000).toISOString();
 const active = (o: ReportedOrder) => !['filled', 'cancelled', 'rejected'].includes(o.status)
   || o.finality?.status !== 'finalized';
-type PricedFill = { fill: ReportedFill };
+type PricedFill = { fill: ReportedFill; eurPerUnit: string };
 export const COW_FEE_API_VERSION = 'v2.386.1@c1e29b8b5135d5ca600b501a50b6cae4c203aa35';
 // Exact reviewed releases only. The newer release retains atomic attribution
 // (Trade.gasCost + order_execution total fee) and the total's token identity:
@@ -141,11 +141,46 @@ export class CowSourceClient implements SourceClient {
       const eur = decimal(await this.options.quotes.conversionAt(market.quoteCurrency, t.block.timestamp));
       if (!eur.gt(0)) fail('cow_historical_conversion_missing');
       const quoteEur = this.units(quoteRaw, market.quoteToken).mul(eur);
-      return { fill: { id: `${t.transactionHash}:${t.logIndex}`, orderId: t.uid,
+      return { eurPerUnit: eur.toFixed(), fill: { id: `${t.transactionHash}:${t.logIndex}`, orderId: t.uid,
         accountId: CONFIG.accountId, symbol: market.symbol, side: i.record.intent.side, quantity: quantity.toFixed(),
         price: quoteEur.div(quantity).toFixed(), baseCurrency: market.symbol.split('-')[0], quoteCurrency: 'EUR',
         createdAt: iso(t.block.timestamp), maker: false } };
     }));
+  }
+  private async protectionEvidence(i: CowOrderInspection, finalized: PricedFill[]): Promise<EntryProtectionEvidence | undefined> {
+    if (i.record.intent.side !== 'buy' || !i.minedTrades || !i.canonicalHead || !i.finalizedHead) return undefined;
+    const market = this.options.markets.find(m => m.symbol === i.record.intent.symbol)!;
+    const trades = [...i.finalizedTrades, ...i.minedTrades];
+    if (trades.length > 2048) fail('cow_protection_evidence_unavailable');
+    const fills: EntryProtectionEvidence['fills'] = [], rates = new Map<number, string>(), started = performance.now();
+    for (let index = 0; index < trades.length; index++) {
+      const t = trades[index];
+      if (!Number.isSafeInteger(t.block.timestamp) || t.block.timestamp < i.record.createdAt || t.block.timestamp > this.clock()) fail('cow_fill_timestamp_invalid');
+      const mined = index >= i.finalizedTrades.length, quantity = this.units(t.buyAmount, market.baseToken);
+      const minute = Math.floor(t.block.timestamp / 60) * 60;
+      let rate = mined ? rates.get(minute) : finalized[index].eurPerUnit;
+      if (performance.now() - started >= 20000) fail('cow_protection_evidence_unavailable');
+      if (rate === undefined) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          rate = await Promise.race([this.options.quotes.conversionAt(market.quoteCurrency, t.block.timestamp),
+            new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('cow_protection_evidence_unavailable')), 20000 - (performance.now() - started)); })]);
+        } finally { if (timer !== undefined) clearTimeout(timer); }
+        rates.set(minute, rate);
+      }
+      if (!decimal(rate).gt(0)) fail('cow_historical_conversion_missing');
+      const price = this.units(t.sellAmount, market.quoteToken).mul(rate).div(quantity).toFixed();
+      fills.push({ id: `${t.transactionHash}:${t.logIndex}`, transactionHash: t.transactionHash, logIndex: t.logIndex,
+        block: { number: t.block.number, hash: t.block.hash, timestamp: t.block.timestamp },
+        finality: mined ? 'mined' as const : 'finalized' as const, baseRaw: t.buyAmount, quoteRaw: t.sellAmount,
+        quantity: quantity.toFixed(), priceEur: price, fx: { currency: market.quoteCurrency, eurPerUnit: rate,
+          minuteAt: minute, sourceId: 'coinbase-exchange-completed-1m-eur-v1' as const } });
+    }
+    return { version: 1, scope: 'canonical-entry-fills-protection-only', orderId: i.record.uid,
+      clientOrderId: i.record.clientOrderId, accountId: CONFIG.accountId, symbol: market.symbol, chainId: 1, owner: i.record.owner,
+      baseToken: market.baseToken, quoteToken: market.quoteToken, baseDecimals: market.baseDecimals, quoteDecimals: market.quoteDecimals,
+      sourceAt: this.clock(), canonicalHead: { number: i.canonicalHead.number, hash: i.canonicalHead.hash, timestamp: i.canonicalHead.timestamp },
+      finalizedHead: { number: i.finalizedHead.number, hash: i.finalizedHead.hash, timestamp: i.finalizedHead.timestamp }, fills };
   }
   private async embeddedFee(i: CowOrderInspection, terminal: boolean): Promise<{ amountEur: string; recognition?: ReportedOrder['feeRecognition'] } | null> {
     if (i.pendingEvidence || !terminal) return null;
@@ -197,6 +232,9 @@ export class CowSourceClient implements SourceClient {
   }
   private async details(i: CowOrderInspection): Promise<{ order: ReportedOrder; fills: ReportedFill[] }> {
     const priced = await this.pricedFills(i), quantity = priced.reduce((n, f) => n.add(f.fill.quantity), new D(0));
+    // Historical FX missing for a mined fill blocks its shadow monitoring, not
+    // older finalized holdings or their existing protective exit path.
+    const protectionEvidence = await this.protectionEvidence(i, priced).catch(() => null);
     const notional = priced.reduce((n, f) => n.add(decimal(f.fill.quantity).mul(f.fill.price)), new D(0));
     const full = quantity.eq(i.record.intent.quantity), cancelled = ['finalized', 'absent'].includes(i.cancellation)
       || i.record.order.validTo <= (await this.options.history.balanceSnapshot()).finalized.timestamp;
@@ -220,6 +258,7 @@ export class CowSourceClient implements SourceClient {
         ...(embedded!.recognition ? { feeRecognition: embedded!.recognition } : {}) } : {}),
       createdAt: iso(i.record.createdAt), updatedAt: iso(this.clock()),
       ...(fills.length ? { lastFillAt: iso(Math.max(...fills.map(f => Date.parse(f.createdAt) / 1000))) } : {}),
+      ...(protectionEvidence !== undefined ? { protectionEvidence } : {}),
       finality: { status: finality, unconfirmedFilledQuantity: unconfirmed.toFixed(),
         transactionHashes: [...new Set([...i.finalizedTrades.map(t => t.transactionHash), ...i.transactions.map(t => t.state.hash)])] } } };
   }

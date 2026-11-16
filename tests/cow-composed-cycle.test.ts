@@ -316,11 +316,20 @@ describe('production source composition with public-shaped false-partial referen
     const pendingBuy=await cow.getOrder(buy.uid);
     expect(pendingBuy).toMatchObject({filledQuantity:'0',finality:{status:'mined'}});
     expect(decimal(pendingBuy.finality!.unconfirmedFilledQuantity).gt(0)).toBe(true);
-    b.advance();b.finalize();b.advance(36);const firstCancel=await handleDeadline(entry.intent!.key);b.mineWrites();
+    // The target is crossed only while the fill is mined. Monitoring must
+    // remember it without turning the provisional quantity into a sell.
+    b.setSpot('157');b.advance();await runProtection();
+    expect((await journal.provisionalProtections(CONFIG.accountId))[0]).toMatchObject({status:'triggered',trigger:{reason:'target'}});
+    expect(await journal.protections(CONFIG.accountId)).toHaveLength(0);
+    expect(b.posted).toHaveLength(1);expect(b.transactions.size).toBe(1);
+    b.setSpot('150');b.advance();b.finalize();b.advance(24);const firstCancel=await handleDeadline(entry.intent!.key);b.mineWrites();
     expect(await handleDeadline(entry.intent!.key)).not.toMatchObject({status:'cancelled'});
     b.advance();b.finalize();const cancellation=await handleDeadline(entry.intent!.key);
     expect(cancellation,JSON.stringify({firstCancel,cancellation,failures:b.failures,transactions:[...b.transactions.values()].map(t=>({action:t.action,mined:!!t.receipt})),errors:(await query("SELECT value->>'lastError' AS error FROM app_settings WHERE key LIKE 'wallet:cow:v1:%:order:%'")).rows})).toMatchObject({status:'cancelled'});
-    await runProtection();b.setSpot('157');b.advance();await runProtection();expect(b.posted).toHaveLength(2);
+    await runProtection();expect(b.posted).toHaveLength(2);
+    expect((await journal.provisionalProtections(CONFIG.accountId))[0].status).toBe('promoted');
+    const exitDecision=(await journal.accountDecisions(CONFIG.accountId)).find(d=>d.intent.side==='sell');
+    expect(exitDecision?.intent).toMatchObject({side:'sell',reason:'target',triggerQuote:{bid:expect.stringMatching(/^149\./)}});
     const sell=b.posted[1];expect(sell.order.kind).toBe('sell');b.mineWrites();b.fill(sell,BigInt(sell.order.sellAmount),BigInt(sell.order.buyAmount));
     const pendingSell=await cow.getOrder(sell.uid);
     expect(pendingSell).toMatchObject({filledQuantity:'0',finality:{status:'mined'}});

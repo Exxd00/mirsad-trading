@@ -17,6 +17,7 @@ const managerAbi = parseAbi(['function disabledDelegations(bytes32) view returns
   'function NAME() view returns(string)', 'function DOMAIN_VERSION() view returns(string)']);
 const ownerAbi = parseAbi(['function delegationManager() view returns(address)']);
 const tradeEvent = parseAbiItem('event Trade(address indexed owner,address sellToken,address buyToken,uint256 sellAmount,uint256 buyAmount,uint256 feeAmount,bytes orderUid)');
+const MAX_ORDER_PROOF_TRADES = 2048, MAX_ORDER_PROOF_LOGS = 20_000;
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const units = (raw: unknown): bigint => typeof raw === 'bigint' && raw >= 0n ? raw
   : typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0 ? BigInt(raw)
@@ -271,12 +272,18 @@ export class CowRpcTransport implements CowExecutionRpc {
     return this.guarded(async () => {
       if (cowOrderUid(record.order, record.owner) !== record.uid) return cowFail('cow_order_identity_invalid');
       const head = await this.getBlock('latest'), finalizedHead = await this.getBlock('finalized');
-      if (units(finalizedHead.number) > units(head.number)) return cowFail('cow_rpc_response_invalid');
+      if (units(finalizedHead.number) > units(head.number) || finalizedHead.timestamp > head.timestamp
+        || head.timestamp > this.clock()) return cowFail('cow_rpc_response_invalid');
       const archived = await this.options.finalizedArchive?.load(record) ?? null;
+      if (archived && (!Array.isArray(archived.trades) || archived.trades.length > MAX_ORDER_PROOF_TRADES)) return cowFail('cow_log_coverage_unavailable');
       if (archived && (archived.version !== 1 || archived.uid !== record.uid || units(archived.through.number) < units(record.createdBlock)
-        || units(archived.through.number) > units(finalizedHead.number) || (await this.getBlock(archived.through.number)).hash !== archived.through.hash
+        || units(archived.through.number) > units(finalizedHead.number) || !Number.isSafeInteger(archived.through.timestamp)
+        || archived.through.timestamp < 0 || archived.through.timestamp > finalizedHead.timestamp
+        || (await this.getBlock(archived.through.number)).hash !== archived.through.hash
         || archived.trades.some(t => t.uid !== record.uid || !same(t.owner, record.owner) || !same(t.sellToken, record.order.sellToken)
-          || !same(t.buyToken, record.order.buyToken) || units(t.block.number) > units(archived.through.number)))) return cowFail('cow_finalized_archive_invalid');
+          || !same(t.buyToken, record.order.buyToken) || units(t.block.number) > units(archived.through.number)
+          || !Number.isSafeInteger(t.block.timestamp) || t.block.timestamp < 0
+          || t.block.timestamp > archived.through.timestamp || t.block.timestamp > record.order.validTo))) return cowFail('cow_finalized_archive_invalid');
       const start = archived ? units(archived.through.number) + 1n : units(record.createdBlock);
       let end = units(head.number);
       const archivedFilled = archived?.trades.reduce((n, t) => n + BigInt(record.order.kind === 'buy' ? t.buyAmount : t.sellAmount), 0n);
@@ -303,19 +310,33 @@ export class CowRpcTransport implements CowExecutionRpc {
       if (start > end + 1n || end - start > 100000n) return cowFail('cow_log_coverage_unavailable');
       const all: CowLog[] = [], ownerTopic = ('0x' + record.owner.slice(2).padStart(64, '0')) as Hex;
       const topic = keccak256(new TextEncoder().encode('Trade(address,address,address,uint256,uint256,uint256,bytes)'));
-      for (let from = start; from <= end; from += 2001n) all.push(...await this.getLogs({ address: COW_SETTLEMENT,
-        fromBlock: from.toString(), toBlock: (from + 2000n > end ? end : from + 2000n).toString(), topics: [topic, ownerTopic] }));
-      const trades: CowFinalizedTrade[] = [...(archived?.trades ?? [])]; let unconfirmedSell = 0n, unconfirmedBuy = 0n;
+      for (let from = start; from <= end; from += 2001n) {
+        const logs = await this.getLogs({ address: COW_SETTLEMENT, fromBlock: from.toString(),
+          toBlock: (from + 2000n > end ? end : from + 2000n).toString(), topics: [topic, ownerTopic] });
+        if (all.length + logs.length > MAX_ORDER_PROOF_LOGS) return cowFail('cow_log_coverage_unavailable');
+        all.push(...logs);
+      }
+      const trades: CowFinalizedTrade[] = [...(archived?.trades ?? [])], minedTrades: CowFinalizedTrade[] = [];
+      let unconfirmedSell = 0n, unconfirmedBuy = 0n;
+      const seen = new Set(trades.map(t => `${t.transactionHash}:${t.logIndex}`));
+      if (seen.size !== trades.length) return cowFail('cow_finalized_archive_invalid');
       const receipts = new Map<string, CowReceipt>();
-      for (const item of all) {
+      const matching = all.flatMap(item => {
         if (item.removed) return cowFail('cow_reorganization_pending');
         const decoded = decodeEventLog({ abi: [tradeEvent], data: item.data, topics: item.topics as [Hex, ...Hex[]] }), a = decoded.args;
-        if (a.orderUid.toLowerCase() !== record.uid) continue;
+        return a.orderUid.toLowerCase() === record.uid ? [{ item, a }] : [];
+      });
+      if (trades.length + matching.length > MAX_ORDER_PROOF_TRADES) return cowFail('cow_log_coverage_unavailable');
+      for (const { item, a } of matching) {
         if (!same(a.owner, record.owner) || !same(a.sellToken, record.order.sellToken) || !same(a.buyToken, record.order.buyToken)
           || a.sellAmount <= 0n || a.buyAmount <= 0n || a.feeAmount !== 0n) return cowFail('cow_trade_identity_mismatch');
+        const id = `${item.transactionHash}:${item.logIndex}`;
+        if (seen.has(id)) return cowFail('cow_trade_receipt_invalid'); seen.add(id);
         const canonical = await this.getBlock(item.blockNumber);
-        if (canonical.hash !== item.blockHash) return cowFail('cow_reorganization_pending');
-        if (units(item.blockNumber) > units(finalizedHead.number)) { unconfirmedSell += a.sellAmount; unconfirmedBuy += a.buyAmount; continue; }
+        if (canonical.number !== item.blockNumber || canonical.hash !== item.blockHash || units(canonical.number) > units(head.number)
+          || canonical.timestamp > head.timestamp || canonical.timestamp > record.order.validTo
+          || (canonical.number === head.number && canonical.hash !== head.hash)
+          || (canonical.number === finalizedHead.number && canonical.hash !== finalizedHead.hash)) return cowFail('cow_reorganization_pending');
         let receipt = receipts.get(item.transactionHash);
         if (!receipt) {
           receipt = await this.getReceipt(item.transactionHash) ?? cowFail('cow_trade_receipt_missing');
@@ -323,9 +344,14 @@ export class CowRpcTransport implements CowExecutionRpc {
           await this.proveTradeReceipt(receipt, record.owner); receipts.set(item.transactionHash, receipt);
         }
         if (!receipt.logs.some(l => isDeepStrictEqual(l, item))) return cowFail('cow_trade_receipt_invalid');
-        trades.push({ uid: record.uid, owner: record.owner, sellToken: a.sellToken, buyToken: a.buyToken,
+        const verified: CowFinalizedTrade = { uid: record.uid, owner: record.owner, sellToken: a.sellToken, buyToken: a.buyToken,
           sellAmount: a.sellAmount.toString(), buyAmount: a.buyAmount.toString(), signedFeeAmount: '0', transactionHash: item.transactionHash,
-          logIndex: item.logIndex, block: canonical, receipt, receiptGasWei: (BigInt(receipt.gasUsed) * BigInt(receipt.effectiveGasPriceWei)).toString(), gasPayer: receipt.from });
+          logIndex: item.logIndex, block: canonical, receipt, receiptGasWei: (BigInt(receipt.gasUsed) * BigInt(receipt.effectiveGasPriceWei)).toString(), gasPayer: receipt.from };
+        if (units(item.blockNumber) > units(finalizedHead.number)) {
+          // Receipt-verified canonical MINED evidence is monitoring only. It
+          // is kept out of spendable balances, finalized history and PnL.
+          minedTrades.push(verified); unconfirmedSell += a.sellAmount; unconfirmedBuy += a.buyAmount;
+        } else trades.push(verified);
       }
       const sold = trades.reduce((n, t) => n + BigInt(t.sellAmount), 0n), bought = trades.reduce((n, t) => n + BigInt(t.buyAmount), 0n);
       if (sold + unconfirmedSell > BigInt(record.order.sellAmount) || bought + unconfirmedBuy > BigInt(record.order.buyAmount)
@@ -335,9 +361,14 @@ export class CowRpcTransport implements CowExecutionRpc {
         this.options.client.readContract({ address: COW_SETTLEMENT, abi: settlementAbi, functionName: 'filledAmount', args: [record.uid], blockNumber: units(finalizedHead.number) }),
       ]);
       if (filled !== (1n << 256n) - 1n && filled !== (record.order.kind === 'buy' ? bought : sold)) return cowFail('cow_fill_coverage_incomplete');
-      // Re-read finality's block identity to detect a provider serving mixed forks.
-      if ((await this.getBlock(finalizedHead.number)).hash !== finalizedHead.hash) return cowFail('cow_reorganization_pending');
+      // Both pinned heads must survive every receipt/state await above. A
+      // later canonical head may advance; this exact observed block may not
+      // silently change under provisional monitoring evidence.
+      const [finalCheck, headCheck] = await Promise.all([this.getBlock(finalizedHead.number), this.getBlock(head.number)]);
+      if (!isDeepStrictEqual(finalCheck, finalizedHead) || !isDeepStrictEqual(headCheck, head)
+        || head.timestamp > this.clock()) return cowFail('cow_reorganization_pending');
       return { trades, unconfirmedSellAmount: unconfirmedSell.toString(), unconfirmedBuyAmount: unconfirmedBuy.toString(),
+        minedTrades, canonicalHead: head,
         presigned: preSignature !== 0n, invalidated: filled === (1n << 256n) - 1n,
         expired: finalizedHead.timestamp > record.order.validTo, finalizedHead,
         ...(units(finalizedHead.number) >= units(record.createdBlock)

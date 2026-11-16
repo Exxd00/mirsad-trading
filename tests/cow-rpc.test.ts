@@ -30,7 +30,7 @@ async function fixture() {
   const order: CowOrder = { sellToken: quote, buyToken: base, receiver: owner.address, sellAmount: '100000000', buyAmount: '2000000000000000000',
     validTo: NOW + 600, appData: cowPolicyOrderAppData(draft, intentKey).hash, feeAmount: '0', kind: 'buy', partiallyFillable: true,
     sellTokenBalance: 'erc20', buyTokenBalance: 'erc20' };
-  const uid = cowOrderUid(order, owner.address); let head = 100n, latest = 101n, revoked = false;
+  const uid = cowOrderUid(order, owner.address); let head = 100n, latest = 101n, revoked = false, clock = NOW;
   let observed: CowPreparedTx | undefined, receipt: Record<string, unknown> | null = null, receiptLogs: Record<string, unknown>[] = [];
   const blockHash = (n: bigint) => n === 100n ? h('a') : n === 101n ? h('b') : h('c');
   const client = {
@@ -67,10 +67,10 @@ async function fixture() {
   };
   const signer = { address: executor.address, signTransaction: vi.fn(executor.signTransaction) };
   const options = { client: client as unknown as PublicClient, signer, authority,
-    gasLimits: { maxGas: '200000', maxFeePerGasWei: '1000', maxPriorityFeePerGasWei: '100', maxTransactionCostWei: '1000000000' }, clock: () => NOW,
+    gasLimits: { maxGas: '200000', maxFeePerGasWei: '1000', maxPriorityFeePerGasWei: '100', maxTransactionCostWei: '1000000000' }, clock: () => clock,
     authorizeWrite: vi.fn(async () => {}) };
   const rpc = new CowRpcTransport(options);
-  return { rpc, client, signer, options, authority, order, uid, setRevoked: (v: boolean) => { revoked = v; },
+  return { rpc, client, signer, options, authority, order, uid, setRevoked: (v: boolean) => { revoked = v; }, setClock: (value: number) => { clock = value; },
     setHead: (v: bigint) => { head = v; latest = v > latest ? v : latest; },
     setReceipt: (prepared: CowPreparedTx, status = 'success') => {
       observed = prepared; receipt = { transactionHash: prepared.hash, from: executor.address, to: manager, status,
@@ -149,6 +149,7 @@ describe('actual RPC transaction construction with isolated signer and injected 
   });
   it('bounds old order logs by canonical validity instead of losing coverage after fourteen days', async () => {
     const f = await fixture();
+    f.setClock(NOW + 1000000 * 12);
     f.client.getBlock.mockImplementation(async o => {
       const n = o.blockTag === 'latest' ? 1000100n : o.blockTag === 'finalized' ? 1000000n : o.blockNumber!;
       return { number: n, hash: h('c'), parentHash: h('c'), timestamp: BigInt(NOW) + (n - 100n) * 12n };
@@ -266,6 +267,7 @@ describe('canonical CoW Trade and owner net-transfer proof', () => {
     expect(result.trades).toHaveLength(1); expect(result.trades[0]).toMatchObject({ uid: f.uid, sellAmount: '50000000',
       buyAmount: '1000000000000000000', signedFeeAmount: '0', gasPayer: addr('f'), receiptGasWei: '3000000' });
     expect(result.unconfirmedBuyAmount).toBe('0'); expect(f.client.sendRawTransaction).not.toHaveBeenCalled();
+    expect(result.minedTrades).toEqual([]);
   });
   it('rejects fee-on-transfer or conflicting net receipt data instead of inventing received quantity', async () => {
     const f = await fixture(), record = f.fillReceipt(900000000000000000n);
@@ -276,6 +278,68 @@ describe('canonical CoW Trade and owner net-transfer proof', () => {
     const result = await f.rpc.orderProof(record); expect(result.trades).toEqual([]);
     // The finalized fill counter must correspond to the older finalized head.
     expect(result.unconfirmedBuyAmount).toBe('1000000000000000000');
+    expect(result.minedTrades).toHaveLength(1); expect(result.minedTrades[0].receipt.status).toBe('success');
+    expect(result.minedTrades[0]).toMatchObject({ uid: f.uid, block: { number: '100', hash: h('a') },
+      receipt: { transactionHash: h('e') }, buyAmount: '1000000000000000000' });
+    expect(result.canonicalHead).toMatchObject({ number: '101', hash: h('b') });
+    expect(result.archive!.trades).toEqual([]);
+  });
+  it.each(['reverted', 'wrong-hash', 'omitted-trade', 'omitted-transfer', 'changed-uid'] as const)(
+    'requires the real successful complete mined receipt on %s', async fault => {
+      const f = await fixture(), record = f.fillReceipt(); f.setHead(99n);
+      const receipt = structuredClone(await f.client.getTransactionReceipt())!;
+      const logs = receipt.logs as { transactionHash: Hex; address: Address; data: Hex }[];
+      if (fault === 'reverted') receipt.status = 'reverted';
+      if (fault === 'wrong-hash') receipt.blockHash = h('f');
+      if (fault === 'omitted-trade') receipt.logs = logs.slice(1);
+      if (fault === 'omitted-transfer') receipt.logs = logs.slice(0, 2);
+      if (fault === 'changed-uid') logs[0].data = encodeAbiParameters(parseAbiParameters('address,address,uint256,uint256,uint256,bytes'),
+        [quote, base, 50000000n, 1000000000000000000n, 0n, h('f')]);
+      f.client.getTransactionReceipt.mockResolvedValue(receipt);
+      await expect(f.rpc.orderProof(record)).rejects.toThrow(/cow_trade_receipt_invalid|cow_net_transfer_mismatch/);
+      expect(f.client.sendRawTransaction).not.toHaveBeenCalled();
+    });
+  it('never treats a mined fee-on-transfer quantity as receipt-verified provisional inventory', async () => {
+    const f = await fixture(), record = f.fillReceipt(900000000000000000n); f.setHead(99n);
+    await expect(f.rpc.orderProof(record)).rejects.toThrow('cow_net_transfer_mismatch');
+  });
+  it('rejects a mined UID whose Trade owner conflicts with the source owner despite the queried filter', async () => {
+    const f = await fixture(), record = f.fillReceipt(); f.setHead(99n);
+    const rows = await f.client.request();
+    f.client.request.mockResolvedValue(rows.map(row => ({ ...row,
+      topics: encodeEventTopics({ abi: [trade], eventName: 'Trade', args: { owner: addr('f') } }) })));
+    await expect(f.rpc.orderProof(record)).rejects.toThrow('cow_trade_identity_mismatch');
+    expect(f.client.getTransactionReceipt).not.toHaveBeenCalled();
+  });
+  it('rejects a canonical head changed while mined receipts were awaited', async () => {
+    const f = await fixture(), record = f.fillReceipt(); f.setHead(99n);
+    const originalReceipt = f.client.getTransactionReceipt.getMockImplementation()!, originalBlock = f.client.getBlock.getMockImplementation()!;
+    let reorg = false;
+    f.client.getTransactionReceipt.mockImplementation(async () => { const r = await originalReceipt(); reorg = true; return r; });
+    f.client.getBlock.mockImplementation(async args => {
+      const block = await originalBlock(args);
+      return reorg && args.blockNumber === 101n ? { ...block, hash: h('f') } : block;
+    });
+    await expect(f.rpc.orderProof(record)).rejects.toThrow('cow_reorganization_pending');
+  });
+  it.each(['future-head', 'future-event', 'same-transaction-reorg'] as const)('rejects %s block evidence for provisional monitoring', async fault => {
+    const f = await fixture(), record = f.fillReceipt(); f.setHead(99n);
+    const original = f.client.getBlock.getMockImplementation()!;
+    f.client.getBlock.mockImplementation(async args => {
+      const block = await original(args);
+      if (fault === 'future-head' && args.blockTag === 'latest') return { ...block, timestamp: BigInt(NOW + 1) };
+      if (args.blockNumber === 100n) return fault === 'future-event' ? { ...block, timestamp: BigInt(NOW + 1) }
+        : fault === 'same-transaction-reorg' ? { ...block, hash: h('f') } : block;
+      return block;
+    });
+    await expect(f.rpc.orderProof(record)).rejects.toThrow(/cow_rpc_response_invalid|cow_reorganization_pending/);
+  });
+  it('rejects too many mined trade records before receipt work instead of silently truncating provisional evidence', async () => {
+    const f = await fixture(), record = f.fillReceipt(); f.setHead(99n);
+    const rows = await f.client.request(), one = rows[0];
+    f.client.request.mockResolvedValue(Array.from({ length: 2049 }, (_, logIndex) => ({ ...one, logIndex })));
+    await expect(f.rpc.orderProof(record)).rejects.toThrow('cow_log_coverage_unavailable');
+    expect(f.client.getTransactionReceipt).not.toHaveBeenCalled();
   });
   it('uses a canonical finalized archive to retain long-position history and scan only the new suffix', async () => {
     const f = await fixture(), record = f.fillReceipt(), initial = await f.rpc.orderProof(record);

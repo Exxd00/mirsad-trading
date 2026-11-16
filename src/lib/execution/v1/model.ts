@@ -43,6 +43,7 @@ export type Position = { id: string; symbol: string; managed: boolean; openedAt:
   protectionState: 'active' | 'missing' | 'unknown'; protectionIds: string[];
   exitReason?: 'stop' | 'target' | 'reverse_cross'; exitRevision?: string };
 export type SourceOrder = { id: string; clientKey: string; symbol: string; side: 'buy' | 'sell';
+  protectionEvidence?: import('./source-model').EntryProtectionEvidence | null;
   feeRecognition?: { method: 'cow-api-total-at-finalized-last-fill-v1'; token: string; rawAmount: string;
     recognitionAt: number; eurPerToken: string; sourceId: 'coinbase-exchange-completed-1m-eur-v1' };
   finality?: { status: 'pending' | 'mined' | 'finalized'; unconfirmedFilledQuantity: string; transactionHashes: string[] };
