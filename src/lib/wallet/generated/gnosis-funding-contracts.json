@@ -1,0 +1,718 @@
+{
+  "version": 1,
+  "method": "lifi-layerswap-gnosis-owner-funding-v1",
+  "status": "reference-review-only-not-execution-approved",
+  "fromChainId": 1,
+  "toChainId": 100,
+  "fromToken": {
+    "address": "0xaca92e438df0b2401ff60da7e4337b687a2435da",
+    "symbol": "mUSD",
+    "decimals": 6
+  },
+  "toToken": {
+    "address": "0x2a22f9c3b484c3629090feed35f17ff8f88f76f0",
+    "symbol": "USDC.e",
+    "decimals": 6
+  },
+  "native": {
+    "symbol": "xDAI",
+    "gasZipChain": 16,
+    "nativeChain": 100
+  },
+  "fromAmount": "10000000",
+  "fromAmountForGas": "50000",
+  "maximumFeeAmount": "25000",
+  "maximumSlippage": "0.005",
+  "reviewLifetimeSeconds": 90,
+  "contracts": {
+    "diamond": {
+      "address": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+      "runtimeHash": "0x828f8a0694bfba25c80a406283f149d701cdc944acbbc18b57315cf157db9220"
+    },
+    "facet": {
+      "address": "0x04E051D8e3627A79785f8E210B1d61A877AA737A",
+      "runtimeHash": "0xee8199c730a402fcf233e130b0054fbfa02cde30def0da53187f0dd2c4fa36d0"
+    },
+    "gasZip": {
+      "address": "0x363d698649cd04f9692Ab86e8365b227c1ee859d",
+      "runtimeHash": "0x1287429bafbca08151b4ac60ad1f997fe8bc0e9ede02b3b1242b28c9254b518c"
+    },
+    "feeForwarder": {
+      "address": "0xDe2b920506EE931a6A2ABDF566526220214FBbAE",
+      "runtimeHash": "0x99a76627aece8903612e0246c10f13a46e511a0a074d9a4e68987a28c78ebd52"
+    },
+    "gasDex": {
+      "address": "0x20F6ee51340aDEed01A59B0e65cB3703f3dc860c",
+      "runtimeHash": "0xaffe8098fa7a152f718c07de0ea7657382e535a301aaf12f89bbba8f91e4b352"
+    }
+  },
+  "abi": {
+    "facet": [
+      {
+        "name": "swapAndStartBridgeTokensViaLayerSwap",
+        "type": "function",
+        "inputs": [
+          {
+            "name": "_bridgeData",
+            "type": "tuple",
+            "components": [
+              {
+                "name": "transactionId",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "bridge",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "integrator",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "referrer",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "sendingAssetId",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "receiver",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "minAmount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "destinationChainId",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "hasSourceSwaps",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "hasDestinationCall",
+                "type": "bool",
+                "internalType": "bool"
+              }
+            ],
+            "internalType": "struct ILiFi.BridgeData"
+          },
+          {
+            "name": "_swapData",
+            "type": "tuple[]",
+            "components": [
+              {
+                "name": "callTo",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "approveTo",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "sendingAssetId",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "receivingAssetId",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "fromAmount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "callData",
+                "type": "bytes",
+                "internalType": "bytes"
+              },
+              {
+                "name": "requiresDeposit",
+                "type": "bool",
+                "internalType": "bool"
+              }
+            ],
+            "internalType": "struct LibSwap.SwapData[]"
+          },
+          {
+            "name": "_layerSwapData",
+            "type": "tuple",
+            "components": [
+              {
+                "name": "requestId",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "depositoryReceiver",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "refundRecipient",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "nonEVMReceiver",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "signature",
+                "type": "bytes",
+                "internalType": "bytes"
+              },
+              {
+                "name": "deadline",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ],
+            "internalType": "struct LayerSwapFacet.LayerSwapData"
+          }
+        ],
+        "outputs": [],
+        "stateMutability": "payable"
+      }
+    ],
+    "gasZip": [
+      {
+        "name": "depositToGasZipERC20",
+        "type": "function",
+        "inputs": [
+          {
+            "name": "_swapData",
+            "type": "tuple",
+            "components": [
+              {
+                "name": "callTo",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "approveTo",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "sendingAssetId",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "receivingAssetId",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "fromAmount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "callData",
+                "type": "bytes",
+                "internalType": "bytes"
+              },
+              {
+                "name": "requiresDeposit",
+                "type": "bool",
+                "internalType": "bool"
+              }
+            ],
+            "internalType": "struct LibSwap.SwapData"
+          },
+          {
+            "name": "_gasZipData",
+            "type": "tuple",
+            "components": [
+              {
+                "name": "receiverAddress",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "destinationChains",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ],
+            "internalType": "struct IGasZip.GasZipData"
+          }
+        ],
+        "outputs": [],
+        "stateMutability": "nonpayable"
+      }
+    ],
+    "feeForwarder": [
+      {
+        "name": "forwardERC20Fees",
+        "type": "function",
+        "inputs": [
+          {
+            "name": "_token",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "_distributions",
+            "type": "tuple[]",
+            "components": [
+              {
+                "name": "recipient",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amount",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ],
+            "internalType": "struct FeeForwarder.FeeDistribution[]"
+          }
+        ],
+        "outputs": [],
+        "stateMutability": "nonpayable"
+      }
+    ],
+    "gasDex": [
+      {
+        "name": "swapWithBackendSignature",
+        "type": "function",
+        "inputs": [
+          {
+            "name": "",
+            "type": "bytes",
+            "internalType": "bytes"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "amountOut",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ],
+        "stateMutability": "payable"
+      }
+    ]
+  },
+  "observation": {
+    "observedAt": "2026-11-16T01:30:45.461Z",
+    "blockNumber": "26424223",
+    "blockHash": "0x607434b87abf8be8e002153b562ddd1c7e72ca7b06b8978864a521a308fd3550",
+    "blockTimestamp": 1794791639,
+    "sources": [
+      "https://ethereum-rpc.publicnode.com",
+      "https://eth.drpc.org"
+    ],
+    "sourcifyExactMatches": [
+      "facet",
+      "gasZip",
+      "feeForwarder",
+      "gasDex"
+    ],
+    "lifiContractsCommit": "647a59a0e738aa42bbaded1304c5f4ec3b9693e3",
+    "gasZipChains": "https://backend.gas.zip/v2/chains"
+  },
+  "feeRecipient": "0xC06ebbefD94032B85424D51906e2A335EFAe264B",
+  "freshChecks": {
+    "version": 1,
+    "status": "reference-pins-require-fresh-canonical-read-before-owner-review",
+    "observation": {
+      "observedAt": "2026-11-16T02:21:22.216Z",
+      "block": {
+        "number": "26424558",
+        "hash": "0x19d57c5945fbe76193ea4dbc00eb3e33324ba078e1129581861a8563c6bdc195",
+        "parentHash": "0xbef0084c3d9c156d26687be5f3ed846494517814473dfebabeae6317c73feafd",
+        "timestamp": 1794795671
+      },
+      "sources": [
+        "https://ethereum-rpc.publicnode.com",
+        "https://eth.drpc.org"
+      ]
+    },
+    "contracts": {
+      "core": {
+        "address": "0x09AD820aaC5779683B481c4674208A4e1B024Afa",
+        "runtimeHash": "0xc3508fb257eee0d20085dfdf41a56e95e8912ca82e3d0a9a9f6e696a261ed1cd"
+      },
+      "gasRouter": {
+        "address": "0x2a37D63EAdFe4b4682a3c28C1c2cD4F109Cc2762",
+        "runtimeHash": "0x3d2a2c839a7ac297a9bf239733a0336c712152ce263f6370d33553b3638b8253"
+      },
+      "whitelistFacet": {
+        "address": "0x1841044080E6872c90Ac5048F0D1954CC546e9B7",
+        "runtimeHash": "0xd0b2d60642c0f76a1e841282452a2294fbbf520282aceb0280e04e34b4bc6b9a"
+      },
+      "loupeFacet": {
+        "address": "0xF5ba8Db6fEA7aF820De35C8D0c294e17DBC1b9D2",
+        "runtimeHash": "0xc8e7024e3f1ae79921c099b4bfd1c74fddf488e9dc38c19f25eb63958e139889"
+      },
+      "depository": {
+        "address": "0xE226E4825CB215aBaFAd98fdd400583eAb6a594f",
+        "runtimeHash": "0xe2c5b091f98ff37764289b288afff06c0603e81a35cf4e55af17526838228831"
+      },
+      "weth9": {
+        "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+        "runtimeHash": "0xd0a06b12ac47863b5c7be4185c2deaad1c61557033f56c7d4ea74429cbb25e23"
+      }
+    },
+    "layerSwap": {
+      "depository": "0xE226E4825CB215aBaFAd98fdd400583eAb6a594f",
+      "backendSigner": "0xAF4B7A83591a6c4c8B9d1341C3F08BBc3b800fc5",
+      "domain": {
+        "name": "LI.FI LayerSwap Facet",
+        "version": "1",
+        "chainId": 1,
+        "verifyingContract": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE"
+      },
+      "payloadType": "LayerSwapPayload(bytes32 transactionId,uint256 minAmount,address receiver,bytes32 requestId,address depositoryReceiver,address refundRecipient,bytes32 nonEVMReceiver,uint256 destinationChainId,address sendingAssetId,uint256 deadline)",
+      "requestStorageNamespace": "com.lifi.facets.layerswap",
+      "constructorProof": {
+        "source": "https://sourcify.dev/server/v2/contract/1/0x04E051D8e3627A79785f8E210B1d61A877AA737A?fields=all",
+        "runtimeMatch": "exact_match",
+        "compiler": "0.8.29+commit.ab55807c",
+        "depositoryImmutableOffsets": [
+          93,
+          3092,
+          3292,
+          3361
+        ],
+        "backendSignerImmutableOffsets": [
+          2400
+        ],
+        "immutableWordBytes": 32
+      }
+    },
+    "gasZip": {
+      "router": "0x2a37D63EAdFe4b4682a3c28C1c2cD4F109Cc2762",
+      "diamond": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+      "constructorProof": {
+        "source": "https://sourcify.dev/server/v2/contract/1/0x363d698649cd04f9692Ab86e8365b227c1ee859d?fields=all",
+        "runtimeMatch": "exact_match",
+        "compiler": "0.8.17+commit.8df45f5f"
+      }
+    },
+    "gasDex": {
+      "coreAddress": "0x09AD820aaC5779683B481c4674208A4e1B024Afa",
+      "weth": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+      "observedOwner": "0x9f2eFccb4041236c7b683521de9459958977f694",
+      "paused": false,
+      "corePaused": false,
+      "coreDexWhitelisted": true,
+      "observedBackendSigner": "0x28de4113921BD79388B0ef80A259f871977442E9",
+      "backendSignerRule": "recover-signed-fields-then-require-current-internalCallers-true",
+      "governanceAssumption": "code-and-current-storage-snapshot-not-future-core-whitelist-owner-or-pause-guarantee",
+      "wethCodeHash": "0xd0a06b12ac47863b5c7be4185c2deaad1c61557033f56c7d4ea74429cbb25e23"
+    },
+    "diamond": {
+      "storageNamespace": "diamond.standard.diamond.storage",
+      "selectorFacetBindings": [
+        {
+          "selector": "0x4c279d6b",
+          "facet": "0x04E051D8e3627A79785f8E210B1d61A877AA737A",
+          "slot": "0x548164e3dad939a4d2c7c7fa5b53525f286208c487a6a2c1e060cdd609584f48"
+        },
+        {
+          "selector": "0x9baf00f9",
+          "facet": "0x1841044080E6872c90Ac5048F0D1954CC546e9B7",
+          "slot": "0xd73c251a7cedc07ac38a3a4b27f09020233b317e2bd701924077b007257eb37b"
+        },
+        {
+          "selector": "0xcdffacc6",
+          "facet": "0xF5ba8Db6fEA7aF820De35C8D0c294e17DBC1b9D2",
+          "slot": "0x7e824bed63bf94881fc97011f0270acd50c389834ee37911f16b07808d890403"
+        }
+      ],
+      "allowlistedPairs": [
+        {
+          "contract": "0xDe2b920506EE931a6A2ABDF566526220214FBbAE",
+          "selector": "0x332d746b"
+        },
+        {
+          "contract": "0x363d698649cd04f9692Ab86e8365b227c1ee859d",
+          "selector": "0x8b71ae6c"
+        },
+        {
+          "contract": "0x20F6ee51340aDEed01A59B0e65cB3703f3dc860c",
+          "selector": "0x46ec278a"
+        }
+      ]
+    },
+    "abi": {
+      "gasDex": [
+        {
+          "name": "coreAddress",
+          "type": "function",
+          "stateMutability": "view",
+          "inputs": [],
+          "outputs": [
+            {
+              "type": "address"
+            }
+          ]
+        },
+        {
+          "name": "weth",
+          "type": "function",
+          "stateMutability": "view",
+          "inputs": [],
+          "outputs": [
+            {
+              "type": "address"
+            }
+          ]
+        },
+        {
+          "name": "owner",
+          "type": "function",
+          "stateMutability": "view",
+          "inputs": [],
+          "outputs": [
+            {
+              "type": "address"
+            }
+          ]
+        },
+        {
+          "name": "paused",
+          "type": "function",
+          "stateMutability": "view",
+          "inputs": [],
+          "outputs": [
+            {
+              "type": "bool"
+            }
+          ]
+        },
+        {
+          "name": "internalCallers",
+          "type": "function",
+          "stateMutability": "view",
+          "inputs": [
+            {
+              "type": "address"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "bool"
+            }
+          ]
+        }
+      ],
+      "core": [
+        {
+          "name": "paused",
+          "type": "function",
+          "stateMutability": "view",
+          "inputs": [],
+          "outputs": [
+            {
+              "type": "bool"
+            }
+          ]
+        },
+        {
+          "name": "whitelist",
+          "type": "function",
+          "stateMutability": "view",
+          "inputs": [
+            {
+              "type": "address"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "bool"
+            }
+          ]
+        }
+      ],
+      "gasZip": [
+        {
+          "name": "GAS_ZIP_ROUTER",
+          "type": "function",
+          "stateMutability": "view",
+          "inputs": [],
+          "outputs": [
+            {
+              "type": "address"
+            }
+          ]
+        },
+        {
+          "name": "LIFI_DIAMOND",
+          "type": "function",
+          "stateMutability": "view",
+          "inputs": [],
+          "outputs": [
+            {
+              "type": "address"
+            }
+          ]
+        }
+      ],
+      "layerSwap": [
+        {
+          "name": "LAYERSWAP_DEPOSITORY",
+          "type": "function",
+          "stateMutability": "view",
+          "inputs": [],
+          "outputs": [
+            {
+              "type": "address"
+            }
+          ]
+        }
+      ],
+      "depository": [
+        {
+          "name": "isWhitelisted",
+          "type": "function",
+          "stateMutability": "view",
+          "inputs": [
+            {
+              "type": "address"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "bool"
+            }
+          ]
+        },
+        {
+          "name": "paused",
+          "type": "function",
+          "stateMutability": "view",
+          "inputs": [],
+          "outputs": [
+            {
+              "type": "bool"
+            }
+          ]
+        }
+      ],
+      "diamond": [
+        {
+          "name": "facetAddress",
+          "type": "function",
+          "stateMutability": "view",
+          "inputs": [
+            {
+              "type": "bytes4"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "address"
+            }
+          ]
+        },
+        {
+          "name": "isContractSelectorWhitelisted",
+          "type": "function",
+          "stateMutability": "view",
+          "inputs": [
+            {
+              "type": "address"
+            },
+            {
+              "type": "bytes4"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "bool"
+            }
+          ]
+        }
+      ]
+    },
+    "sourceProvenance": {
+      "core": {
+        "source": "https://sourcify.dev/server/v2/contract/1/0x09AD820aaC5779683B481c4674208A4e1B024Afa?fields=all",
+        "runtimeMatch": "exact_match",
+        "match": "exact_match",
+        "contract": "project/contracts/DexAggregatorCore.sol:DexAggregatorCore",
+        "compiler": "0.8.28+commit.7893614a",
+        "sourceHashes": {
+          "project/contracts/DexAggregatorCore.sol": "0x02a024e81e3dbfabefc1274a0381207385f36ddae6b7353a7e67dfd89f3a35c5",
+          "project/contracts/interfaces/IDexAggregatorCore.sol": "0x8769f614d729e9ac5f6b5b6b03806d8d9ba5ced836e584feb4d65a0e7a2aa040"
+        }
+      },
+      "gasRouter": {
+        "source": "https://sourcify.dev/server/v2/contract/1/0x2a37D63EAdFe4b4682a3c28C1c2cD4F109Cc2762?fields=all",
+        "runtimeMatch": "exact_match",
+        "match": "exact_match",
+        "contract": "src/GasZipV2.sol:GasZipV2",
+        "compiler": "0.8.26+commit.8a97fa7a",
+        "sourceHashes": {
+          "src/GasZipV2.sol": "0x6327e98c89435d7dabaff9f23a0e340f23a2bbd87836270721a50d0962c9538d"
+        }
+      },
+      "whitelistFacet": {
+        "source": "https://sourcify.dev/server/v2/contract/1/0x1841044080E6872c90Ac5048F0D1954CC546e9B7?fields=all",
+        "runtimeMatch": "match",
+        "match": "match",
+        "contract": "src/Facets/WhitelistManagerFacet.sol:WhitelistManagerFacet",
+        "compiler": "0.8.29+commit.ab55807c",
+        "sourceHashes": {
+          "src/Facets/WhitelistManagerFacet.sol": "0x2faf1ed6070f3809ba568040c22de5d643e41b31dbd4e3ef188273c4701c9903",
+          "src/Libraries/LibDiamond.sol": "0xb48ec1c36ab96f8b8d8312f5845eea4c4021d783ff5f102290b7f7917ca5fdd7",
+          "src/Libraries/LibAllowList.sol": "0x9546820687e3c2bf6f2616eea64737ccac046da234c44c1f218c2286cdd56219",
+          "src/Interfaces/IWhitelistManagerFacet.sol": "0xcb7832c3b564d96e7cdb130cae5d3d568cf15c54c19c3c281043adf3c4a28389"
+        },
+        "runtimeTransformations": [
+          {
+            "reason": "cborAuxdata",
+            "offset": 6439,
+            "type": "replace"
+          }
+        ]
+      },
+      "loupeFacet": {
+        "source": "https://sourcify.dev/server/v2/contract/1/0xF5ba8Db6fEA7aF820De35C8D0c294e17DBC1b9D2?fields=all",
+        "runtimeMatch": "exact_match",
+        "match": "exact_match",
+        "contract": "src/Facets/DiamondLoupeFacet.sol:DiamondLoupeFacet",
+        "compiler": "0.8.17+commit.8df45f5f",
+        "sourceHashes": {
+          "src/Libraries/LibDiamond.sol": "0xaec5ad3cefb86adb1be1189e67aa1317c7ffbcd2a06681669f9fd2351311cba7",
+          "src/Facets/DiamondLoupeFacet.sol": "0x81d43af2ea08e5d3305347566def5e6ada237d2dddcb760e1f4e2f035afd103f"
+        }
+      },
+      "depository": {
+        "source": "https://sourcify.dev/server/v2/contract/1/0xE226E4825CB215aBaFAd98fdd400583eAb6a594f?fields=all",
+        "runtimeMatch": "exact_match",
+        "match": "exact_match",
+        "contract": "src/LayerswapDepository.sol:LayerswapDepository",
+        "compiler": "0.8.29+commit.ab55807c",
+        "sourceHashes": {
+          "src/LayerswapDepository.sol": "0x5a37baae442df35c4b1580345a1debe8f8fc3572138220c57750e69f287fe83a"
+        }
+      }
+    }
+  }
+}

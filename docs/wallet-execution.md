@@ -393,6 +393,42 @@ quote amounts and must not be added a second time. Quote gas estimates are not
 owner-executor receipts. Lower-priced actual unrelated transactions establish
 historical inclusion only, not a future timeliness or cost guarantee.
 
+### Owner funding review (16 November 2026)
+
+The authenticated funding route proposes one fixed source-chain input of
+10 mUSD on Ethereum for USDC.e on Gnosis. Its 0.05-mUSD GasZip allocation is
+included in that input. Approval is exactly 10 mUSD to the pinned LI.FI Diamond;
+provider gas/nonce fields and arbitrary targets are not forwarded to MetaMask.
+The LayerSwap destination amount is an off-chain quote, not a minimum enforced
+by source calldata. Gas arrival and MetaMask Gas Included eligibility/fees remain
+unproved until the owner reviews the wallet and destination balances arrive.
+
+Before a reservation, the service requires an actual contiguous 1,000-bar SQL
+cache snapshot under the compiled source identity, within 24 hours and outside
+quarantine. This initial-history proof is not live entry readiness. Fresh paired
+RPC reads check contract runtimes, mutable routing/whitelist state, backend
+signature authority, request replay state, balances, allowance and nonces.
+The destination snapshot is read last. A 90-second quote review is revalidated
+into a short-lived reservation immediately before an explicit owner action.
+
+Private SQL owner locks preserve the exact review, proof and transaction bytes
+before any wallet prompt. Hash recording survives UI unmount; unknown requests
+have no TTL release and block subsequent funding. A known hash is retained for
+recovery if recording fails. A trusted client classification before the wallet
+RPC permits an explicit unsent cancellation only after fresh baseline checks.
+That classification is an owner attestation, not cryptographic proof of mempool
+absence; raw provider errors cannot forge it. Numeric owner rejection 4001 is
+handled separately. No passive effect connects, switches or sends a transaction.
+
+Finalized source receipts and exact token/protocol events resolve the stored
+attempt, including relayed wallet transactions. Receipt status alone is not
+success. A confirmed source transfer does not certify bridge arrival; extra
+owner token outflow is recorded without inventing gas attribution. Successful
+funding closes this one-off path rather than permitting another transfer.
+Trading still requires current feasibility, bounded authority, cancellation
+protection and the verified scheduler phase. The assistant does not confirm
+wallet prompts or activate financial execution.
+
 ### mUSD reference valuation (15 November 2026)
 
 The owner-authenticated, CSRF-protected `POST /api/wallet/strategy/valuation`

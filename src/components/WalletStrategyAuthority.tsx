@@ -10,6 +10,7 @@ import { strategyChainId, strategyNetwork, walletAssetLabel } from '@/lib/wallet
 import styles from '@/app/automation/page.module.css';
 import { WalletFeasibilityAudit } from './WalletFeasibilityAudit';
 import { WalletGnosisReadiness } from './WalletGnosisReadiness';
+import { WalletFundingReview, type FundingOwnerAction, type FundingAttemptResult } from './WalletFundingReview';
 
 type Report = AuthorityPublic & { csrfToken: string };
 type Setup = { status: 'funding-required' | 'configured'; owner: string; executor: string; chainId: 1 | 100;
@@ -32,8 +33,9 @@ const labels: Record<AuthorityPublic['state'], string> = {
   verified: 'تفويض محفوظ بعد التحقق؛ الجاهزية التشغيلية تُراجع منفصلة',
   closing: 'الصلاحية قيد الإغلاق؛ إنشاء صلاحيات أوامر جديدة محجوب', closed: 'اكتمل التحقق من إغلاق الصلاحية', blocked: 'المراجعة محجوبة حتى معالجة المتطلبات',
 };
-export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus }: { wallet: Snapshot | null; ownerAction: OwnerAction;
-  callsStatus: (id: string) => Promise<{ status: number; transactionHashes: `0x${string}`[] }> }) {
+export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fundingAction, fundingAttemptResult }: { wallet: Snapshot | null; ownerAction: OwnerAction;
+  callsStatus: (id: string) => Promise<{ status: number; transactionHashes: `0x${string}`[] }>;
+  fundingAction: FundingOwnerAction; fundingAttemptResult: (result: FundingAttemptResult) => void }) {
   const [report, setReport] = useState<Report | null>(null), [pending, setPending] = useState(false);
   const [notice, setNotice] = useState(''), [error, setError] = useState(''), [reviewed, setReviewed] = useState(false);
   const [submittedReferences, setSubmittedReferences] = useState<string[]>([]);
@@ -170,6 +172,7 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus }: { 
     <div className={styles.reportDetails}>
       <p role="status">{report ? labels[report.state] : 'جارٍ قراءة سجل الصلاحية…'}</p>
       <WalletGnosisReadiness csrfToken={report?.csrfToken ?? null} disabled={pending} />
+      <WalletFundingReview wallet={wallet} csrfToken={report?.csrfToken ?? null} ownerAction={fundingAction} syncResult={fundingAttemptResult} disabled={pending} />
       <WalletFeasibilityAudit wallet={wallet} csrfToken={report?.csrfToken ?? null} onAudit={setFeasibility} disabled={pending} />
       {!feasible && <p>لم يثبت فحص حديث يجيز إعداداً جديداً. يبقى التحقق وإغلاق الصلاحيات السابقة متاحين.</p>}
       <p>هذه الصلاحية لاستراتيجية المحرك الرئيسية. يراجع صاحب المحفظة ترقية الحساب والموافقات المحدودة والتفويض قبل أي طلب من MetaMask.</p>
