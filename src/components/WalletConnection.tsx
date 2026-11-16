@@ -60,6 +60,11 @@ export function WalletConnection() {
     ownerAction={(review, action, close) => {
       if (!session.current) throw new Error('أعد ربط المحفظة.');
       return session.current.authorityAction(review, action, close);
+    }} fundingAction={(reservation, phase) => {
+      if (!session.current) throw new Error('أعد ربط المحفظة.');
+      return session.current.fundingAction(reservation, phase);
+    }} fundingAttemptResult={result => {
+      session.current?.fundingAttemptResult(result);
     }} callsStatus={id => {
       if (!session.current) throw new Error('أعد ربط المحفظة.');
       return session.current.authorityCallsStatus(id);

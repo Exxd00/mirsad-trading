@@ -1,0 +1,2378 @@
+{
+  "observedAt": "2026-11-16T01:21:30.934Z",
+  "referenceOnly": true,
+  "quote": {
+    "type": "lifi",
+    "id": "ec26f9f0-698b-41ab-8ddb-32e3ccfde035:0",
+    "tool": "layerswap",
+    "toolDetails": {
+      "key": "layerswap",
+      "name": "Layerswap",
+      "logoURI": "https://raw.githubusercontent.com/lifinance/types/main/src/assets/icons/bridges/layerswap.svg"
+    },
+    "action": {
+      "fromToken": {
+        "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+        "chainId": 1,
+        "symbol": "mUSD",
+        "decimals": 6,
+        "name": "Metamask USD",
+        "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+        "priceUSD": "0.9988483132",
+        "tags": [
+          "stablecoin"
+        ],
+        "verificationStatus": "verified",
+        "verificationStatusBreakdown": [
+          {
+            "provider": "hypernative",
+            "result": "verified",
+            "providerResult": "accept"
+          }
+        ]
+      },
+      "fromAmount": "10000000",
+      "toToken": {
+        "address": "0x2a22f9c3b484c3629090FeED35F17Ff8F88f76F0",
+        "chainId": 100,
+        "symbol": "USDC.e",
+        "decimals": 6,
+        "name": "Bridged USD Coin",
+        "coinKey": "USDCe",
+        "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
+        "priceUSD": "0.9998942329",
+        "tags": [
+          "stablecoin"
+        ],
+        "verificationStatus": "verified",
+        "verificationStatusBreakdown": [
+          {
+            "provider": "hypernative",
+            "result": "verified",
+            "providerResult": "accept"
+          }
+        ]
+      },
+      "fromChainId": 1,
+      "toChainId": 100,
+      "slippage": 0.005,
+      "fromAddress": "0xcb4157e47fc47c3f4cde0ded4d4115f1abae9472",
+      "toAddress": "0xcb4157e47fc47c3f4cde0ded4d4115f1abae9472"
+    },
+    "estimate": {
+      "tool": "layerswap",
+      "approvalAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+      "toAmountMin": "9723130",
+      "toAmount": "9771989",
+      "fromAmount": "10000000",
+      "feeCosts": [
+        {
+          "name": "LIFI Fixed Fee",
+          "description": "Fixed LIFI fee, independent of any other fee",
+          "token": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "0.9988483132",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "amount": "25000",
+          "amountUSD": "0.0250",
+          "percentage": "0.0025",
+          "included": true,
+          "feeSplit": {
+            "lifiFee": "25000",
+            "integratorFee": "0",
+            "recipients": [
+              {
+                "name": "lifi",
+                "type": "FIXED",
+                "fee": "25000"
+              }
+            ]
+          }
+        },
+        {
+          "name": "LayerSwap fee",
+          "description": "LayerSwap bridge fee",
+          "percentage": "0.0154",
+          "token": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "0.9988483132",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "amount": "153193",
+          "amountUSD": "0.153126",
+          "included": true
+        }
+      ],
+      "gasCosts": [
+        {
+          "type": "SEND",
+          "price": "189365422",
+          "estimate": "1086896",
+          "limit": "1412965",
+          "amount": "205820519710112",
+          "amountUSD": "0.3727",
+          "token": {
+            "address": "0x0000000000000000000000000000000000000000",
+            "chainId": 1,
+            "symbol": "ETH",
+            "decimals": 18,
+            "name": "ETH",
+            "coinKey": "ETH",
+            "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2/logo.png",
+            "priceUSD": "1810.83",
+            "tags": [
+              "major_asset"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          }
+        }
+      ],
+      "executionDuration": 38,
+      "fromAmountUSD": "9.9885",
+      "toAmountUSD": "9.7710"
+    },
+    "includedSteps": [
+      {
+        "id": "e63f3ab1-3969-433a-92b8-856ba85cfec0",
+        "type": "protocol",
+        "action": {
+          "fromChainId": 1,
+          "fromAmount": "10000000",
+          "fromToken": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "0.9988483132",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "toChainId": 1,
+          "toToken": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "0.9988483132",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "slippage": 0.005,
+          "fromAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+          "toAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE"
+        },
+        "estimate": {
+          "fromAmount": "10000000",
+          "toAmount": "9975000",
+          "toAmountMin": "9975000",
+          "tool": "feeCollection",
+          "approvalAddress": "0xDe2b920506EE931a6A2ABDF566526220214FBbAE",
+          "gasCosts": [
+            {
+              "type": "SEND",
+              "price": "189365422",
+              "estimate": "130000",
+              "limit": "169000",
+              "amount": "24617504860000",
+              "amountUSD": "0.0446",
+              "token": {
+                "address": "0x0000000000000000000000000000000000000000",
+                "chainId": 1,
+                "symbol": "ETH",
+                "decimals": 18,
+                "name": "ETH",
+                "coinKey": "ETH",
+                "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2/logo.png",
+                "priceUSD": "1810.83",
+                "tags": [
+                  "major_asset"
+                ],
+                "verificationStatus": "verified",
+                "verificationStatusBreakdown": [
+                  {
+                    "provider": "hypernative",
+                    "result": "verified",
+                    "providerResult": "accept"
+                  }
+                ]
+              }
+            }
+          ],
+          "feeCosts": [
+            {
+              "name": "LIFI Fixed Fee",
+              "description": "Fixed LIFI fee, independent of any other fee",
+              "token": {
+                "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+                "chainId": 1,
+                "symbol": "mUSD",
+                "decimals": 6,
+                "name": "Metamask USD",
+                "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+                "priceUSD": "0.9988483132",
+                "tags": [
+                  "stablecoin"
+                ],
+                "verificationStatus": "verified",
+                "verificationStatusBreakdown": [
+                  {
+                    "provider": "hypernative",
+                    "result": "verified",
+                    "providerResult": "accept"
+                  }
+                ]
+              },
+              "amount": "25000",
+              "amountUSD": "0.0250",
+              "percentage": "0.0025",
+              "included": true,
+              "feeSplit": {
+                "lifiFee": "25000",
+                "integratorFee": "0",
+                "recipients": [
+                  {
+                    "name": "lifi",
+                    "type": "FIXED",
+                    "fee": "25000"
+                  }
+                ]
+              }
+            }
+          ],
+          "executionDuration": 0
+        },
+        "tool": "feeCollection",
+        "toolDetails": {
+          "key": "feeCollection",
+          "name": "Integrator Fee",
+          "logoURI": "https://raw.githubusercontent.com/lifinance/types/main/src/assets/icons/protocols/feeCollection.svg"
+        }
+      },
+      {
+        "id": "64220ce5-e54c-4fc9-ad23-a753ca76a577",
+        "type": "protocol",
+        "action": {
+          "fromChainId": 1,
+          "fromAmount": "9975000",
+          "fromToken": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "0.9988483132",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "toChainId": 1,
+          "toToken": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "0.9988483132",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "slippage": 0.005,
+          "fromAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+          "toAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE"
+        },
+        "estimate": {
+          "tool": "gasZip",
+          "fromAmount": "9975000",
+          "toAmount": "9925000",
+          "toAmountMin": "9925000",
+          "approvalAddress": "0x363d698649cd04f9692Ab86e8365b227c1ee859d",
+          "executionDuration": 0,
+          "gasCosts": [
+            {
+              "type": "SEND",
+              "amount": "55223295395",
+              "token": {
+                "address": "0x0000000000000000000000000000000000000000",
+                "chainId": 1,
+                "symbol": "ETH",
+                "decimals": 18,
+                "name": "ETH",
+                "coinKey": "ETH",
+                "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2/logo.png",
+                "priceUSD": "1810.83",
+                "tags": [
+                  "major_asset"
+                ],
+                "verificationStatus": "verified",
+                "verificationStatusBreakdown": [
+                  {
+                    "provider": "hypernative",
+                    "result": "verified",
+                    "providerResult": "accept"
+                  }
+                ]
+              },
+              "limit": "292",
+              "estimate": "292",
+              "price": "189365422",
+              "amountUSD": "0.0001"
+            }
+          ],
+          "feeCosts": []
+        },
+        "tool": "gasZip",
+        "toolDetails": {
+          "key": "gasZip",
+          "name": "LI.Fuel",
+          "logoURI": "https://raw.githubusercontent.com/lifinance/types/main/src/assets/icons/bridges/lifi.svg"
+        }
+      },
+      {
+        "id": "93431bc4-9307-424b-b879-7087a2ed56af",
+        "type": "cross",
+        "action": {
+          "fromChainId": 1,
+          "fromAmount": "9925000",
+          "fromToken": {
+            "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+            "chainId": 1,
+            "symbol": "mUSD",
+            "decimals": 6,
+            "name": "Metamask USD",
+            "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+            "priceUSD": "0.9988483132",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "toChainId": 100,
+          "toToken": {
+            "address": "0x2a22f9c3b484c3629090FeED35F17Ff8F88f76F0",
+            "chainId": 100,
+            "symbol": "USDC.e",
+            "decimals": 6,
+            "name": "Bridged USD Coin",
+            "coinKey": "USDCe",
+            "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
+            "priceUSD": "0.9998942329",
+            "tags": [
+              "stablecoin"
+            ],
+            "verificationStatus": "verified",
+            "verificationStatusBreakdown": [
+              {
+                "provider": "hypernative",
+                "result": "verified",
+                "providerResult": "accept"
+              }
+            ]
+          },
+          "slippage": 0.005,
+          "fromAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+          "toAddress": "0xcb4157e47fc47c3f4cde0ded4d4115f1abae9472",
+          "destinationGasConsumption": "0"
+        },
+        "estimate": {
+          "tool": "layerswap",
+          "fromAmount": "9925000",
+          "toAmount": "9771989",
+          "toAmountMin": "9723130",
+          "gasCosts": [
+            {
+              "type": "SEND",
+              "price": "189365422",
+              "estimate": "210000",
+              "limit": "273000",
+              "amount": "39766738620000",
+              "amountUSD": "0.0720",
+              "token": {
+                "address": "0x0000000000000000000000000000000000000000",
+                "chainId": 1,
+                "symbol": "ETH",
+                "decimals": 18,
+                "name": "ETH",
+                "coinKey": "ETH",
+                "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2/logo.png",
+                "priceUSD": "1810.83",
+                "tags": [
+                  "major_asset"
+                ],
+                "verificationStatus": "verified",
+                "verificationStatusBreakdown": [
+                  {
+                    "provider": "hypernative",
+                    "result": "verified",
+                    "providerResult": "accept"
+                  }
+                ]
+              }
+            }
+          ],
+          "executionDuration": 38,
+          "approvalAddress": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+          "feeCosts": [
+            {
+              "name": "LayerSwap fee",
+              "description": "LayerSwap bridge fee",
+              "percentage": "0.0154",
+              "token": {
+                "address": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+                "chainId": 1,
+                "symbol": "mUSD",
+                "decimals": 6,
+                "name": "Metamask USD",
+                "logoURI": "https://dashboard.m0.org/img/extensions/musd.png",
+                "priceUSD": "0.9988483132",
+                "tags": [
+                  "stablecoin"
+                ],
+                "verificationStatus": "verified",
+                "verificationStatusBreakdown": [
+                  {
+                    "provider": "hypernative",
+                    "result": "verified",
+                    "providerResult": "accept"
+                  }
+                ]
+              },
+              "amount": "153193",
+              "amountUSD": "0.153126",
+              "included": true
+            }
+          ]
+        },
+        "tool": "layerswap",
+        "toolDetails": {
+          "key": "layerswap",
+          "name": "Layerswap",
+          "logoURI": "https://raw.githubusercontent.com/lifinance/types/main/src/assets/icons/bridges/layerswap.svg"
+        }
+      }
+    ],
+    "integrator": "lifi-api",
+    "stepSimulation": {
+      "status": "success",
+      "gasSource": "simulation"
+    },
+    "transactionRequest": {
+      "value": "0x0",
+      "to": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+      "data": "0x4c279d6b000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000002200000000000000000000000000000000000000000000000000000000000000b409097b66f23b8b210fd81081295b7c365b725acaecc5c6a5c5e26031381fee172000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000001800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da000000000000000000000000cb4157e47fc47c3f4cde0ded4d4115f1abae9472000000000000000000000000000000000000000000000000000000000097718800000000000000000000000000000000000000000000000000000000000000640000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000096c6179657273776170000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000086c6966692d617069000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000200000000000000000000000000de2b920506ee931a6a2abdf566526220214fbbae000000000000000000000000de2b920506ee931a6a2abdf566526220214fbbae000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da000000000000000000000000000000000000000000000000000000000098968000000000000000000000000000000000000000000000000000000000000000e0000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000a4332d746b000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da00000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000001000000000000000000000000c06ebbefd94032b85424d51906e2a335efae264b00000000000000000000000000000000000000000000000000000000000061a800000000000000000000000000000000000000000000000000000000000000000000000000000000363d698649cd04f9692ab86e8365b227c1ee859d000000000000000000000000363d698649cd04f9692ab86e8365b227c1ee859d000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da00000000000000000000000000000000000000000000000000000000009834d800000000000000000000000000000000000000000000000000000000000000e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005e48b71ae6c0000000000000000000000000000000000000000000000000000000000000060cb4157e47fc47c3f4cde0ded4d4115f1abae9472000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000020f6ee51340adeed01a59b0e65cb3703f3dc860c00000000000000000000000020f6ee51340adeed01a59b0e65cb3703f3dc860c000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c35000000000000000000000000000000000000000000000000000000000000000e00000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000046446ec278a0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000040503b200e0363d698649cd04f9692ab86e8365b227c1ee859daca92e438df0b2401ff60da7e4337b687a2435da0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c350e00114d00119d00120cbb971801f592a557aab426787c9b7d88080d35fd08d944dc3ca50dba5c17481f0012700cb054caa16d3b5f0f4fc89ddb8641ad7df1969ba584b7be04f9ae88aa048e2934888136b8618f02e696861c7ee0223264db73788da98eb68e184f879fcb002b11b00e06afa5bc7d0199a9eb8728ed019bb8ecb6268f02710128acb08f800f0c350000000000000000000000000fffd8963efd1fc6a506488495d951d5263988d2500000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000014aca92e438df0b2401ff60da7e4337b687a2435da0000000000000000000000000101290603012d0e012f012f040132008094da82f51c909ec541bba03a1425d35c43222e7400070a0000000000000000000000000000000000000000000000000000000000000301d7050000000000000000000000000000fffd8963efd1fc6a506488495d951d5263988d2500000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000014a0b86991c6218b36c1d19d4a2e9eb0ce3606eb480000000000000000000000000101290603012d0500400401fe008020c90c0ca3d2d82367569faffef403cbe63e792c0301d705006077e06c9eccf2e797fd462a92b6d7642ef85b0a44000000000022d473030f116ddee9f6b43ac78ba300ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0202a70202bb0302cf87517c4566a9893cc07d91d95644aedd05d03f95e1dba8af0102f90202a70202fd0500a003011324856bc3f840f880f801001000000000000000000000000000000000000000000000000000000000000000f820f00360f803000b060f0000000000000000000000000000000000000000000000000000000000f860f8e0f00260f00160f00bb8f83cf0012001032003032403032603032803032a03032803034b03034d0303240303260303500303520303500303730303750303770303730202a70500a003032803037a03034b03012d0202a703037d03038003012d03012d03012d03012d03038203012d03032403012d03012d020070020070070500c000004001b201c301c307002001f801fe0000000040027e028d028d07002002a102a7000001000002f002f900000000000311032002bb000000038503ee02fd06002003ee03f1000003000003f103f8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001798ca300000000000000000000000008b00ceee2fb66029b53d76110b19eeaabfd1e65000000000000000000000000cb4157e47fc47c3f4cde0ded4d4115f1abae9472000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000000000006afa5cf200000000000000000000000000000000000000000000000000000000000000415b09562a561536a4c4ff90a35316c9df9f48517a9d281dad20662eec84fc8d2a0a47424afd395e35fe7ae062afe679c485790c9a64695f7d74a08882941947421c00000000000000000000000000000000000000000000000000000000000000",
+      "from": "0xcb4157e47fc47c3f4cde0ded4d4115f1abae9472",
+      "chainId": 1,
+      "gasPrice": "0xb497cae",
+      "gasLimit": "0x158f65"
+    },
+    "transactionId": "0x9097b66f23b8b210fd81081295b7c365b725acaecc5c6a5c5e26031381fee172",
+    "recommendedSlippage": null
+  },
+  "facet": {
+    "address": "0x04E051D8e3627A79785f8E210B1d61A877AA737A",
+    "abi": [
+      {
+        "type": "constructor",
+        "inputs": [
+          {
+            "name": "_layerSwapDepository",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "_backendSigner",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "CannotBridgeToSameNetwork",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "ContractCallNotAllowed",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "CumulativeSlippageTooHigh",
+        "type": "error",
+        "inputs": [
+          {
+            "name": "minAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "receivedAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "InformationMismatch",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "InvalidAmount",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "InvalidCallData",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "InvalidConfig",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "InvalidContract",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "InvalidNonEVMReceiver",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "InvalidReceiver",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "InvalidSignature",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "NoSwapDataProvided",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "NoSwapFromZeroBalance",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "NullAddrIsNotAValidSpender",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "ReentrancyError",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "RequestAlreadyProcessed",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "SignatureExpired",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "AssetSwapped",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "transactionId",
+            "type": "bytes32",
+            "indexed": false,
+            "internalType": "bytes32"
+          },
+          {
+            "name": "dex",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "fromAssetId",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "toAssetId",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "fromAmount",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          },
+          {
+            "name": "toAmount",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          },
+          {
+            "name": "timestamp",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "BridgeToNonEVMChain",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "transactionId",
+            "type": "bytes32",
+            "indexed": true,
+            "internalType": "bytes32"
+          },
+          {
+            "name": "destinationChainId",
+            "type": "uint256",
+            "indexed": true,
+            "internalType": "uint256"
+          },
+          {
+            "name": "receiver",
+            "type": "bytes",
+            "indexed": false,
+            "internalType": "bytes"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "BridgeToNonEVMChainBytes32",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "transactionId",
+            "type": "bytes32",
+            "indexed": true,
+            "internalType": "bytes32"
+          },
+          {
+            "name": "destinationChainId",
+            "type": "uint256",
+            "indexed": true,
+            "internalType": "uint256"
+          },
+          {
+            "name": "receiver",
+            "type": "bytes32",
+            "indexed": false,
+            "internalType": "bytes32"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "LiFiGenericSwapCompleted",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "transactionId",
+            "type": "bytes32",
+            "indexed": true,
+            "internalType": "bytes32"
+          },
+          {
+            "name": "integrator",
+            "type": "string",
+            "indexed": false,
+            "internalType": "string"
+          },
+          {
+            "name": "referrer",
+            "type": "string",
+            "indexed": false,
+            "internalType": "string"
+          },
+          {
+            "name": "receiver",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "fromAssetId",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "toAssetId",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "fromAmount",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          },
+          {
+            "name": "toAmount",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "LiFiSwappedGeneric",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "transactionId",
+            "type": "bytes32",
+            "indexed": true,
+            "internalType": "bytes32"
+          },
+          {
+            "name": "integrator",
+            "type": "string",
+            "indexed": false,
+            "internalType": "string"
+          },
+          {
+            "name": "referrer",
+            "type": "string",
+            "indexed": false,
+            "internalType": "string"
+          },
+          {
+            "name": "fromAssetId",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "toAssetId",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "fromAmount",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          },
+          {
+            "name": "toAmount",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "LiFiTransferCompleted",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "transactionId",
+            "type": "bytes32",
+            "indexed": true,
+            "internalType": "bytes32"
+          },
+          {
+            "name": "receivingAssetId",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "receiver",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "amount",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          },
+          {
+            "name": "timestamp",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "LiFiTransferRecovered",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "transactionId",
+            "type": "bytes32",
+            "indexed": true,
+            "internalType": "bytes32"
+          },
+          {
+            "name": "receivingAssetId",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "receiver",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "amount",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          },
+          {
+            "name": "timestamp",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "LiFiTransferStarted",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "bridgeData",
+            "type": "tuple",
+            "indexed": false,
+            "components": [
+              {
+                "name": "transactionId",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "bridge",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "integrator",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "referrer",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "sendingAssetId",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "receiver",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "minAmount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "destinationChainId",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "hasSourceSwaps",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "hasDestinationCall",
+                "type": "bool",
+                "internalType": "bool"
+              }
+            ],
+            "internalType": "struct ILiFi.BridgeData"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "LAYERSWAP_DEPOSITORY",
+        "type": "function",
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "startBridgeTokensViaLayerSwap",
+        "type": "function",
+        "inputs": [
+          {
+            "name": "_bridgeData",
+            "type": "tuple",
+            "components": [
+              {
+                "name": "transactionId",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "bridge",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "integrator",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "referrer",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "sendingAssetId",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "receiver",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "minAmount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "destinationChainId",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "hasSourceSwaps",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "hasDestinationCall",
+                "type": "bool",
+                "internalType": "bool"
+              }
+            ],
+            "internalType": "struct ILiFi.BridgeData"
+          },
+          {
+            "name": "_layerSwapData",
+            "type": "tuple",
+            "components": [
+              {
+                "name": "requestId",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "depositoryReceiver",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "refundRecipient",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "nonEVMReceiver",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "signature",
+                "type": "bytes",
+                "internalType": "bytes"
+              },
+              {
+                "name": "deadline",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ],
+            "internalType": "struct LayerSwapFacet.LayerSwapData"
+          }
+        ],
+        "outputs": [],
+        "stateMutability": "payable"
+      },
+      {
+        "name": "swapAndStartBridgeTokensViaLayerSwap",
+        "type": "function",
+        "inputs": [
+          {
+            "name": "_bridgeData",
+            "type": "tuple",
+            "components": [
+              {
+                "name": "transactionId",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "bridge",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "integrator",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "referrer",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "sendingAssetId",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "receiver",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "minAmount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "destinationChainId",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "hasSourceSwaps",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "hasDestinationCall",
+                "type": "bool",
+                "internalType": "bool"
+              }
+            ],
+            "internalType": "struct ILiFi.BridgeData"
+          },
+          {
+            "name": "_swapData",
+            "type": "tuple[]",
+            "components": [
+              {
+                "name": "callTo",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "approveTo",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "sendingAssetId",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "receivingAssetId",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "fromAmount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "callData",
+                "type": "bytes",
+                "internalType": "bytes"
+              },
+              {
+                "name": "requiresDeposit",
+                "type": "bool",
+                "internalType": "bool"
+              }
+            ],
+            "internalType": "struct LibSwap.SwapData[]"
+          },
+          {
+            "name": "_layerSwapData",
+            "type": "tuple",
+            "components": [
+              {
+                "name": "requestId",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "depositoryReceiver",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "refundRecipient",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "nonEVMReceiver",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "signature",
+                "type": "bytes",
+                "internalType": "bytes"
+              },
+              {
+                "name": "deadline",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ],
+            "internalType": "struct LayerSwapFacet.LayerSwapData"
+          }
+        ],
+        "outputs": [],
+        "stateMutability": "payable"
+      }
+    ],
+    "match": "exact_match",
+    "runtimeHash": "0xee8199c730a402fcf233e130b0054fbfa02cde30def0da53187f0dd2c4fa36d0"
+  },
+  "decoded": {
+    "functionName": "swapAndStartBridgeTokensViaLayerSwap",
+    "args": [
+      {
+        "transactionId": "0x9097b66f23b8b210fd81081295b7c365b725acaecc5c6a5c5e26031381fee172",
+        "bridge": "layerswap",
+        "integrator": "lifi-api",
+        "referrer": "0x0000000000000000000000000000000000000000",
+        "sendingAssetId": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+        "receiver": "0xcB4157E47Fc47C3f4CDe0Ded4D4115f1ABaE9472",
+        "minAmount": "9925000",
+        "destinationChainId": "100",
+        "hasSourceSwaps": true,
+        "hasDestinationCall": false
+      },
+      [
+        {
+          "callTo": "0xDe2b920506EE931a6A2ABDF566526220214FBbAE",
+          "approveTo": "0xDe2b920506EE931a6A2ABDF566526220214FBbAE",
+          "sendingAssetId": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+          "receivingAssetId": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+          "fromAmount": "10000000",
+          "callData": "0x332d746b000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da00000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000001000000000000000000000000c06ebbefd94032b85424d51906e2a335efae264b00000000000000000000000000000000000000000000000000000000000061a8",
+          "requiresDeposit": true
+        },
+        {
+          "callTo": "0x363d698649cd04f9692Ab86e8365b227c1ee859d",
+          "approveTo": "0x363d698649cd04f9692Ab86e8365b227c1ee859d",
+          "sendingAssetId": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+          "receivingAssetId": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+          "fromAmount": "9975000",
+          "callData": "0x8b71ae6c0000000000000000000000000000000000000000000000000000000000000060cb4157e47fc47c3f4cde0ded4d4115f1abae9472000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000020f6ee51340adeed01a59b0e65cb3703f3dc860c00000000000000000000000020f6ee51340adeed01a59b0e65cb3703f3dc860c000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c35000000000000000000000000000000000000000000000000000000000000000e00000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000046446ec278a0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000040503b200e0363d698649cd04f9692ab86e8365b227c1ee859daca92e438df0b2401ff60da7e4337b687a2435da0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c350e00114d00119d00120cbb971801f592a557aab426787c9b7d88080d35fd08d944dc3ca50dba5c17481f0012700cb054caa16d3b5f0f4fc89ddb8641ad7df1969ba584b7be04f9ae88aa048e2934888136b8618f02e696861c7ee0223264db73788da98eb68e184f879fcb002b11b00e06afa5bc7d0199a9eb8728ed019bb8ecb6268f02710128acb08f800f0c350000000000000000000000000fffd8963efd1fc6a506488495d951d5263988d2500000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000014aca92e438df0b2401ff60da7e4337b687a2435da0000000000000000000000000101290603012d0e012f012f040132008094da82f51c909ec541bba03a1425d35c43222e7400070a0000000000000000000000000000000000000000000000000000000000000301d7050000000000000000000000000000fffd8963efd1fc6a506488495d951d5263988d2500000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000014a0b86991c6218b36c1d19d4a2e9eb0ce3606eb480000000000000000000000000101290603012d0500400401fe008020c90c0ca3d2d82367569faffef403cbe63e792c0301d705006077e06c9eccf2e797fd462a92b6d7642ef85b0a44000000000022d473030f116ddee9f6b43ac78ba300ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0202a70202bb0302cf87517c4566a9893cc07d91d95644aedd05d03f95e1dba8af0102f90202a70202fd0500a003011324856bc3f840f880f801001000000000000000000000000000000000000000000000000000000000000000f820f00360f803000b060f0000000000000000000000000000000000000000000000000000000000f860f8e0f00260f00160f00bb8f83cf0012001032003032403032603032803032a03032803034b03034d0303240303260303500303520303500303730303750303770303730202a70500a003032803037a03034b03012d0202a703037d03038003012d03012d03012d03012d03038203012d03032403012d03012d020070020070070500c000004001b201c301c307002001f801fe0000000040027e028d028d07002002a102a7000001000002f002f900000000000311032002bb000000038503ee02fd06002003ee03f1000003000003f103f8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "requiresDeposit": false
+        }
+      ],
+      {
+        "requestId": "0x0000000000000000000000000000000000000000000000000000000001798ca3",
+        "depositoryReceiver": "0x08b00cEEE2Fb66029B53D76110B19eeAabfd1e65",
+        "refundRecipient": "0xcB4157E47Fc47C3f4CDe0Ded4D4115f1ABaE9472",
+        "nonEVMReceiver": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "signature": "0x5b09562a561536a4c4ff90a35316c9df9f48517a9d281dad20662eec84fc8d2a0a47424afd395e35fe7ae062afe679c485790c9a64695f7d74a08882941947421c",
+        "deadline": "1794792690"
+      }
+    ]
+  },
+  "publicSources": {
+    "lifiContractsCommit": "647a59a0e738aa42bbaded1304c5f4ec3b9693e3",
+    "facet": "https://sourcify.dev/server/v2/contract/1/0x04E051D8e3627A79785f8E210B1d61A877AA737A?fields=all",
+    "gasZip": "https://sourcify.dev/server/v2/contract/1/0x363d698649cd04f9692Ab86e8365b227c1ee859d?fields=all",
+    "chains": "https://backend.gas.zip/v2/chains"
+  },
+  "gasZip": {
+    "address": "0x363d698649cd04f9692Ab86e8365b227c1ee859d",
+    "abi": [
+      {
+        "type": "constructor",
+        "inputs": [
+          {
+            "name": "_gasZipRouter",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "_liFiDiamond",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "_owner",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "ContractCallNotAllowed",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "ExternalCallFailed",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "InvalidAmount",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "InvalidCallData",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "InvalidConfig",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "NewOwnerMustNotBeSelf",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "NoNullOwner",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "NoPendingOwnershipTransfer",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "NotPendingOwner",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "NullAddrIsNotAValidSpender",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "SwapOutputMustBeNative",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "TooManyChainIds",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "UnAuthorized",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "BridgeToNonEVMChain",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "transactionId",
+            "type": "bytes32",
+            "indexed": true,
+            "internalType": "bytes32"
+          },
+          {
+            "name": "destinationChainId",
+            "type": "uint256",
+            "indexed": true,
+            "internalType": "uint256"
+          },
+          {
+            "name": "receiver",
+            "type": "bytes",
+            "indexed": false,
+            "internalType": "bytes"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "BridgeToNonEVMChainBytes32",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "transactionId",
+            "type": "bytes32",
+            "indexed": true,
+            "internalType": "bytes32"
+          },
+          {
+            "name": "destinationChainId",
+            "type": "uint256",
+            "indexed": true,
+            "internalType": "uint256"
+          },
+          {
+            "name": "receiver",
+            "type": "bytes32",
+            "indexed": false,
+            "internalType": "bytes32"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "LiFiGenericSwapCompleted",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "transactionId",
+            "type": "bytes32",
+            "indexed": true,
+            "internalType": "bytes32"
+          },
+          {
+            "name": "integrator",
+            "type": "string",
+            "indexed": false,
+            "internalType": "string"
+          },
+          {
+            "name": "referrer",
+            "type": "string",
+            "indexed": false,
+            "internalType": "string"
+          },
+          {
+            "name": "receiver",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "fromAssetId",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "toAssetId",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "fromAmount",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          },
+          {
+            "name": "toAmount",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "LiFiSwappedGeneric",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "transactionId",
+            "type": "bytes32",
+            "indexed": true,
+            "internalType": "bytes32"
+          },
+          {
+            "name": "integrator",
+            "type": "string",
+            "indexed": false,
+            "internalType": "string"
+          },
+          {
+            "name": "referrer",
+            "type": "string",
+            "indexed": false,
+            "internalType": "string"
+          },
+          {
+            "name": "fromAssetId",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "toAssetId",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "fromAmount",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          },
+          {
+            "name": "toAmount",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "LiFiTransferCompleted",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "transactionId",
+            "type": "bytes32",
+            "indexed": true,
+            "internalType": "bytes32"
+          },
+          {
+            "name": "receivingAssetId",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "receiver",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "amount",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          },
+          {
+            "name": "timestamp",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "LiFiTransferRecovered",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "transactionId",
+            "type": "bytes32",
+            "indexed": true,
+            "internalType": "bytes32"
+          },
+          {
+            "name": "receivingAssetId",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "receiver",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "amount",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          },
+          {
+            "name": "timestamp",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "LiFiTransferStarted",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "bridgeData",
+            "type": "tuple",
+            "indexed": false,
+            "components": [
+              {
+                "name": "transactionId",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "bridge",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "integrator",
+                "type": "string",
+                "internalType": "string"
+              },
+              {
+                "name": "referrer",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "sendingAssetId",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "receiver",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "minAmount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "destinationChainId",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "hasSourceSwaps",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "hasDestinationCall",
+                "type": "bool",
+                "internalType": "bool"
+              }
+            ],
+            "internalType": "struct ILiFi.BridgeData"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "OwnershipTransferRequested",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "_from",
+            "type": "address",
+            "indexed": true,
+            "internalType": "address"
+          },
+          {
+            "name": "_to",
+            "type": "address",
+            "indexed": true,
+            "internalType": "address"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "OwnershipTransferred",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "previousOwner",
+            "type": "address",
+            "indexed": true,
+            "internalType": "address"
+          },
+          {
+            "name": "newOwner",
+            "type": "address",
+            "indexed": true,
+            "internalType": "address"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "TokensWithdrawn",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "assetId",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "receiver",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address payable"
+          },
+          {
+            "name": "amount",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "GAS_ZIP_ROUTER",
+        "type": "function",
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "",
+            "type": "address",
+            "internalType": "contract IGasZip"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "LIFI_DIAMOND",
+        "type": "function",
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "cancelOwnershipTransfer",
+        "type": "function",
+        "inputs": [],
+        "outputs": [],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "confirmOwnershipTransfer",
+        "type": "function",
+        "inputs": [],
+        "outputs": [],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "depositToGasZipERC20",
+        "type": "function",
+        "inputs": [
+          {
+            "name": "_swapData",
+            "type": "tuple",
+            "components": [
+              {
+                "name": "callTo",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "approveTo",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "sendingAssetId",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "receivingAssetId",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "fromAmount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "callData",
+                "type": "bytes",
+                "internalType": "bytes"
+              },
+              {
+                "name": "requiresDeposit",
+                "type": "bool",
+                "internalType": "bool"
+              }
+            ],
+            "internalType": "struct LibSwap.SwapData"
+          },
+          {
+            "name": "_gasZipData",
+            "type": "tuple",
+            "components": [
+              {
+                "name": "receiverAddress",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "destinationChains",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ],
+            "internalType": "struct IGasZip.GasZipData"
+          }
+        ],
+        "outputs": [],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "depositToGasZipNative",
+        "type": "function",
+        "inputs": [
+          {
+            "name": "_gasZipData",
+            "type": "tuple",
+            "components": [
+              {
+                "name": "receiverAddress",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "destinationChains",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ],
+            "internalType": "struct IGasZip.GasZipData"
+          },
+          {
+            "name": "_amount",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ],
+        "outputs": [],
+        "stateMutability": "payable"
+      },
+      {
+        "name": "getDestinationChainsValue",
+        "type": "function",
+        "inputs": [
+          {
+            "name": "_chainIds",
+            "type": "uint8[]",
+            "internalType": "uint8[]"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "destinationChains",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ],
+        "stateMutability": "pure"
+      },
+      {
+        "name": "owner",
+        "type": "function",
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "pendingOwner",
+        "type": "function",
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "transferOwnership",
+        "type": "function",
+        "inputs": [
+          {
+            "name": "_newOwner",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "outputs": [],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "withdrawToken",
+        "type": "function",
+        "inputs": [
+          {
+            "name": "assetId",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "receiver",
+            "type": "address",
+            "internalType": "address payable"
+          },
+          {
+            "name": "amount",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ],
+        "outputs": [],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "type": "receive",
+        "stateMutability": "payable"
+      }
+    ],
+    "match": "exact_match",
+    "runtimeHash": "0x1287429bafbca08151b4ac60ad1f997fe8bc0e9ede02b3b1242b28c9254b518c",
+    "decoded": {
+      "functionName": "depositToGasZipERC20",
+      "args": [
+        {
+          "callTo": "0x20F6ee51340aDEed01A59B0e65cB3703f3dc860c",
+          "approveTo": "0x20F6ee51340aDEed01A59B0e65cB3703f3dc860c",
+          "sendingAssetId": "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+          "receivingAssetId": "0x0000000000000000000000000000000000000000",
+          "fromAmount": "50000",
+          "callData": "0x46ec278a0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000040503b200e0363d698649cd04f9692ab86e8365b227c1ee859daca92e438df0b2401ff60da7e4337b687a2435da0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c350e00114d00119d00120cbb971801f592a557aab426787c9b7d88080d35fd08d944dc3ca50dba5c17481f0012700cb054caa16d3b5f0f4fc89ddb8641ad7df1969ba584b7be04f9ae88aa048e2934888136b8618f02e696861c7ee0223264db73788da98eb68e184f879fcb002b11b00e06afa5bc7d0199a9eb8728ed019bb8ecb6268f02710128acb08f800f0c350000000000000000000000000fffd8963efd1fc6a506488495d951d5263988d2500000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000014aca92e438df0b2401ff60da7e4337b687a2435da0000000000000000000000000101290603012d0e012f012f040132008094da82f51c909ec541bba03a1425d35c43222e7400070a0000000000000000000000000000000000000000000000000000000000000301d7050000000000000000000000000000fffd8963efd1fc6a506488495d951d5263988d2500000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000014a0b86991c6218b36c1d19d4a2e9eb0ce3606eb480000000000000000000000000101290603012d0500400401fe008020c90c0ca3d2d82367569faffef403cbe63e792c0301d705006077e06c9eccf2e797fd462a92b6d7642ef85b0a44000000000022d473030f116ddee9f6b43ac78ba300ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0202a70202bb0302cf87517c4566a9893cc07d91d95644aedd05d03f95e1dba8af0102f90202a70202fd0500a003011324856bc3f840f880f801001000000000000000000000000000000000000000000000000000000000000000f820f00360f803000b060f0000000000000000000000000000000000000000000000000000000000f860f8e0f00260f00160f00bb8f83cf0012001032003032403032603032803032a03032803034b03034d0303240303260303500303520303500303730303750303770303730202a70500a003032803037a03034b03012d0202a703037d03038003012d03012d03012d03012d03038203012d03032403012d03012d020070020070070500c000004001b201c301c307002001f801fe0000000040027e028d028d07002002a102a7000001000002f002f900000000000311032002bb000000038503ee02fd06002003ee03f1000003000003f103f80000000000000000000000000000000000000000000000000000000000",
+          "requiresDeposit": true
+        },
+        {
+          "receiverAddress": "0xcb4157e47fc47c3f4cde0ded4d4115f1abae9472000000000000000000000000",
+          "destinationChains": "16"
+        }
+      ]
+    },
+    "gnosis": {
+      "chain": 100,
+      "short": 16,
+      "symbol": "XDAI"
+    }
+  },
+  "feeForwarder": {
+    "address": "0xDe2b920506EE931a6A2ABDF566526220214FBbAE",
+    "abi": [
+      {
+        "type": "constructor",
+        "inputs": [
+          {
+            "name": "_owner",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "ExternalCallFailed",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "InsufficientBalance",
+        "type": "error",
+        "inputs": [
+          {
+            "name": "required",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "balance",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "InvalidConfig",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "InvalidReceiver",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "InvalidTotalShares",
+        "type": "error",
+        "inputs": [
+          {
+            "name": "totalShares",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "NewOwnerMustNotBeSelf",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "NoNullOwner",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "NoPendingOwnershipTransfer",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "NotPendingOwner",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "NullAddrIsNotAnERC20Token",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "UnAuthorized",
+        "type": "error",
+        "inputs": []
+      },
+      {
+        "name": "FeesForwarded",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "token",
+            "type": "address",
+            "indexed": true,
+            "internalType": "address"
+          },
+          {
+            "name": "distributions",
+            "type": "tuple[]",
+            "indexed": false,
+            "components": [
+              {
+                "name": "recipient",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amount",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ],
+            "internalType": "struct FeeForwarder.FeeDistribution[]"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "OwnershipTransferRequested",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "_from",
+            "type": "address",
+            "indexed": true,
+            "internalType": "address"
+          },
+          {
+            "name": "_to",
+            "type": "address",
+            "indexed": true,
+            "internalType": "address"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "OwnershipTransferred",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "previousOwner",
+            "type": "address",
+            "indexed": true,
+            "internalType": "address"
+          },
+          {
+            "name": "newOwner",
+            "type": "address",
+            "indexed": true,
+            "internalType": "address"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "TokensWithdrawn",
+        "type": "event",
+        "inputs": [
+          {
+            "name": "assetId",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address"
+          },
+          {
+            "name": "receiver",
+            "type": "address",
+            "indexed": false,
+            "internalType": "address payable"
+          },
+          {
+            "name": "amount",
+            "type": "uint256",
+            "indexed": false,
+            "internalType": "uint256"
+          }
+        ],
+        "anonymous": false
+      },
+      {
+        "name": "cancelOwnershipTransfer",
+        "type": "function",
+        "inputs": [],
+        "outputs": [],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "confirmOwnershipTransfer",
+        "type": "function",
+        "inputs": [],
+        "outputs": [],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "forwardERC20Fees",
+        "type": "function",
+        "inputs": [
+          {
+            "name": "_token",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "_distributions",
+            "type": "tuple[]",
+            "components": [
+              {
+                "name": "recipient",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amount",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ],
+            "internalType": "struct FeeForwarder.FeeDistribution[]"
+          }
+        ],
+        "outputs": [],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "forwardERC20FeesShares",
+        "type": "function",
+        "inputs": [
+          {
+            "name": "_token",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "_distributions",
+            "type": "tuple[]",
+            "components": [
+              {
+                "name": "recipient",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "share",
+                "type": "uint64",
+                "internalType": "uint64"
+              }
+            ],
+            "internalType": "struct FeeForwarder.FeeShareDistribution[]"
+          }
+        ],
+        "outputs": [],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "forwardNativeFees",
+        "type": "function",
+        "inputs": [
+          {
+            "name": "_distributions",
+            "type": "tuple[]",
+            "components": [
+              {
+                "name": "recipient",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amount",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ],
+            "internalType": "struct FeeForwarder.FeeDistribution[]"
+          }
+        ],
+        "outputs": [],
+        "stateMutability": "payable"
+      },
+      {
+        "name": "owner",
+        "type": "function",
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "pendingOwner",
+        "type": "function",
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "transferOwnership",
+        "type": "function",
+        "inputs": [
+          {
+            "name": "_newOwner",
+            "type": "address",
+            "internalType": "address"
+          }
+        ],
+        "outputs": [],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "withdrawToken",
+        "type": "function",
+        "inputs": [
+          {
+            "name": "assetId",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "receiver",
+            "type": "address",
+            "internalType": "address payable"
+          },
+          {
+            "name": "amount",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ],
+        "outputs": [],
+        "stateMutability": "nonpayable"
+      }
+    ],
+    "match": "exact_match",
+    "runtimeHash": "0x99a76627aece8903612e0246c10f13a46e511a0a074d9a4e68987a28c78ebd52",
+    "decoded": {
+      "functionName": "forwardERC20Fees",
+      "args": [
+        "0xacA92E438df0B2401fF60dA7E4337B687a2435DA",
+        [
+          {
+            "recipient": "0xC06ebbefD94032B85424D51906e2A335EFAe264B",
+            "amount": "25000"
+          }
+        ]
+      ]
+    }
+  }
+}

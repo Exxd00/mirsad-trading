@@ -1,5 +1,8 @@
 import type { Plan, Side } from './mandate';
 import type { AuthorityCloseReview, AuthorityReview } from './authority';
+import type { GnosisFundingReservation, GnosisFundingPhase } from './gnosis-funding-attempts';
+import { assertGnosisFundingReservationFresh, parseGnosisFundingReservationUI, parseGnosisFundingAttemptResultUI,
+  type GnosisFundingAttemptResultUI } from './gnosis-funding-ui';
 // Connection and refresh only read the wallet. The separate owner action below is
 // restricted to a locally reconstructed Base Sepolia grant or its revocation.
 type Method = 'eth_requestAccounts' | 'eth_accounts' | 'eth_chainId' | 'eth_getBalance' | 'eth_getTransactionCount' | 'eth_signTypedData_v4' | 'eth_sendTransaction'
@@ -14,6 +17,18 @@ export interface WalletProvider {
 // Survives a component remount while MetaMask still owns an unresolved prompt.
 // Releasing a view does not cancel or prove failure of a submitted transaction.
 const ownerRequests = new WeakSet<WalletProvider>();
+type FundingPending = { id: string; phase: GnosisFundingPhase; snapshotDigest: string; hash: string | null; requestIssued: boolean; completed?: boolean };
+// A quote or component remount cannot release an unresolved financial prompt.
+// The durable server fence additionally covers a full browser/page restart.
+const fundingPending = new WeakMap<WalletProvider, Map<string, FundingPending>>();
+export class FundingActionError extends Error {
+  constructor(message: string, readonly requestIssued: boolean) { super(message); this.name = 'FundingActionError'; }
+}
+export const isUnsentFundingActionError = (error: unknown): error is FundingActionError => error instanceof FundingActionError && error.requestIssued === false;
+export class FundingOwnerRejectedError extends FundingActionError {
+  readonly code = 4001;
+  constructor() { super('wallet_gnosis_funding_owner_rejected', true); this.name = 'FundingOwnerRejectedError'; }
+}
 export interface Snapshot { address: string; chainId: string; nativeBalance: string; }
 export type WalletView =
   | { status: 'missing' | 'ambiguous' | 'ready' | 'pending' | 'declined' | 'error' }
@@ -161,6 +176,85 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
   target.addEventListener('pageshow', scheduleRefresh);
   target.dispatchEvent(new Event('eip6963:requestProvider'));
   return {
+    /** Explicit owner click only, after authenticated server reservation. This
+     * method never connects, switches chain, approves twice, or retries sends. */
+    async fundingAction(input: GnosisFundingReservation, phase: GnosisFundingPhase) {
+      let requestIssued = false;
+      try {
+      const copy: unknown = structuredClone(input), provider = current, epoch = session;
+      // A second invocation cannot attest that the FIRST invocation was unsent,
+      // even while that first call is still awaiting its account check.
+      if (provider && [...(fundingPending.get(provider)?.values() ?? [])].some(v => v.id === input.attempt?.id)) requestIssued = true;
+      if (!alive || !provider || !requested || asking || !snapshot)
+        throw new Error('wallet_gnosis_funding_wallet_changed');
+      const owner = snapshot.address.toLowerCase();
+      const reservation = parseGnosisFundingReservationUI(copy, owner, phase);
+      if (!reservation) throw new Error('wallet_gnosis_funding_review_invalid');
+      const locks = fundingPending.get(provider) ?? new Map<string, FundingPending>();
+      fundingPending.set(provider, locks);
+      if (locks.has(owner)) { requestIssued = true; throw new Error('wallet_gnosis_funding_attempt_pending'); }
+      if (ownerRequests.has(provider)) throw new Error('wallet_gnosis_funding_wallet_changed');
+      const pending: FundingPending = { id: reservation.attempt.id, phase, snapshotDigest: reservation.attempt.snapshotDigest, hash: null, requestIssued: false };
+      locks.set(owner, pending); ownerRequests.add(provider);
+      try {
+        assertGnosisFundingReservationFresh(reservation);
+        const bound = await binding(provider);
+        if (!alive || current !== provider || session !== epoch || !requested || bound.chainId !== '1'
+          || bound.address?.toLowerCase() !== owner) throw new Error('wallet_gnosis_funding_wallet_changed');
+        // All awaited reads have finished. Revalidate the immutable snapshot and
+        // deadline immediately before invoking the wallet's one send request.
+        const checked = parseGnosisFundingReservationUI(reservation, owner, phase);
+        if (!checked || checked.attempt.snapshotDigest !== pending.snapshotDigest) throw new Error('wallet_gnosis_funding_review_invalid');
+        assertGnosisFundingReservationFresh(checked);
+        const tx = checked.transaction;
+        let value: unknown;
+        try {
+          requestIssued = true; pending.requestIssued = true;
+          value = await provider.request({ method: 'eth_sendTransaction', params: [{ chainId: '0x1', from: tx.from,
+            to: tx.to, value: '0x0', data: tx.data }] });
+        } catch (error) {
+          // A numeric EIP-1193 rejection is the only rejection attestation.
+          // String errors/timeouts and every other code remain unresolved.
+          if ((error as { code?: unknown } | null)?.code === 4001) throw new FundingOwnerRejectedError();
+          throw new Error('wallet_gnosis_funding_result_unknown');
+        }
+        if (typeof value !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(value)) throw new Error('wallet_gnosis_funding_result_unknown');
+        pending.hash = value.toLowerCase();
+        // Preserve a returned hash even if the owner changed accounts or the
+        // review expired while MetaMask was open: it must be durably recorded.
+        return { kind: 'transaction' as const, value: pending.hash as `0x${string}` };
+      } finally { ownerRequests.delete(provider); if (queued) scheduleRefresh(); }
+      } catch (error) {
+        // Never accept a provider's forged requestIssued:false field. Only this
+        // local invocation point decides whether a wallet send was attempted.
+        if (error instanceof FundingOwnerRejectedError && requestIssued) throw error;
+        throw new FundingActionError(requestIssued && !(error instanceof Error && error.message === 'wallet_gnosis_funding_attempt_pending') ? 'wallet_gnosis_funding_result_unknown'
+          : error instanceof Error ? error.message : 'wallet_gnosis_funding_review_invalid', requestIssued);
+      }
+    },
+    /** Read-only server result synchronization. A new quote/reservation, elapsed
+     * time or empty GET fence cannot clear a locally unresolved attempt. */
+    fundingAttemptResult(input: GnosisFundingAttemptResultUI) {
+      const provider = current;
+      if (!provider || !alive) return;
+      const owner = input.attempt?.owner ?? input.fence.active?.owner ?? input.fence.lastApproval?.owner ?? snapshot?.address;
+      if (!owner) return;
+      const result = parseGnosisFundingAttemptResultUI(input, owner); if (!result) return;
+      const key = owner.toLowerCase(), locks = fundingPending.get(provider) ?? new Map<string, FundingPending>();
+      fundingPending.set(provider, locks);
+      const local = locks.get(key), a = result.attempt ?? result.fence.lastApproval;
+      if (result.fence.fundCompleted) {
+        locks.set(key, { id: local?.id ?? a?.id ?? 'completed', phase: 'fund', snapshotDigest: local?.snapshotDigest ?? '', hash: local?.hash ?? null, requestIssued: true, completed: true });
+        return;
+      }
+      if (local && a && a.id === local.id && a.snapshotDigest === local.snapshotDigest
+        && (!local.hash || a.transactionHash === local.hash)
+        && (a.status === 'owner-rejected' && !local.hash || a.status === 'owner-cancelled-unsent' && !local.hash && !local.requestIssued
+          || a.status === 'confirmed' || a.status === 'reverted')) locks.delete(key);
+      const active = result.fence.active;
+      if (active && !locks.has(key)) locks.set(key, { id: active.id, phase: active.phase, snapshotDigest: active.snapshotDigest, hash: active.transactionHash,
+        requestIssued: active.status !== 'reserved' });
+    },
     /** Production strategy actions are always explicit owner clicks. No call
      * originates from passive restoration, focus, page load or provider events. */
     async authorityAction(inputReview: AuthorityReview, action: 'deploy' | 'bootstrap' | 'sign' | 'close', inputClose?: AuthorityCloseReview) {
