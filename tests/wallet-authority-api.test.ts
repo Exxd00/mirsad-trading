@@ -92,6 +92,7 @@ describe('owner-only authority route', () => {
     expect(JSON.stringify(dto)).not.toContain(signature); expect(dto).not.toHaveProperty('signatureCiphertext');
     expect((await loadVerifiedAuthorityForRuntime({ query }, NOW))?.signature).toBe(signature);
     expect((await query('SELECT key FROM app_settings ORDER BY key')).rows).toEqual([
+      { key: 'wallet:strategy:authority-action:v1:metamask-strategy-v1:fence' },
       { key: 'wallet:strategy:authority:v1' }, { key: 'wallet:strategy:profile:v1' } ]);
   });
   it('sanitizes raw adapter failures and malformed error codes without storing a grant', async () => {

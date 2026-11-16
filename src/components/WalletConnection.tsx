@@ -57,9 +57,11 @@ export function WalletConnection() {
     </div>
   </section><WalletStrategyAuthority key={'authority:' + (view?.status === 'connected' ? view.wallet.address + ':' + view.wallet.chainId : 'detached')}
     wallet={view?.status === 'connected' ? view.wallet : null}
-    ownerAction={(review, action, close) => {
+    ownerAction={(review, action, close, reservation) => {
       if (!session.current) throw new Error('أعد ربط المحفظة.');
-      return session.current.authorityAction(review, action, close);
+      return session.current.authorityAction(review, action, close, reservation);
+    }} authorityActionState={value => {
+      session.current?.authorityActionState(value);
     }} fundingAction={(reservation, phase) => {
       if (!session.current) throw new Error('أعد ربط المحفظة.');
       return session.current.fundingAction(reservation, phase);

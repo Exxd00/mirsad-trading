@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const storage = vi.hoisted(() => ({ query: vi.fn(), transaction: vi.fn() }));
 const observation = vi.hoisted(() => ({ runMarketObservation: vi.fn() }));
-const preflight = vi.hoisted(() => ({ loadStrategyProfile: vi.fn(), resumeGnosisMarketReadiness: vi.fn() }));
+const preflight = vi.hoisted(() => ({ loadStrategyProfile: vi.fn(), loadAuthority: vi.fn(), resumeGnosisMarketReadiness: vi.fn() }));
 vi.mock('../src/lib/db', () => storage);
 vi.mock('../src/lib/execution/v1/market-observation', () => observation);
 vi.mock('../src/lib/wallet/strategy-profile', () => ({ loadStrategyProfile: preflight.loadStrategyProfile }));
+vi.mock('../src/lib/wallet/authority-store', () => ({ loadAuthority: preflight.loadAuthority }));
 vi.mock('../src/lib/wallet/gnosis-market-readiness-job', () => ({ resumeGnosisMarketReadiness: preflight.resumeGnosisMarketReadiness }));
 vi.mock('../src/lib/execution/v1/runner', async original => ({
   ...await original<typeof import('../src/lib/execution/v1/runner')>(), cycle: vi.fn(),
@@ -48,7 +49,9 @@ beforeEach(() => {
   vi.mocked(cycle).mockReset().mockResolvedValue(completed());
   vi.mocked(dailyReport).mockReset().mockResolvedValue(report);
   observation.runMarketObservation.mockReset().mockResolvedValue(measurement);
-  preflight.loadStrategyProfile.mockReset().mockResolvedValue({ profile: { chainId: 100 } });
+  preflight.loadStrategyProfile.mockReset().mockResolvedValue({ revision: 1, profile: { chainId: 100, owner: '0x' + '1'.repeat(40) } });
+  preflight.loadAuthority.mockReset().mockResolvedValue({ state: 'verified', review: {
+    chainId: 100, owner: '0x' + '1'.repeat(40), profileRevision: 1 } });
   preflight.resumeGnosisMarketReadiness.mockReset().mockResolvedValue({ job: null, report: null, currentFresh: false, reportFresh: false });
   vi.stubGlobal('fetch', vi.fn(() => { throw new Error('No network in isolated tick continuity tests'); }));
 });
@@ -158,20 +161,44 @@ describe('real host tick preserves execution and reporting independence', () => 
     expect(cycle).not.toHaveBeenCalled(); expect(strategyEntrySelection).not.toHaveBeenCalled();
     expect(preflight.loadStrategyProfile).toHaveBeenCalledOnce();
   });
-  it.each(['profile', 'job'])('isolates and sanitizes a %s preflight failure without retrying financial work', async stage => {
-    preflight.loadStrategyProfile.mockResolvedValue(null);
+  it.each([null, 'draft', 'owner-actions-pending', 'signature-pending'])('keeps the existing data job independent of a %s Gnosis setup candidate', async state => {
+    preflight.loadAuthority.mockResolvedValue(state === null ? null : { state });
+    vi.mocked(walletExecutionSource).mockReturnValue(null);
+    const evidence = { job: { state: 'waiting', attempts: 53 }, report: { referenceOnly: true } };
+    preflight.resumeGnosisMarketReadiness.mockResolvedValue(evidence);
+    expect(await runTick()).toMatchObject({ status: 'blocked', reason: 'wallet_execution_transport_missing', marketReadiness: evidence });
+    expect(preflight.resumeGnosisMarketReadiness).toHaveBeenCalledOnce();
+    expect(cycle).not.toHaveBeenCalled(); expect(strategyEntrySelection).not.toHaveBeenCalled();
+  });
+  it.each(['owner', 'chainId', 'profileRevision'])('does not let a verified grant for another %s stop the current profile data job', async field => {
+    const review = { chainId: 100, owner: '0x' + '1'.repeat(40), profileRevision: 1,
+      [field]: field === 'owner' ? '0x' + '2'.repeat(40) : field === 'chainId' ? 1 : 2 };
+    preflight.loadAuthority.mockResolvedValue({ state: 'verified', review });
+    vi.mocked(walletExecutionSource).mockReturnValue(null);
+    expect(await runTick()).toHaveProperty('marketReadiness');
+    expect(preflight.resumeGnosisMarketReadiness).toHaveBeenCalledOnce(); expect(cycle).not.toHaveBeenCalled();
+  });
+  it('leaves an Ethereum profile outside the owner-enabled Gnosis data job', async () => {
+    preflight.loadStrategyProfile.mockResolvedValue({ profile: { chainId: 1 } });
+    await runTick();
+    expect(preflight.loadAuthority).not.toHaveBeenCalled(); expect(preflight.resumeGnosisMarketReadiness).not.toHaveBeenCalled();
+  });
+  it.each(['profile', 'authority', 'job'])('isolates and sanitizes a %s preflight failure without retrying financial work', async stage => {
+    if (stage !== 'authority') preflight.loadStrategyProfile.mockResolvedValue(null);
     if (stage === 'profile') preflight.loadStrategyProfile.mockRejectedValueOnce(new Error(secret));
+    else if (stage === 'authority') preflight.loadAuthority.mockRejectedValueOnce(new Error(secret));
     else preflight.resumeGnosisMarketReadiness.mockRejectedValueOnce(new Error(secret));
     const result = await runTick();
     expect(result).toEqual({ ...completed(), report, measurement,
       marketReadiness: { status: 'unavailable', reason: 'wallet_market_readiness_unavailable' } });
     expect(JSON.stringify(result)).not.toContain(secret); expect(cycle).toHaveBeenCalledOnce(); expect(dailyReport).toHaveBeenCalledOnce();
-    expect(preflight.resumeGnosisMarketReadiness).toHaveBeenCalledTimes(stage === 'profile' ? 0 : 1);
+    expect(preflight.resumeGnosisMarketReadiness).toHaveBeenCalledTimes(stage === 'job' ? 1 : 0);
   });
   it('never runs market preflight from the 10-second protection host', async () => {
     vi.mocked(walletExecutionSource).mockReturnValue(null); preflight.loadStrategyProfile.mockResolvedValue(null);
     expect(await runProtection()).toMatchObject({ status: 'blocked', reason: 'wallet_execution_transport_missing' });
     expect(preflight.loadStrategyProfile).not.toHaveBeenCalled(); expect(preflight.resumeGnosisMarketReadiness).not.toHaveBeenCalled();
+    expect(preflight.loadAuthority).not.toHaveBeenCalled();
     expect(observation.runMarketObservation).not.toHaveBeenCalled(); expect(cycle).not.toHaveBeenCalled();
   });
 });

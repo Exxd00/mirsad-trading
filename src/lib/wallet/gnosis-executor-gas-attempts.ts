@@ -11,6 +11,7 @@ import { fundingDigest } from './gnosis-funding-service';
 import { assertExecutorGasContext, ExecutorGasError, loadExecutorGasContext, lockExecutorGasContext, verifyExecutorGasReview,
   type ExecutorGasContext, type ExecutorGasDependencies, type ExecutorGasPrepared } from './gnosis-executor-gas';
 import { readExecutorGasChain, resolveExecutorGasReceipt } from './gnosis-executor-gas-rpc';
+import { assertAuthorityActionIdle } from './authority-action-fence';
 export type ExecutorGasAttemptStatus = 'reserved' | 'hash-recorded' | 'unknown' | 'owner-rejected' | 'owner-cancelled-unsent' | 'confirmed' | 'reverted';
 export type ExecutorGasAttemptView = { id: string; owner: Address; executor: Address; profileRevision: number; runtimeDigest: Hex;
   status: ExecutorGasAttemptStatus; reviewDigest: Hex; proofDigest: Hex; snapshotDigest: Hex; issuedAt: number; expiresAt: number;
@@ -101,6 +102,7 @@ export async function reserveExecutorGas(input: { owner: string; expectedExecuto
   if (review.digest !== input.reviewDigest || review.executor !== executor || BigInt(review.shortfallWei) <= 0n || proof.expiresAt <= now(deps)) return fail('wallet_executor_gas_stale');
   const locks = deps.journal ?? journal, lease = await locks.acquire(CONFIG.accountId); if (!lease) return fail('wallet_executor_gas_financial_work_pending');
   try { return await (deps.transact ?? transaction)(async tx => {
+    await assertAuthorityActionIdle(tx, true);
     const owned = await tx.query("SELECT key FROM app_settings WHERE key=$1 AND value->>'owner'=$2 AND (value->>'expires')::numeric>EXTRACT(EPOCH FROM clock_timestamp()) FOR UPDATE", [lease.key, lease.owner]);
     if (owned.rowCount !== 1) return fail('wallet_executor_gas_financial_work_pending');
     await lockExecutorGasContext(tx, context);

@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AuthorityCloseReview, AuthorityReview } from '@/lib/wallet/authority';
 import type { AuthorityPublic } from '@/lib/wallet/authority-service';
-import type { Snapshot } from '@/lib/wallet/metamask';
+import { isAuthorityOwnerRejectedError, isUnsentAuthorityActionError, type Snapshot } from '@/lib/wallet/metamask';
+import { parseAuthorityActionStateUI, runReservedAuthorityAction, type AuthorityActionFence, type AuthorityActionReservation } from '@/lib/wallet/authority-action-ui';
 import type { WalletFeasibility } from '@/lib/wallet/wallet-feasibility';
 import { currentFeasibility } from '@/lib/wallet/wallet-feasibility';
 import { strategyChainId, strategyNetwork, walletAssetLabel } from '@/lib/wallet/strategy-network-ui';
@@ -14,9 +15,9 @@ import { WalletFundingReview, type FundingOwnerAction, type FundingAttemptResult
 import { WalletExecutorGas, type ExecutorGasOwnerAction, type ExecutorGasAttemptResult } from './WalletExecutorGas';
 import { refreshAfterExecutorGas, type WalletSetupView } from '@/lib/wallet/executor-gas-refresh-ui';
 
-type Report = AuthorityPublic & { csrfToken: string };
+type Report = AuthorityPublic & { csrfToken: string; actionFence?: AuthorityActionFence };
 type Setup = WalletSetupView;
-type OwnerAction = (review: AuthorityReview, action: 'deploy' | 'bootstrap' | 'sign' | 'close', close?: AuthorityCloseReview)
+type OwnerAction = (review: AuthorityReview, action: 'deploy' | 'bootstrap' | 'sign' | 'close', close?: AuthorityCloseReview, reservation?: AuthorityActionReservation)
   => Promise<{ kind: 'signature' | 'transaction' | 'batch'; value: string }>;
 const endpoint = '/api/wallet/strategy/authority';
 function amount(raw: string, asset: { decimals?: number; label?: string } | undefined) {
@@ -33,13 +34,15 @@ const labels: Record<AuthorityPublic['state'], string> = {
   verified: 'تفويض محفوظ بعد التحقق؛ الجاهزية التشغيلية تُراجع منفصلة',
   closing: 'الصلاحية قيد الإغلاق؛ إنشاء صلاحيات أوامر جديدة محجوب', closed: 'اكتمل التحقق من إغلاق الصلاحية', blocked: 'المراجعة محجوبة حتى معالجة المتطلبات',
 };
-export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fundingAction, fundingAttemptResult, executorGasAction, executorGasAttemptResult }: { wallet: Snapshot | null; ownerAction: OwnerAction;
+export function WalletStrategyAuthority({ wallet, ownerAction, authorityActionState, callsStatus, fundingAction, fundingAttemptResult, executorGasAction, executorGasAttemptResult }: { wallet: Snapshot | null; ownerAction: OwnerAction;
+  authorityActionState: (value: unknown) => void;
   callsStatus: (id: string) => Promise<{ status: number; transactionHashes: `0x${string}`[] }>;
   fundingAction: FundingOwnerAction; fundingAttemptResult: (result: FundingAttemptResult) => void;
   executorGasAction: ExecutorGasOwnerAction; executorGasAttemptResult: (result: ExecutorGasAttemptResult, executor: string) => void }) {
   const [report, setReport] = useState<Report | null>(null), [pending, setPending] = useState(false);
   const [notice, setNotice] = useState(''), [error, setError] = useState(''), [reviewed, setReviewed] = useState(false);
   const [submittedReferences, setSubmittedReferences] = useState<string[]>([]);
+  const [recoveryHash, setRecoveryHash] = useState(''), [recoveryBatch, setRecoveryBatch] = useState('');
   const [setup, setSetup] = useState<Setup | null>(null);
   const [feasibility, setFeasibility] = useState<WalletFeasibility | null>(null);
   const [executorGasBlocked, setExecutorGasBlocked] = useState(false), [reviewSuppressed, setReviewSuppressed] = useState(false);
@@ -61,6 +64,8 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fund
           return;
         }
         const value = await response.json() as Report;
+        if (!parseAuthorityActionStateUI(value)) throw new Error('wallet_authority_action_fence_invalid');
+        authorityActionState(value);
         if (alive.current && !controller.signal.aborted) setReport(value);
       } catch {
         if (!alive.current || controller.signal.aborted) return;
@@ -87,10 +92,12 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fund
   }, [feasibility]);
   const gasRequired = setup?.chainId === 100 && setup.blockers.includes('wallet_executor_gas_required');
   const gasGate = executorGasBlocked || gasRequired;
-  const canPrepare = report && !gasGate && !['verified', 'closing'].includes(report.state);
-  const canBootstrap = !gasGate && feasible && matched && reviewed && !expiredReview && review && !review.blockers.length && !review.deploymentStep
+  const actionFence = report ? parseAuthorityActionStateUI(report)?.actionFence : null;
+  const actionBlocked = !actionFence || actionFence.blocked;
+  const canPrepare = report && !actionBlocked && !gasGate && !['verified', 'closing'].includes(report.state);
+  const canBootstrap = !actionBlocked && !gasGate && feasible && matched && reviewed && !expiredReview && review && !review.blockers.length && !review.deploymentStep
     && ['draft', 'owner-actions-pending'].includes(report?.state ?? '');
-  const canSign = !gasGate && feasible && matched && reviewed && !expiredReview && review && !review.blockers.length && !review.deploymentStep
+  const canSign = !actionBlocked && !gasGate && feasible && matched && reviewed && !expiredReview && review && !review.blockers.length && !review.deploymentStep
     && report?.state === 'signature-pending';
   async function post(payload: Record<string, unknown>): Promise<Report> {
     if (!report) throw new Error('أعد قراءة سجل الصلاحية.');
@@ -99,6 +106,8 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fund
       body: JSON.stringify(payload), signal: AbortSignal.timeout(45000) });
     const value = await response.json().catch(() => null);
     if (!response.ok) throw new Error(value?.error ?? 'تعذر تأكيد الخطوة. حدّث المراجعة قبل إعادة المحاولة.');
+    if (!parseAuthorityActionStateUI(value)) throw new Error('تعذرت مطابقة سجل محاولة المحفظة. أعد قراءة الحالة دون إعادة إرسالها.');
+    authorityActionState(value);
     if (alive.current) { setReport(value as Report); setReviewed(false); setReviewSuppressed(false); }
     return value as Report;
   }
@@ -107,6 +116,7 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fund
     busy.current = true; setPending(true); setError(''); setNotice('');
     const reference = review ? { id: review.id, digest: review.digest, expectedRevision: report.revision } : {};
     try {
+      if (actionBlocked && !['recheck', 'resolve-action', 'read'].includes(action)) throw new Error('توجد محاولة محفظة لم تُحسم. اقرأ مرجعها وحالتها أدناه دون إعادة إرسالها.');
       if ((executorGasBlocked && ['setup', 'prepare', 'deploy', 'bootstrap', 'sign'].includes(action))
         || (gasRequired && ['prepare', 'deploy', 'bootstrap', 'sign'].includes(action))) throw new Error('أكمل حسم خطوة غاز المشغّل وتجديد الإعداد قبل مراجعة الصلاحية.');
       if (['setup', 'prepare', 'deploy', 'bootstrap', 'sign'].includes(action) && !feasibleNow()) {
@@ -127,6 +137,28 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fund
           : 'لا تتوفر متطلبات إعداد الصلاحية بعد. الأرصدة والعوائق المقروءة موضحة أدناه.');
       }
       else if (action === 'prepare') { await post({ action: 'prepare', expectedRevision: report.revision }); setNotice('أُعدت المراجعة من إعداد الخادم. راجع النطاق والمدة والمبالغ أدناه.'); }
+      else if (action === 'read') {
+        const response = await fetch(endpoint, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(15000) });
+        const value = await response.json();
+        if (!response.ok || !parseAuthorityActionStateUI(value)) throw new Error('تعذرت قراءة سجل المحاولة. لا تُعد إرسال العملية.');
+        authorityActionState(value); if (alive.current) setReport(value as Report);
+      }
+      else if (action === 'resolve-action') {
+        const attempt = actionFence?.active;
+        if (!attempt) throw new Error('أعد قراءة سجل المحاولة أولاً.');
+        const identity = { attemptId: attempt.id, snapshotDigest: attempt.snapshotDigest };
+        const enteredHash = recoveryHash.trim(), enteredBatch = recoveryBatch.trim();
+        if (enteredHash && !/^0x[0-9a-fA-F]{64}$/.test(enteredHash) || enteredBatch && !/^0x[0-9a-fA-F]{1,256}$/.test(enteredBatch)) throw new Error('أدخل مرجع معاملة أو دفعة صالحاً من MetaMask.');
+        if (enteredBatch && attempt.phase === 'deploy') throw new Error('محاولة النشر تتطلب مرجع معاملة.');
+        let current = report;
+        if (enteredHash || enteredBatch) current = await post({ action: 'record-action', ...identity,
+          ...(enteredHash ? { transactionHashes: [enteredHash] } : {}), ...(enteredBatch ? { callBatchIds: [enteredBatch] } : {}) });
+        const batchIds = current.actionFence?.active?.callBatchIds ?? attempt.callBatchIds;
+        const statuses = await Promise.all(batchIds.map(id => callsStatus(id)));
+        const hashes = [...new Set(statuses.flatMap(value => value.transactionHashes))];
+        await post({ action: 'resolve-action', ...identity, ...(hashes.length ? { transactionHashes: hashes } : {}) });
+        if (alive.current) { setRecoveryHash(''); setRecoveryBatch(''); setNotice('أُعيد فحص إيصالات المحاولة. حسمها لا يمنح تفويضاً ولا يثبت جاهزية التداول.'); }
+      }
       else if (action === 'verify') {
         let latest = report;
         const batches = await Promise.all(report.candidateCallBatchIds.map(id => callsStatus(id)));
@@ -154,21 +186,18 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fund
       }
       else {
         if (!review || !matched || !reviewed) throw new Error('طابق الحساب والشبكة ثم راجع نطاق الصلاحية أولاً.');
-        const result = await ownerAction(review, action as 'deploy' | 'bootstrap' | 'sign' | 'close', close ?? undefined);
-        if (!alive.current) return;
-        if (result.kind === 'signature') {
+        if (action === 'sign') {
+          const result = await ownerAction(review, 'sign', close ?? undefined);
+          if (!alive.current || result.kind !== 'signature') return;
           await post({ action: 'accept-signature', ...reference, signature: result.value });
           setNotice('حُفظ التفويض مشفراً بعد التحقق. لا يُعدّ هذا إثباتاً لتفعيل التداول.');
         } else {
-          // Submission is not chain confirmation. Only server verification can
-          // progress authority state; never retry a wallet send automatically.
-          setSubmittedReferences(values => [...new Set([...values, result.value])]);
-          setNotice(action === 'deploy' ? 'أُرسلت معاملة نشر عقد الحماية. بعد تأكيدها أنشئ مراجعة جديدة ليطابق الخادم العقد المنشور.'
-            : 'أُرسلت العمليات للمحفظة. بعد تأكيدها استخدم زر التحقق من السلسلة؛ الإرسال وحده لا يثبت نجاحها.');
-          await post({ action: action === 'close' ? 'record-close-actions' : 'record-owner-actions', ...reference,
-            ...(action === 'close' ? { closeDigest: close?.digest } : {}),
-            ...(result.kind === 'batch' ? { callBatchIds: [result.value] } : { transactionHashes: [result.value] }) });
-          setReviewed(false);
+          if (!['deploy', 'bootstrap', 'close'].includes(action) || report.revision === null) throw new Error('wallet_authority_action_invalid');
+          await runReservedAuthorityAction({ review, close: action === 'close' ? close ?? undefined : undefined,
+            phase: action as 'deploy' | 'bootstrap' | 'close', expectedRevision: report.revision, post, ownerAction,
+            isCurrent: () => alive.current, isUnsent: isUnsentAuthorityActionError, isRejected: isAuthorityOwnerRejectedError,
+            onReference: value => { if (alive.current) setSubmittedReferences(values => [...new Set([...values, value])]); } });
+          if (alive.current) { setReviewed(false); setNotice('حُفظ مرجع الإرسال في سجل المحاولة. استخدم فحص إيصالات المحاولة أدناه؛ لا تُعد إرسال العملية.'); }
         }
       }
     } catch (failure) { if (alive.current) setError(failure instanceof Error ? failure.message : 'تعذر تأكيد الخطوة. أعد قراءة الحالة قبل المحاولة.'); }
@@ -202,6 +231,16 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fund
     <div className={styles.panelHeading}><h2 id="strategy-authority-heading">صلاحية المحرك{reviewNetwork ? ' على ' + reviewNetwork.name : ''}</h2></div>
     <div className={styles.reportDetails}>
       <p role="status">{report ? labels[report.state] : 'جارٍ قراءة سجل الصلاحية…'}</p>
+      {actionFence?.active && <div role="status">
+        <p>توجد محاولة {actionFence.active.phase === 'deploy' ? 'نشر' : actionFence.active.phase === 'close' ? 'إغلاق' : 'ترقية وموافقات'} غير محسومة. يبقى إنشاء مراجعة أو طلب جديد محجوبًا حتى حسم إيصالاتها؛ مرور الوقت لا يحررها.</p>
+        <p>الحالة: <bdi dir="ltr">{actionFence.active.status}</bdi> — المالك: <bdi dir="ltr">{actionFence.active.owner}</bdi> — الشبكة: {actionFence.active.chainId}</p>
+        <ul>{[...actionFence.active.transactionHashes, ...actionFence.active.callBatchIds].map(value => <li key={value}><bdi dir="ltr">{value}</bdi></li>)}</ul>
+        <label>مرجع معاملة مفقود من MetaMask <input dir="ltr" value={recoveryHash} disabled={pending} maxLength={66} onChange={e => setRecoveryHash(e.target.value)} /></label>
+        {actionFence.active.phase !== 'deploy' && <label>معرّف دفعة مفقود من MetaMask <input dir="ltr" value={recoveryBatch} disabled={pending} maxLength={258} onChange={e => setRecoveryBatch(e.target.value)} /></label>}
+        <button className={styles.button} type="button" disabled={pending} onClick={() => void run('resolve-action')}>فحص إيصالات محاولة المحفظة</button>
+        <p>حفظ المرجع لا يثبت نجاح العملية أو منح التفويض. لا تُعد إرسالها عند غياب المرجع أو تعذر القراءة.</p>
+      </div>}
+      {report && <button className={styles.button} type="button" disabled={pending} onClick={() => void run('read')}>تحديث سجل محاولة المحفظة</button>}
       <WalletGnosisReadiness csrfToken={report?.csrfToken ?? null} disabled={pending} />
       <WalletFundingReview wallet={wallet} csrfToken={report?.csrfToken ?? null} ownerAction={fundingAction} syncResult={fundingAttemptResult} disabled={pending} />
       <WalletFeasibilityAudit wallet={wallet} csrfToken={report?.csrfToken ?? null} onAudit={setFeasibility} externalAudit={feasibility} disabled={pending} />
@@ -242,26 +281,26 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fund
         {close && <p>دفعة الإغلاق تشمل {close.outstandingUids.length} من أصل {close.remainingOrders ?? close.outstandingUids.length} أوامر تحتاج إنهاءً، وتعطيل التفويض وتصفير موافقات الرموز المحددة. عند بقاء أوامر، أعد إعداد دفعة الإغلاق بعد تأكيد السابقة. الإغلاق يُثبت بقراءة السلسلة للمجموعة المتتبعة كاملةً، ولا يُفترض من انتهاء المدة.</p>}
         {close && <details><summary>معرّفات الأوامر التي ستُبطَل</summary><ul>{close.outstandingUids.map(uid => <li key={uid}><bdi dir="ltr">{uid}</bdi></li>)}</ul>
           <p>تبقى الأصول المملوكة في المحفظة بعد إغلاق صلاحية المحرك، وتحتاج إدارة مستقلة.</p></details>}
-        <label><input type="checkbox" checked={reviewed} disabled={pending || !matched || gasGate}
+        <label><input type="checkbox" checked={reviewed} disabled={pending || actionBlocked || !matched || gasGate}
           onChange={e => setReviewed(e.target.checked)} /> راجعت الحساب والعقود والرموز والحدود والمدة والعمليات المعروضة.</label>
       </>}
       <div className={styles.controls}>
         {report && !['verified', 'closing'].includes(report.state) && <button className={styles.button} type="button"
-          disabled={pending || executorGasBlocked || !wallet || !walletNetwork || !feasible} onClick={() => void run('setup')}>تجهيز إعداد المحرك من المحفظة والأسواق</button>}
+          disabled={pending || actionBlocked || executorGasBlocked || !wallet || !walletNetwork || !feasible} onClick={() => void run('setup')}>تجهيز إعداد المحرك من المحفظة والأسواق</button>}
         {canPrepare && <button className={styles.button} type="button" disabled={pending || !feasible} onClick={() => void run('prepare')}>إعداد مراجعة حديثة</button>}
-        {review?.deploymentStep && <button className={styles.button} type="button" disabled={pending || gasGate || !feasible || !matched || !reviewed || expiredReview || !review.deploymentStep.gasEstimate || !!review.deploymentStep.blocker}
+        {review?.deploymentStep && <button className={styles.button} type="button" disabled={pending || actionBlocked || gasGate || !feasible || !matched || !reviewed || expiredReview || !review.deploymentStep.gasEstimate || !!review.deploymentStep.blocker}
           onClick={() => void run('deploy')}>مراجعة نشر عقد الحماية في MetaMask</button>}
         {review && ['draft', 'owner-actions-pending'].includes(report?.state ?? '') && <button className={styles.button} type="button" disabled={pending || !canBootstrap || !review.calls.length}
           onClick={() => void run('bootstrap')}>مراجعة الترقية والموافقات المحدودة</button>}
-        {review && ['draft', 'blocked', 'owner-actions-pending', 'signature-pending'].includes(report?.state ?? '') && <button className={styles.button} type="button" disabled={pending || expiredReview || !!review.deploymentStep || !!review.blockers.length}
+        {review && ['draft', 'blocked', 'owner-actions-pending', 'signature-pending'].includes(report?.state ?? '') && <button className={styles.button} type="button" disabled={pending || actionBlocked || expiredReview || !!review.deploymentStep || !!review.blockers.length}
           onClick={() => void run('verify')}>التحقق من العقود والموافقات على السلسلة</button>}
         {report?.state === 'signature-pending' && <button className={styles.button} type="button" disabled={pending || !canSign} onClick={() => void run('sign')}>مراجعة توقيع تفويض المحرك</button>}
         {report?.state === 'verified' && <button className={styles.button} type="button" disabled={pending} onClick={() => void run('recheck')}>إعادة التحقق من الصلاحية</button>}
-        {review && ['verified', 'closing'].includes(report?.state ?? '') && <button className={styles.button} type="button" disabled={pending} onClick={() => void run('prepare-close')}>إيقاف الإنشاء وإعداد إغلاق الصلاحية</button>}
+        {review && ['verified', 'closing'].includes(report?.state ?? '') && <button className={styles.button} type="button" disabled={pending || actionBlocked} onClick={() => void run('prepare-close')}>إيقاف الإنشاء وإعداد إغلاق الصلاحية</button>}
         {report?.state === 'closing' && close && <>
-          <button className={styles.button} type="button" disabled={pending || !matched || !reviewed || !!close.blockers.length}
+          <button className={styles.button} type="button" disabled={pending || actionBlocked || !matched || !reviewed || !!close.blockers.length}
             onClick={() => void run('close')}>مراجعة الإلغاء والتعطيل في MetaMask</button>
-          <button className={styles.button} type="button" disabled={pending} onClick={() => void run('verify-close')}>التحقق من اكتمال الإغلاق</button>
+          <button className={styles.button} type="button" disabled={pending || actionBlocked} onClick={() => void run('verify-close')}>التحقق من اكتمال الإغلاق</button>
         </>}
       </div>
       {setup && <div role="status">
@@ -280,7 +319,7 @@ export function WalletStrategyAuthority({ wallet, ownerAction, callsStatus, fund
         {setup.blockers.length > 0 && <ul>{setup.blockers.map(code => <li key={code}><bdi dir="ltr">{code}</bdi></li>)}</ul>}
       </div>}
       {setup?.status === 'configured' && setup.chainId === 100 && <WalletExecutorGas wallet={wallet} executor={setup.executor} csrfToken={report?.csrfToken ?? null}
-        ownerAction={executorGasAction} syncResult={executorGasAttemptResult} onSettled={(id, funded) => void gasSettled(id, funded)} onStateChange={setExecutorGasBlocked} disabled={pending} />}
+        ownerAction={executorGasAction} syncResult={executorGasAttemptResult} onSettled={(id, funded) => void gasSettled(id, funded)} onStateChange={setExecutorGasBlocked} disabled={pending || actionBlocked} />}
       {(submittedReferences.length > 0 || (report?.candidateTransactionHashes.length ?? 0) > 0 || (report?.candidateCallBatchIds.length ?? 0) > 0) && <details>
         <summary>مراجع العمليات المرسلة للتحقق</summary><p>هذه مراجع إرسال غير متحقق منها؛ لا تثبت نجاح العملية أو تكلفتها.</p>
         <ul>{[...new Set([...submittedReferences, ...(report?.candidateTransactionHashes ?? []), ...(report?.candidateCallBatchIds ?? [])])].map(value => <li key={value}><bdi dir="ltr">{value}</bdi></li>)}</ul>
