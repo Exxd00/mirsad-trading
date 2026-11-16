@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { closeDatabase, ensureSchema, query } from '../src/lib/db';
 import { createGnosisMarketReadinessJob, GNOSIS_MARKET_READINESS_JOB_KEY as KEY } from '../src/lib/wallet/gnosis-market-readiness-job';
 import type { GnosisMarketReadiness } from '../src/lib/wallet/gnosis-market-readiness';
+import { randomUUID } from 'node:crypto';
 const NOW = 1794790000, hash = '0x' + 'a'.repeat(64);
 // Synthetic source reports exercise real PGlite coordination only. They do not
 // prove actual market history, liquidity, authority or financial readiness.
@@ -28,6 +29,49 @@ beforeEach(async () => { await query('TRUNCATE app_settings,audit_events RESTART
 afterEach(() => { expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); });
 afterAll(async () => { await closeDatabase(); vi.unstubAllEnvs(); });
 describe('explicitly enabled, durable bounded source warmup', () => {
+  it('never creates missing resume-only work or accepts a different job identity', async () => {
+    const f = fixture();
+    for (const id of [undefined, null, '', 'invalid', randomUUID()])
+      await expect(f.job.resumeExisting(id as unknown as string)).rejects.toThrow('wallet_market_readiness_job_changed');
+    expect((await query('SELECT key FROM app_settings')).rowCount).toBe(0); expect(f.audit).not.toHaveBeenCalled();
+    const initial = await f.job.start(), id = initial.job!.id; f.setNow(NOW + 300);
+    await query("UPDATE app_settings SET value=jsonb_set(value,'{id}',$2::jsonb) WHERE key=$1", [KEY, JSON.stringify(randomUUID())]);
+    const before = (await query('SELECT value FROM app_settings WHERE key=$1', [KEY])).rows;
+    await expect(f.job.resumeExisting(id)).rejects.toThrow('wallet_market_readiness_job_changed');
+    expect((await query('SELECT value FROM app_settings WHERE key=$1', [KEY])).rows).toEqual(before); expect(f.audit).toHaveBeenCalledTimes(1);
+  });
+  it('does not restart a job completed by cron between an owner GET and resume-only POST', async () => {
+    const f = fixture(), first = await f.job.start(), id = first.job!.id; f.setNow(NOW + 300);
+    f.audit.mockResolvedValueOnce(report(NOW + 300, true)); const completed = await f.job.resume();
+    const before = (await query('SELECT value FROM app_settings WHERE key=$1', [KEY])).rows;
+    expect(await f.job.resumeExisting(id)).toEqual(completed);
+    expect((await query('SELECT value FROM app_settings WHERE key=$1', [KEY])).rows).toEqual(before); expect(f.audit).toHaveBeenCalledTimes(2);
+  });
+  it('resumes one due existing owner pass with the same identity, budgets and manual attribution', async () => {
+    const f = fixture(), first = await f.job.start(), id = first.job!.id;
+    expect(await f.job.resumeExisting(id)).toEqual(first); expect(f.audit).toHaveBeenCalledTimes(1); f.setNow(NOW + 300);
+    const result = await f.job.resumeExisting(id);
+    expect(result.job).toMatchObject({ id, attempts: 2, maxAttempts: 144, expiresAt: NOW + 43200, nextAt: NOW + 600, lastTrigger: 'manual' });
+    expect(f.audit).toHaveBeenCalledTimes(2);
+  });
+  it.each(['expired', 'exhausted', 'v1-expired'] as const)('never resets or upgrades %s resume-only work', async state => {
+    const f = fixture(), first = await f.job.start(), id = first.job!.id;
+    if (state === 'exhausted') await query("UPDATE app_settings SET value=jsonb_set(value,'{attempts}','144'::jsonb) WHERE key=$1", [KEY]);
+    else if (state === 'v1-expired') {
+      await query("UPDATE app_settings SET value=jsonb_set(jsonb_set(value,'{version}','1'::jsonb),'{expiresAt}',$2::jsonb) WHERE key=$1", [KEY, JSON.stringify(NOW + 21600)]);
+      f.setNow(NOW + 21601);
+    } else f.setNow(NOW + 43201);
+    const before = (await query('SELECT value FROM app_settings WHERE key=$1', [KEY])).rows;
+    const result = await f.job.resumeExisting(id); expect(result.job?.id).toBe(id);
+    expect((await query('SELECT value FROM app_settings WHERE key=$1', [KEY])).rows).toEqual(before); expect(f.audit).toHaveBeenCalledTimes(1);
+  });
+  it('preserves provider cooldown and serializes a due helper/cron pair under the existing lease', async () => {
+    const f = fixture(); f.audit.mockResolvedValueOnce({ ...report(NOW), retryAt: NOW + 1800, providerRetryAt: NOW + 1800, errors: ['gnosis_market_provider_cooldown'] });
+    const first = await f.job.start(); f.setNow(NOW + 300); expect(await f.job.resumeExisting(first.job!.id)).toMatchObject({ job: { attempts: 1, nextAt: NOW + 1800 } });
+    expect(f.audit).toHaveBeenCalledTimes(1); f.setNow(NOW + 1800);
+    await Promise.all([f.job.resumeExisting(first.job!.id), f.job.resume()]); expect(f.audit).toHaveBeenCalledTimes(2);
+    expect((await f.job.read()).job).toMatchObject({ id: first.job!.id, attempts: 2, maxAttempts: 144, expiresAt: NOW + 43200 });
+  });
   it('does not create a job or call sources on stored GET or scheduler ticks before the owner POST', async () => {
     const f = fixture(); expect(await f.job.read()).toEqual({ job: null, report: null, currentFresh: false, reportFresh: false });
     expect(await f.job.resume()).toEqual({ job: null, report: null, currentFresh: false, reportFresh: false }); expect(f.audit).not.toHaveBeenCalled();

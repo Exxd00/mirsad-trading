@@ -2,8 +2,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { closeDatabase, ensureSchema, query } from '../src/lib/db';
 import { hashPassword, issueLoginCsrf, login, sessionCookieName } from '../src/lib/auth';
 import { GET, POST } from '../src/app/api/wallet/strategy/market-readiness/route';
-const source = vi.hoisted(() => ({ start: vi.fn(), read: vi.fn() }));
-vi.mock('../src/lib/wallet/gnosis-market-readiness-job', () => ({ startGnosisMarketReadiness: source.start, readGnosisMarketReadiness: source.read }));
+const source = vi.hoisted(() => ({ start: vi.fn(), read: vi.fn(), resumeExisting: vi.fn() }));
+vi.mock('../src/lib/wallet/gnosis-market-readiness-job', async original => ({ ...await original<typeof import('../src/lib/wallet/gnosis-market-readiness-job')>(),
+  startGnosisMarketReadiness: source.start, readGnosisMarketReadiness: source.read, resumeExistingGnosisMarketReadiness: source.resumeExisting }));
+import { GnosisMarketReadinessJobConflict } from '../src/lib/wallet/gnosis-market-readiness-job';
 const origin = 'http://localhost:3000', password = 'isolated-market-source-test-A8!';
 type Session = Awaited<ReturnType<typeof login>>;
 async function session() {
@@ -20,7 +22,7 @@ beforeAll(async () => {
   vi.stubEnv('INITIAL_PASSWORD_HASH', await hashPassword(password)); await ensureSchema();
 });
 beforeEach(async () => {
-  await query('TRUNCATE app_settings,app_owner,app_sessions,auth_rate_limits,audit_events RESTART IDENTITY'); source.start.mockReset(); source.read.mockReset();
+  await query('TRUNCATE app_settings,app_owner,app_sessions,auth_rate_limits,audit_events RESTART IDENTITY'); source.start.mockReset(); source.read.mockReset(); source.resumeExisting.mockReset();
   source.read.mockResolvedValue({ job: null, report: null });
   source.start.mockResolvedValue({ job: { state: 'waiting', attempts: 1, nextAt: 1794790300, expiresAt: 1794811600, lastTrigger: 'manual', lastError: null },
     report: { version: 1, chainId: 100, status: 'warming', referenceOnly: true, financialReadiness: 'not-certified',
@@ -30,6 +32,19 @@ beforeEach(async () => {
 afterEach(() => { expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); });
 afterAll(async () => { await closeDatabase(); vi.unstubAllEnvs(); });
 describe('owner-only public-data source preflight', () => {
+  it('resumes only a strict expected existing identity under owner CSRF and never falls back to start', async () => {
+    const id = '00000000-0000-4000-8000-000000000001', value = { chainId: 100, action: 'resume-existing', expectedJobId: id };
+    expect((await POST(request(null, value))).status).toBe(401); const own = await session();
+    expect((await POST(request(own, value, { 'x-csrf-token': 'invalid' }))).status).toBe(403);
+    for (const input of [{ ...value, expectedJobId: 'invalid' }, { ...value, force: true }, { ...value, chainId: 1 }, { chainId: 100, action: 'resume-existing' }])
+      expect((await POST(request(own, input))).status).toBe(409);
+    source.resumeExisting.mockResolvedValue({ job: { id, state: 'waiting' } });
+    expect(await (await POST(request(own, value))).json()).toMatchObject({ job: { id, state: 'waiting' } });
+    expect(source.resumeExisting).toHaveBeenCalledExactlyOnceWith(id); expect(source.start).not.toHaveBeenCalled();
+    source.resumeExisting.mockRejectedValueOnce(new GnosisMarketReadinessJobConflict());
+    const changed = await POST(request(own, value)); expect(changed.status).toBe(409);
+    expect(await changed.json()).toMatchObject({ code: 'wallet_market_readiness_job_changed' }); expect(source.start).not.toHaveBeenCalled();
+  });
   it('requires a real owner session, CSRF and same origin before warming any public evidence', async () => {
     expect((await POST(request(null))).status).toBe(401);
     expect((await POST(request(null, { chainId: 100 }, { authorization: 'Bearer scheduler-is-not-owner' }))).status).toBe(401);
