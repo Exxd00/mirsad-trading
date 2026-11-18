@@ -61,8 +61,13 @@ export function confirmedOrderCounts(orders: SourceOrder[], fills: SourceFill[] 
     reason: covered ? null : 'fill_archive_incomplete',
     note: 'Executed order counts use source fill timestamps; rejected/unknown counts use source status timestamps.' };
 }
-export function drawdownMetric(observations: EquityObservation[], until: number) {
-  try { return { value: neutralSeries(observations, until).maximumDrawdown, reason: null }; }
+export function drawdownMetric(observations: EquityObservation[], from: number, until: number) {
+  const window = observations.filter(v => v.at >= from && v.at <= until);
+  if (!window.length) return { value: null, reason: 'equity_history_missing' };
+  // A later observation is not the window's opening capital. Do not silently
+  // rebase a sparse series after a loss or invent a valuation at the boundary.
+  if (!window.some(v => v.at === from)) return { value: null, reason: 'window_opening_valuation_missing' };
+  try { return { value: neutralSeries(window, until).maximumDrawdown, reason: null }; }
   catch (e) { return { value: null, reason: executionReason(e, 'valuation_missing') }; }
 }
 /** A read-only report; snapshots remain distinct from dated closed-trade results. */
@@ -83,7 +88,7 @@ export function accountMetrics(account: Account, from: number, until: number) {
     // a window without a matching opening valuation/cost basis.
     periodTotalNetPnlEur: periodNet, periodTotalNetReason: periodNet === null ? 'matching_opening_and_closing_pnl_snapshots_required' : null,
     orders: confirmedOrderCounts(account.orders, account.fills, from, until, archiveStart),
-    drawdown: drawdownMetric(account.equityHistory.filter(v => v.at >= from), until) };
+    drawdown: drawdownMetric(account.equityHistory, from, until) };
 }
 export function costComparison(estimatedEur: string, actualEur: string | null) {
   return { estimatedEur, actualEur, differenceEur: actualEur === null ? null : decimal(actualEur).sub(estimatedEur).toFixed(),

@@ -41,6 +41,11 @@ export async function walletStrategySetup(tx: SqlExecutor = { query }, now = Mat
       mode: choiceInvalid ? 'invalid' as const : choice?.policy.mode ?? 'manual' as const,
       revision: choice?.revision ?? null, updatedAt: choice?.updatedAt ?? null },
     previousMarkets: { ...previous, purpose: 'historical-reference-only' as const },
+    gasCandidate: stored?.lifetimeStatus === 'within-window' && stored.profile.chainId === 100
+      && stored.profile.implementation.kind === 'cow-candidate' && stored.profile.implementation.version === 'cow-wallet-v1'
+      && stored.profile.implementation.status === 'inactive'
+      ? { owner: stored.profile.owner, executor: stored.profile.executor, revision: stored.revision, expiresAt: stored.profile.authority.expiresAt }
+      : null,
     profile: stored ? { status: 'configuration-only' as const, revision: stored.revision,
       authorityStatus: stored.authorityStatus, lifetimeStatus: stored.lifetimeStatus,
       chainId: stored.profile.chainId, owner: stored.profile.owner,
