@@ -6,6 +6,7 @@ import { VERSION, type IndicatorState, type Intent, type RiskState, type Signal,
 import type { ProtectionLevels } from './protection';
 import type { AccountingEvidence } from './accounting';
 import { validateProvisionalProtection, type ProvisionalProtection } from './provisional-protection';
+import type { ReportArchive } from './report-archive';
 export type RuntimeState = { risk: RiskState; indicators: Record<string, IndicatorState>; pendingSignals: Signal[]; entriesEnabled: boolean; scanCursor?: number;
   indicatorSourceIdentity?: string;
   walletIdentity?: string;
@@ -41,6 +42,8 @@ export interface Journal {
   accountDecisions(accountId: string): Promise<DecisionRecord[]>;
   accounting(accountId: string): Promise<AccountingEvidence | null>;
   saveAccounting(lease: Lease, value: AccountingEvidence, expectedCheckedAt: number): Promise<boolean>;
+  reportArchive?(accountId: string, identity: string): Promise<ReportArchive | null>;
+  saveReportArchive?(lease: Lease, value: ReportArchive, expectedRevision: number): Promise<boolean>;
   sourceArchive(lease: Lease): Promise<SourceArchiveState | null>;
   saveSourceArchive(lease: Lease, state: SourceArchiveState, records: SourceTransaction[]): Promise<void>;
   protections(accountId: string): Promise<ManagedProtection[]>;
@@ -131,6 +134,24 @@ export class SqlJournal implements Journal {
       const old = await tx.query<{ value: AccountingEvidence }>('SELECT value FROM app_settings WHERE key=$1', [key]);
       if ((old.rows[0]?.value.checkedAt ?? 0) !== expectedCheckedAt) return false;
       await tx.query('INSERT INTO app_settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=NOW()', [key, JSON.stringify(value)]);
+      return true;
+    });
+  }
+  async reportArchive(accountId: string, identity: string) {
+    const r = await query<{ value: ReportArchive }>('SELECT value FROM app_settings WHERE key=$1', [`${root(accountId)}:report_archive:${identity}`]);
+    const saved = r.rows[0]?.value;
+    if (saved && saved.identity !== identity) throw new Error('report_archive_identity_mismatch');
+    return saved ?? null;
+  }
+  async saveReportArchive(lease: Lease, value: ReportArchive, expectedRevision: number) {
+    return transaction(async tx => {
+      await this.owned(tx, lease);
+      const key = this.path(lease, `report_archive:${value.identity}`);
+      const old = await tx.query<{ value: ReportArchive }>('SELECT value FROM app_settings WHERE key=$1', [key]);
+      if ((old.rows[0]?.value.revision ?? 0) !== expectedRevision) return false;
+      if (value.revision !== expectedRevision + 1) throw new Error('report_archive_revision_invalid');
+      await tx.query('INSERT INTO app_settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=NOW()',
+        [key, JSON.stringify(value)]);
       return true;
     });
   }

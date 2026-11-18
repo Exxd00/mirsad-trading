@@ -20,6 +20,11 @@ import { reconcileReportFills } from './report-evidence';
 import { assertFundingEvidence } from './readiness';
 import type { EntryPlanner } from './runner';
 import { observeProvisionalProtection } from './provisional-protection';
+import { exceedsLiveOrderLimit, LIVE_ORDER_DETAIL_LIMIT, matchingArchivedOrder, refreshReportArchive, reportArchiveCandidates, reportArchiveClosedConflict, reportArchiveIdentity,
+  validateReportArchive, type ArchivedReportOrder } from './report-archive';
+import type { ReportEvidence } from './report-evidence';
+
+type ArchiveProjection = { records: Map<string, ArchivedReportOrder>; coverage: NonNullable<ReportEvidence['archive']> };
 
 export type WalletVenueSource = {
   candleSourceIdentity?: string;
@@ -67,7 +72,7 @@ export function sourceOrder(order: ReportedOrder): SourceOrder {
     ...(order.protectionEvidence !== undefined ? { protectionEvidence: order.protectionEvidence } : {}),
     ...(baseFee !== undefined ? { baseFeeQuantity: baseFee } : {}), ...(order.finality ? { finality: order.finality } : {}) };
 }
-function ownedOrder(order: ReportedOrder, decision: DecisionRecord): SourceOrder {
+function ownedOrder(order: ReportedOrder, decision: DecisionRecord, historical = false): SourceOrder {
   const intent = decision.intent;
   if (order.accountId !== 'metamask-strategy-v1' || order.clientOrderId !== decision.sourceIdentity?.clientOrderId
     || decision.key !== intent.key || order.symbol !== intent.symbol || order.side !== intent.side
@@ -77,7 +82,7 @@ function ownedOrder(order: ReportedOrder, decision: DecisionRecord): SourceOrder
     throw new Error('source_order_identity_mismatch');
   }
   if (decision.source && (decision.source.id !== order.id || decimal(order.filledQuantity).lt(decision.source.filledQuantity)
-    || seconds(order.updatedAt) < decision.source.sourceAt)) throw new Error('source_order_regressed');
+    || (!historical && seconds(order.updatedAt) < decision.source.sourceAt))) throw new Error('source_order_regressed');
   const mapped = { ...sourceOrder(order), clientKey: decision.key, managed: true, purpose: intent.side === 'buy' ? 'entry' as const : 'exit' as const };
   if (decision.source?.lastFillAt !== undefined && (mapped.lastFillAt === undefined || mapped.lastFillAt < decision.source.lastFillAt
     || (decimal(mapped.filledQuantity).eq(decision.source.filledQuantity) && mapped.lastFillAt !== decision.source.lastFillAt))) {
@@ -118,6 +123,10 @@ export class ConnectedWalletVenue implements CancellationPort {
   }
   async refreshAccounting() {
     const client = this.source.client;
+    if (this.source.journal && this.source.binding && this.source.candleSourceIdentity && client.getOrder && client.getFillsForOrders) {
+      await refreshReportArchive(client as Parameters<typeof refreshReportArchive>[0], this.source.journal,
+        () => reportArchiveIdentity(walletBindingIdentity(this.source.binding!), this.source.candleSourceIdentity), ownedOrder, this.clock);
+    }
     if (this.source.journal && client.getOrderBook && client.getValuationCandles && client.getTransaction && client.getTransactionsPage) {
       await refreshSourceAccounting(client as Parameters<typeof refreshSourceAccounting>[0], this.source.journal, this.clock);
     }
@@ -185,13 +194,16 @@ export class ConnectedWalletVenue implements CancellationPort {
   async reportAccount(): Promise<Account> {
     return this.account();
   }
-  private async verifySourceFills(account: Account): Promise<Account> {
+  private async verifySourceFills(account: Account, archive?: ArchiveProjection): Promise<Account> {
     const filled = account.orders.filter(o => o.managed && decimal(o.filledQuantity).gt(0));
     try {
-      if (filled.length > 12 || (filled.length && (!this.source.client.getOrder || !this.source.client.getFillsForOrders))) throw new Error('report_fills_unavailable');
+      if (archive?.coverage.status === 'partial') throw new Error('report_archive_coverage_incomplete');
+      const live = filled.filter(o => !archive?.records.has(o.id));
+      if (live.length > LIVE_ORDER_DETAIL_LIMIT || (live.length && (!this.source.client.getOrder || !this.source.client.getFillsForOrders))) throw new Error('report_fills_unavailable');
       const decisions = await this.source.journal?.accountDecisions(this.accountId) ?? [];
-      const details: ReportedOrder[] = [];
-      for (const order of filled) {
+      const historical = [...archive?.records.values() ?? []];
+      const details: ReportedOrder[] = historical.map(r => r.order);
+      for (const order of live) {
         const raw = await this.source.client.getOrder!(order.id);
         const decision = decisions.find(d => d.key === order.clientKey);
         if (!decision) throw new Error('report_fills_unavailable');
@@ -205,14 +217,16 @@ export class ConnectedWalletVenue implements CancellationPort {
           || mapped.baseFeeQuantity !== order.baseFeeQuantity) throw new Error('report_fills_unavailable');
         details.push(raw);
       }
-      const result = details.length ? await this.source.client.getFillsForOrders!(details, 12) : { fills: [], truncated: false };
-      const verified = reconcileReportFills(details, result.fills, this.clock(), result.truncated);
+      const liveDetails = details.filter(o => !archive?.records.has(o.id));
+      const result = liveDetails.length ? await this.source.client.getFillsForOrders!(liveDetails, LIVE_ORDER_DETAIL_LIMIT) : { fills: [], truncated: false };
+      const verified = reconcileReportFills(details, [...historical.flatMap(r => r.fills), ...result.fills], this.clock(), result.truncated);
       account.reportEvidence = verified.evidence; account.fills = verified.fills;
-    } catch {
-      account.reportEvidence = { readAt: this.clock(), status: 'unavailable', issues: ['report_fills_unavailable'], orders: [] };
+    } catch (e) {
+      account.reportEvidence = { readAt: this.clock(), status: 'unavailable', issues: [executionReason(e, 'report_fills_unavailable')], orders: [] };
       // A failed live read must not present the saved fills as current evidence.
       account.fills = null;
     }
+    if (archive) account.reportEvidence.archive = archive.coverage;
     if (account.reportEvidence.status !== 'matched') {
       account.dataBlockers = [...new Set([...(account.dataBlockers ?? []), ...account.reportEvidence.issues])];
       account.tradeHistoryComplete = false;
@@ -250,16 +264,43 @@ export class ConnectedWalletVenue implements CancellationPort {
       if (needed.some(d => !d.source && !rawOrders.some(o => o.clientOrderId === d.sourceIdentity?.clientOrderId))) rawOrders = await this.source.client.getOrders();
       for (const decision of needed) if (decision.source && !rawOrders.some(o => o.id === decision.source!.id)) rawOrders.push(await this.source.client.getOrder(decision.source.id));
     } else rawOrders = await this.source.client.getOrders();
+    let historical: ArchiveProjection | undefined;
     if (!options.protectionOnly) {
+      let historicalKeys = new Set<string>();
+      if (this.source.binding && this.source.candleSourceIdentity && this.source.journal?.reportArchive) {
+        const identity = reportArchiveIdentity(walletBindingIdentity(this.source.binding), this.source.candleSourceIdentity);
+        const archive = validateReportArchive(await this.source.journal.reportArchive(this.accountId, identity));
+        if (archive || exceedsLiveOrderLimit(decisions, rawOrders)) {
+          const candidates = reportArchiveCandidates(decisions, rawOrders, saved);
+          historicalKeys = new Set(candidates.map(c => c.decision.key));
+          const records = new Map<string, ArchivedReportOrder>();
+          for (const candidate of candidates) {
+            const record = matchingArchivedOrder(archive, identity, candidate, this.clock(), ownedOrder);
+            if (record) records.set(record.order.id, record);
+          }
+          const knownKeys = new Set(candidates.map(c => c.decision.key));
+          const closedConflict = reportArchiveClosedConflict(decisions, rawOrders, saved);
+          const drifted = closedConflict || (archive?.identity === identity && archive.records.some(r => !knownKeys.has(r.key)));
+          historical = { records, coverage: { status: !drifted && records.size === candidates.length ? 'complete' : 'partial',
+            requiredClosedOrders: candidates.length, verifiedClosedOrders: records.size,
+            verified: [...records.values()].map(r => ({ orderId: r.order.id, verifiedAt: r.verifiedAt })),
+            lastError: closedConflict ? 'report_archive_conflict' : archive?.lastError ?? null } };
+          // Source observations remain dated historical evidence. Unverified
+          // rows can describe holdings, but never certify fills/entry readiness.
+          rawOrders = rawOrders.map(o => records.get(o.id)?.order ?? o);
+          for (const record of records.values()) if (!rawOrders.some(o => o.id === record.order.id)) rawOrders.push(record.order);
+        }
+      }
       // A list row is discovery, not complete execution evidence: it can omit
       // base-currency fees already included in a saved protection quantity.
       // Use the same detail-backed snapshot for entry checks and reports.
       // This is read-only; a saved decision is never rewritten here.
-      const targets = rawOrders.filter(o => identities.has(o.clientOrderId) && decimal(o.filledQuantity).gt(0));
-      const outsideList = decisions.filter(d => d.source && decimal(d.source.filledQuantity).gt(0)
-        && !rawOrders.some(o => o.id === d.source!.id));
+      const targets = rawOrders.filter(o => identities.has(o.clientOrderId) && decimal(o.filledQuantity).gt(0)
+        && !historicalKeys.has(identities.get(o.clientOrderId)!.key));
+      const outsideList = decisions.filter(d => d.source && (decimal(d.source.filledQuantity).gt(0) || !terminal(d.source))
+        && !historicalKeys.has(d.key) && !rawOrders.some(o => o.id === d.source!.id));
       if (!this.source.client.getOrder && targets.length + outsideList.length) throw new Error('source_order_details_unavailable');
-      if (targets.length + outsideList.length > 12) throw new Error('source_order_details_limit');
+      if (targets.length + outsideList.length > LIVE_ORDER_DETAIL_LIMIT) throw new Error('source_order_details_limit');
       const details = new Map<string, ReportedOrder>();
       for (const order of targets) {
         const detail = await this.source.client.getOrder!(order.id);
@@ -281,7 +322,7 @@ export class ConnectedWalletVenue implements CancellationPort {
     if (rawOrders.some(order => order.accountId !== this.accountId)) throw new Error('wallet_order_account_mismatch');
     const orders = rawOrders.map(order => {
       const decision = identities.get(order.clientOrderId);
-      return decision ? ownedOrder(order, decision) : sourceOrder(order);
+      return decision ? ownedOrder(order, decision, historical?.records.has(order.id)) : sourceOrder(order);
     });
     // Terminal source confirmations remain part of v1's archive even when the
     // source's default history window stops returning them. Open/uncertain
@@ -313,7 +354,7 @@ export class ConnectedWalletVenue implements CancellationPort {
     const finalityPending = rawOrders.some(o => o.finality && o.finality.status !== 'finalized');
     if (finalityPending) account.dataBlockers = ['wallet_order_finality_pending'];
     if (options.protectionOnly || !this.source.journal) return account;
-    if (!this.source.client.getOrderBook) return this.verifySourceFills(account);
+    if (!this.source.client.getOrderBook) return this.verifySourceFills(account, historical);
     const evidence = await this.source.journal.accounting(this.accountId);
     const blockers: string[] = finalityPending ? ['wallet_order_finality_pending'] : [];
     // A balances snapshot cannot establish today's opening holdings when a
@@ -365,7 +406,7 @@ export class ConnectedWalletVenue implements CancellationPort {
     account.dataBlockers = [...new Set(blockers)];
     // Contradictory/missing fills block the engine as well as its report. Fixing
     // a missing summary fee must not accidentally bypass source reconciliation.
-    return this.verifySourceFills(account);
+    return this.verifySourceFills(account, historical);
   }
   async instruments(): Promise<Instrument[]> {
     const instruments = await this.source.instruments();

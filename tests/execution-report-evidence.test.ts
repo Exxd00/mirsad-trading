@@ -37,6 +37,34 @@ describe('current source evidence for reports', () => {
     expect(reconcileReportFills([order], [fill, { ...fill, price: '2370.48' }], now))
       .toMatchObject({ evidence: { status: 'conflict', issues: expect.arrayContaining(['report_fill_conflict']) }, fills: null });
   });
+  it.each([
+    ['fee amount', { fee: '0.2' }],
+    ['fee currency', { feeCurrency: 'ETH' }],
+    ['embedded fee', { feeIncludedInPriceEur: '0.08' }],
+    ['maker role', { maker: true }],
+    ['order identity', { orderId: 'other-order' }],
+    ['account identity', { accountId: 'other-account' }],
+    ['symbol', { symbol: 'BTC-EUR' }],
+    ['side', { side: 'sell' }],
+    ['base currency', { baseCurrency: 'BTC' }],
+    ['quote currency', { quoteCurrency: 'USD' }],
+  ] as const)('rejects duplicate fill IDs with conflicting %s', (_, changed) => {
+    const original: ReportedFill = { ...fill, price: order.averageFillPrice!, fee: '0.1', feeCurrency: 'EUR', feeIncludedInPriceEur: '0.05' };
+    expect(reconcileReportFills([order], [original, { ...original, ...changed }], now))
+      .toMatchObject({ evidence: { status: 'conflict', issues: expect.arrayContaining(['report_fill_conflict']) }, fills: null });
+  });
+  it('does not replace an unknown fee with a reported zero under the same fill ID', () => {
+    const original = { ...fill, price: order.averageFillPrice! };
+    expect(reconcileReportFills([order], [original, { ...original, fee: '0', feeCurrency: 'EUR' }], now))
+      .toMatchObject({ evidence: { status: 'conflict', issues: expect.arrayContaining(['report_fill_conflict']) }, fills: null });
+  });
+  it('deduplicates an identical monetary record without counting its fee twice', () => {
+    const original = { ...fill, price: order.averageFillPrice!, fee: '0.1', feeCurrency: 'EUR', feeIncludedInPriceEur: '0.05' };
+    const result = reconcileReportFills([order], [original, { ...original }], now);
+    expect(result.evidence).toMatchObject({ status: 'matched', orders: [{ fillQuantity: fill.quantity }] });
+    expect(result.fills).toHaveLength(1);
+    expect(result.fills![0].feeEur).toBe('0.1');
+  });
   it('marks partial source coverage even when the returned fills happen to total the order quantity', () => {
     expect(reconcileReportFills([{ ...order, averageFillPrice: fill.price }], [fill], now, true).evidence.issues)
       .toContain('report_fill_coverage_incomplete');
