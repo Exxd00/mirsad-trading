@@ -8,7 +8,7 @@ import { closeDatabase, query, transaction } from '../src/lib/db';
 import { CONFIG } from '../src/lib/execution/v1/model';
 import { loadAuthoritySetupFeeEvidence } from '../src/lib/wallet/authority-environment';
 import { prepareExecutorGasReview, verifyExecutorGasReview } from '../src/lib/wallet/gnosis-executor-gas';
-import { cancelExecutorGasUnsent, markExecutorGasUnknown, readExecutorGasFence, recordExecutorGasHash, rejectExecutorGas,
+import { cancelExecutorGasUnsent, markExecutorGasUnknown, readExecutorGasFence, recordExecutorGasHash, recordExecutorGasProviderUnauthorized, rejectExecutorGas,
   reserveExecutorGas, resolveExecutorGasAttempt, saveExecutorGasArtifact } from '../src/lib/wallet/gnosis-executor-gas-attempts';
 import { parseExecutorGasAttemptResultUI, parseExecutorGasReservationUI, parseExecutorGasReviewUI } from '../src/lib/wallet/gnosis-executor-gas-ui';
 import { configuredGas, GAS_NOW, GAS_OWNER, GAS_TX } from './helpers/executor-gas';
@@ -105,6 +105,64 @@ describe('configured Gnosis executor gas owner review and durable prompt fence',
       await query("UPDATE app_settings SET value=jsonb_set(value,'{profileRevision}','2'::jsonb) WHERE key=$1", [COW_RUNTIME_KEY]); return p;
     } })).rejects.toThrow('wallet_executor_gas_setup_changed');
     expect((await attempts()).rowCount).toBe(0);
+  });
+  it('records only the exact 4100 refusal for its own new snapshot, without spending or clearing later reservations on replay', async () => {
+    const f = await prepared(), { attempt: a } = await reserveExecutorGas(f.input, f.deps);
+    const refused = (code: number, digest = a.snapshotDigest, owner = f.owner) => recordExecutorGasProviderUnauthorized(owner, a.id, digest, code, f.deps);
+    await expect(refused(4001)).rejects.toThrow('wallet_executor_gas_request_invalid');
+    await expect(refused(4100, GAS_TX)).rejects.toThrow('wallet_executor_gas_attempt_changed');
+    await expect(refused(4100, a.snapshotDigest, f.executor)).rejects.toThrow('wallet_executor_gas_attempt_invalid');
+    expect((await readExecutorGasFence(f.owner)).active?.id).toBe(a.id);
+    const result = await refused(4100);
+    expect(result).toMatchObject({ attempt: { status: 'provider-unauthorized', transactionHash: null, resolution: null,
+      providerUnauthorizedProof: expect.stringMatching(/^0x[0-9a-f]{64}$/) }, fence: { blocked: false, active: null } });
+    expect(result.attempt).not.toHaveProperty('unsentAttestationProof');
+    expect(result.attempt).not.toHaveProperty('providerRejectionPolicy');
+    expect(result.attempt).not.toHaveProperty('providerUnauthorizedEvidence');
+    expect((await attempts()).rows[0].value).toMatchObject({ providerUnauthorizedEvidence: {
+      method: 'eth_sendTransaction', code: 4100, snapshotDigest: a.snapshotDigest, sourceFinalizedNonce: 0 } });
+    expect(parseExecutorGasAttemptResultUI(result, f.owner, f.executor)).toEqual(result);
+    const next = await reserveExecutorGas(f.input, f.deps);
+    expect(await refused(4100)).toMatchObject({ attempt: result.attempt, fence: { blocked: true, active: { id: next.attempt.id } } });
+    expect(await loadAuthoritySetupFeeEvidence({ query }, f.owner, 100)).toHaveLength(0);
+  });
+  it.each(['legacy-reserved', 'legacy-unknown', 'unknown', 'hash-recorded'])('keeps %s attempts fenced even after a reported 4100', async kind => {
+    const f = await prepared(), { attempt: a } = await reserveExecutorGas(f.input, f.deps);
+    if (kind.startsWith('legacy-')) {
+      const { key, value } = (await attempts()).rows[0];
+      const legacy = { ...(value as Record<string, unknown>) };
+      delete legacy.providerRejectionPolicy;
+      await query('UPDATE app_settings SET value=$2::jsonb WHERE key=$1', [key, JSON.stringify(legacy)]);
+    }
+    if (kind.endsWith('unknown')) await markExecutorGasUnknown(f.owner, a.id);
+    if (kind === 'hash-recorded') await recordExecutorGasHash(f.owner, a.id, GAS_TX);
+    const prior = await readExecutorGasFence(f.owner), calls = f.fetcher.mock.calls.length;
+    await expect(recordExecutorGasProviderUnauthorized(f.owner, a.id, a.snapshotDigest, 4100, f.deps)).rejects.toThrow('wallet_executor_gas_attempt_changed');
+    expect(await readExecutorGasFence(f.owner)).toEqual(prior);
+    expect(f.fetcher).toHaveBeenCalledTimes(calls);
+  });
+  it('preserves the reservation on changed balances or nonces, expiry, or a concurrent unknown result', async () => {
+    const f = await prepared(), { attempt: a } = await reserveExecutorGas(f.input, f.deps);
+    const refused = () => recordExecutorGasProviderUnauthorized(f.owner, a.id, a.snapshotDigest, 4100, f.deps);
+    f.state.ownerBalance--;
+    await expect(refused()).rejects.toThrow('wallet_executor_gas_provider_refusal_unproved');
+    f.state.ownerBalance++;
+    f.state.executorLatest = f.state.executorBalance = 1n;
+    await expect(refused()).rejects.toThrow('wallet_executor_gas_provider_refusal_unproved');
+    f.state.executorLatest = f.state.executorBalance = 0n;
+    f.state.ownerPending = 1n;
+    await expect(refused()).rejects.toThrow('wallet_executor_gas_pending_nonce');
+    f.state.ownerNonce = 1n;
+    await expect(refused()).rejects.toThrow('wallet_executor_gas_provider_refusal_unproved');
+    f.state.ownerNonce = f.state.ownerPending = 0n;
+    await expect(recordExecutorGasProviderUnauthorized(f.owner, a.id, a.snapshotDigest, 4100, { ...f.deps, transact: work => transaction(tx => {
+      f.setNow(GAS_NOW + 16); return work(tx);
+    }) })).rejects.toThrow('wallet_executor_gas_stale');
+    f.setNow(GAS_NOW);
+    await expect(recordExecutorGasProviderUnauthorized(f.owner, a.id, a.snapshotDigest, 4100, { ...f.deps, transact: async work => {
+      await markExecutorGasUnknown(f.owner, a.id); return transaction(work);
+    } })).rejects.toThrow('wallet_executor_gas_attempt_changed');
+    expect((await readExecutorGasFence(f.owner)).active).toMatchObject({ id: a.id, status: 'unknown' });
   });
   it('requires a new review if the owner balance/retained budget changes, instead of reserving a snapshot the client would reject', async () => {
     const f = await prepared(); f.state.ownerBalance--;

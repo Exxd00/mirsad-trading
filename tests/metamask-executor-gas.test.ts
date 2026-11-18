@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ExecutorGasOwnerRejectedError, isUnsentExecutorGasActionError, watchMetaMask, type WalletProvider, type WalletView } from '../src/lib/wallet/metamask';
+import { ExecutorGasOwnerRejectedError, ExecutorGasProviderUnauthorizedError, isUnsentExecutorGasActionError, watchMetaMask, type WalletProvider, type WalletView } from '../src/lib/wallet/metamask';
+import { gasFailureReport } from '../src/components/WalletExecutorGas';
 import { emptyGasFence, gasAt, gasExecutor, gasOwner, gasReservation, gasResolved, GH } from './fixtures/executor-gas-ui';
 
 const clients: ReturnType<typeof watchMetaMask>[] = [];
+function unauthorizedResult(r: ReturnType<typeof gasReservation>) {
+  const attempt = { ...r.attempt, status: 'provider-unauthorized' as const, providerUnauthorizedProof: GH };
+  return { attempt, fence: { ...emptyGasFence(), last: attempt } };
+}
 afterEach(() => { for (const client of clients.splice(0)) client.close(); vi.useRealTimers(); });
 async function fixture(nonce: unknown = '0x3') {
   vi.useFakeTimers(); vi.setSystemTime(gasAt * 1000);
@@ -92,7 +97,8 @@ describe('executor gas owner-click transport (simulated wallet only)', () => {
     });
     await expect(f.client.executorGasAction(gasReservation(), gasExecutor)).resolves.toEqual({ kind: 'transaction', value: GH });
   });
-  it.each([new Error('timeout'), { code: '4001', requestIssued: false }, { code: -32002 }, null, 'bad-hash'])('keeps %j unknown and does not release on empty GET/new review/TTL', async response => {
+  it.each([new Error('timeout'), { code: '4001', requestIssued: false }, { code: '4100' }, { data: { code: 4100 } },
+    Object.create({ code: 4100 }), { code: -32002 }, null, 'bad-hash'])('keeps %j unknown and does not release on empty GET/new review/TTL', async response => {
     const f = await fixture(), original = f.request.getMockImplementation()!, r = gasReservation();
     f.request.mockImplementation(async req => {
       if (req.method !== 'eth_sendTransaction') return original(req);
@@ -101,8 +107,11 @@ describe('executor gas owner-click transport (simulated wallet only)', () => {
     });
     const error: unknown = await f.client.executorGasAction(r, gasExecutor).catch(e => e as unknown);
     expect(isUnsentExecutorGasActionError(error)).toBe(false); expect(error).toHaveProperty('requestIssued', true);
+    expect(error).not.toBeInstanceOf(ExecutorGasProviderUnauthorizedError);
+    expect(gasFailureReport(r.attempt, error, true, null)).toEqual({ action: 'unknown', attemptId: r.attempt.id });
     f.client.executorGasAttemptResult({ attempt: null, fence: emptyGasFence() }, gasExecutor);
     f.client.executorGasAttemptResult(gasResolved(r, 'owner-cancelled-unsent'), gasExecutor);
+    f.client.executorGasAttemptResult(unauthorizedResult(r), gasExecutor);
     await vi.advanceTimersByTimeAsync(91000);
     await expect(f.client.executorGasAction(gasReservation(), gasExecutor)).rejects.toThrow('wallet_executor_gas_attempt_pending');
   });
@@ -111,10 +120,57 @@ describe('executor gas owner-click transport (simulated wallet only)', () => {
     f.request.mockImplementation(req => req.method === 'eth_sendTransaction' ? Promise.reject({ code: 4001 }) : original(req));
     const error: unknown = await f.client.executorGasAction(r, gasExecutor).catch(e => e as unknown);
     expect(error).toBeInstanceOf(ExecutorGasOwnerRejectedError); expect(error).toHaveProperty('code', 4001);
+    expect(gasFailureReport(r.attempt, error, true, null)).toEqual({ action: 'reject', attemptId: r.attempt.id, code: 4001 });
+    f.client.executorGasAttemptResult(unauthorizedResult(r), gasExecutor);
     f.client.executorGasAttemptResult(gasResolved(gasReservation(), 'owner-rejected'), gasExecutor);
     await expect(f.client.executorGasAction(gasReservation(), gasExecutor)).rejects.toThrow('wallet_executor_gas_attempt_pending');
     f.client.executorGasAttemptResult(gasResolved(r, 'owner-rejected'), gasExecutor); f.request.mockImplementation(original);
     await expect(f.client.executorGasAction(gasReservation(), gasExecutor)).resolves.toMatchObject({ value: GH });
+  });
+  it('keeps a direct 4100 issued until the matching authenticated provider denial is recorded', async () => {
+    const f = await fixture(), original = f.request.getMockImplementation()!, r = gasReservation();
+    f.request.mockImplementation(req => req.method === 'eth_sendTransaction'
+      ? Promise.reject(Object.assign(new Error('unauthorized'), { code: 4100 })) : original(req));
+    const error = await f.client.executorGasAction(r, gasExecutor).catch(e => e);
+    expect(error).toBeInstanceOf(ExecutorGasProviderUnauthorizedError);
+    expect(error).toMatchObject({ code: 4100, requestIssued: true });
+    expect(isUnsentExecutorGasActionError(error)).toBe(false);
+    expect(gasFailureReport(r.attempt, error, true, null)).toEqual({
+      action: 'provider-unauthorized', attemptId: r.attempt.id, snapshotDigest: r.attempt.snapshotDigest, code: 4100,
+    });
+    expect(gasFailureReport(r.attempt, { code: 4100 }, true, null)).toEqual({ action: 'unknown', attemptId: r.attempt.id });
+    expect(gasFailureReport(r.attempt, error, true, GH)).toEqual({ action: 'unknown', attemptId: r.attempt.id });
+    const denied = unauthorizedResult(r);
+    const { providerUnauthorizedProof: _proof, ...unproved } = denied.attempt;
+    for (const result of [gasResolved(r, 'owner-rejected'), unauthorizedResult(gasReservation()),
+      { attempt: unproved, fence: { ...emptyGasFence(), last: unproved } }]) {
+      f.client.executorGasAttemptResult(result, gasExecutor);
+      await expect(f.client.executorGasAction(gasReservation(), gasExecutor)).rejects.toThrow('wallet_executor_gas_attempt_pending');
+    }
+    expect(f.send()).toHaveLength(1);
+    f.client.executorGasAttemptResult(denied, gasExecutor);
+    expect(f.request.mock.calls.some(([q]) => q.method === 'eth_requestAccounts')).toBe(false);
+    expect(f.send()).toHaveLength(1);
+    f.request.mockImplementation(original);
+    await expect(f.client.executorGasAction(gasReservation(), gasExecutor)).resolves.toMatchObject({ value: GH });
+  });
+  it('keeps pre-send 4100 and hydrated unknown attempts separate from a send rejection', async () => {
+    const f = await fixture(), original = f.request.getMockImplementation()!, r = gasReservation();
+    f.request.mockImplementation(req => req.method === 'eth_getTransactionCount' ? Promise.reject({ code: 4100 }) : original(req));
+    const error = await f.client.executorGasAction(r, gasExecutor).catch(e => e);
+    expect(isUnsentExecutorGasActionError(error)).toBe(true);
+    expect(error).not.toBeInstanceOf(ExecutorGasProviderUnauthorizedError);
+    expect(gasFailureReport(r.attempt, error, true, null)).toEqual({
+      action: 'cancel-unsent', attemptId: r.attempt.id, snapshotDigest: r.attempt.snapshotDigest, requestIssued: false,
+    });
+    expect(f.send()).toHaveLength(0);
+
+    const reloaded = await fixture(), unknown = { ...r.attempt, status: 'unknown' as const };
+    for (const active of [r.attempt, unknown, r.attempt])
+      reloaded.client.executorGasAttemptResult({ attempt: null, fence: { blocked: true, active, last: active } }, gasExecutor);
+    reloaded.client.executorGasAttemptResult(unauthorizedResult(r), gasExecutor);
+    await expect(reloaded.client.executorGasAction(gasReservation(), gasExecutor)).rejects.toThrow('wallet_executor_gas_attempt_pending');
+    expect(reloaded.send()).toHaveLength(0);
   });
   it('requires matching runtime/profile/hash/value canonical resolution, then permits only a new explicit reserved review', async () => {
     const f = await fixture(), r = gasReservation(); await f.client.executorGasAction(r, gasExecutor);

@@ -3,7 +3,7 @@ import { closeDatabase, ensureSchema, query } from '../src/lib/db';
 import { hashPassword, issueLoginCsrf, login, sessionCookieName } from '../src/lib/auth';
 const services = vi.hoisted(() => ({ prepareExecutorGasReview: vi.fn() }));
 const attempts = vi.hoisted(() => ({ cancelExecutorGasUnsent: vi.fn(), markExecutorGasUnknown: vi.fn(), readExecutorGasFence: vi.fn(),
-  recordExecutorGasHash: vi.fn(), rejectExecutorGas: vi.fn(), reserveExecutorGas: vi.fn(), resolveExecutorGasAttempt: vi.fn(), saveExecutorGasArtifact: vi.fn() }));
+  recordExecutorGasHash: vi.fn(), recordExecutorGasProviderUnauthorized: vi.fn(), rejectExecutorGas: vi.fn(), reserveExecutorGas: vi.fn(), resolveExecutorGasAttempt: vi.fn(), saveExecutorGasArtifact: vi.fn() }));
 vi.mock('../src/lib/wallet/gnosis-executor-gas', async original => ({ ...await original<typeof import('../src/lib/wallet/gnosis-executor-gas')>(), ...services }));
 vi.mock('../src/lib/wallet/gnosis-executor-gas-attempts', () => attempts);
 import { GET, POST } from '../src/app/api/wallet/strategy/executor-gas/route';
@@ -74,6 +74,19 @@ describe('owner-only bounded native executor funding API', () => {
     const response = await GET(request); expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ fence: { blocked: false, active: null } });
     expect(services.prepareExecutorGasReview).not.toHaveBeenCalled(); expect(attempts.saveExecutorGasArtifact).not.toHaveBeenCalled();
+  });
+  it('requires an authenticated, exact numeric provider refusal attached to the original reservation snapshot', async () => {
+    const input = { action: 'provider-unauthorized', owner, chainId: 100, attemptId: id, snapshotDigest: digest, code: 4100 };
+    expect((await POST(request(null, input))).status).toBe(401);
+    const s = await session();
+    for (const override of [{ code: '4100' }, { code: 4001 }, { code: -32000 }, { requestIssued: false },
+      { snapshotDigest: undefined }, { transactionHash: digest }, { cause: { code: 4001 } }, { chainId: 1 }])
+      expect((await POST(request(s, { ...input, ...override }))).status).toBe(409);
+    expect(attempts.recordExecutorGasProviderUnauthorized).not.toHaveBeenCalled();
+    expect((await POST(request(s, input))).status).toBe(200);
+    expect(attempts.recordExecutorGasProviderUnauthorized).toHaveBeenCalledExactlyOnceWith(owner, id, digest, 4100);
+    expect(attempts.cancelExecutorGasUnsent).not.toHaveBeenCalled();
+    expect(attempts.rejectExecutorGas).not.toHaveBeenCalled();
   });
   it('sanitizes raw provider/SQL failures without changing a pending attempt or returning credentials', async () => {
     services.prepareExecutorGasReview.mockRejectedValueOnce(new Error('https://private:secret@rpc.invalid'));

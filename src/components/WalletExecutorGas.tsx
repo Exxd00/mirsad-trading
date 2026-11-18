@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { isUnsentExecutorGasActionError, type Snapshot } from '@/lib/wallet/metamask';
+import { ExecutorGasOwnerRejectedError, ExecutorGasProviderUnauthorizedError, isUnsentExecutorGasActionError, type Snapshot } from '@/lib/wallet/metamask';
 import type { ExecutorGasAudit } from '@/lib/wallet/gnosis-executor-gas';
 import type { ExecutorGasAttemptView, ExecutorGasFence, ExecutorGasReservation } from '@/lib/wallet/gnosis-executor-gas-attempts';
 import { parseExecutorGasReviewUI, parseExecutorGasReservationUI, parseExecutorGasAttemptResultUI } from '@/lib/wallet/gnosis-executor-gas-ui';
@@ -15,7 +15,19 @@ const endpoint = '/api/wallet/strategy/executor-gas';
 const timeLabel = (millis: number) => new Date(millis).toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const amount = (raw: string) => { const p = raw.padStart(19, '0'), f = p.slice(-18).replace(/0+$/, ''); return p.slice(0, -18) + (f ? '.' + f : ''); };
 const labels = { reserved: 'حُفظ الطلب؛ قد تكون نافذة المحفظة مفتوحة', 'hash-recorded': 'المعاملة بانتظار تأكيد السلسلة', unknown: 'نتيجة المحفظة غير محسومة',
+  'provider-unauthorized': 'لم يسمح MetaMask لمرصاد بطلب التحويل من هذا الحساب.',
   'owner-rejected': 'رفض المالك الطلب', 'owner-cancelled-unsent': 'أُغلق الطلب قبل إرساله بعد فحص المصدر', confirmed: 'تأكد التحويل النهائي', reverted: 'أثبتت السلسلة فشل التحويل' };
+
+export function gasFailureReport(attempt: Pick<ExecutorGasAttemptView, 'id' | 'snapshotDigest'>,
+  error: unknown, requested: boolean, knownHash: string | null) {
+  const { id: attemptId, snapshotDigest } = attempt;
+  if (knownHash) return { action: 'unknown', attemptId };
+  if (!requested || isUnsentExecutorGasActionError(error))
+    return { action: 'cancel-unsent', attemptId, snapshotDigest, requestIssued: false };
+  if (error instanceof ExecutorGasOwnerRejectedError) return { action: 'reject', attemptId, code: error.code };
+  if (error instanceof ExecutorGasProviderUnauthorizedError) return { action: 'provider-unauthorized', attemptId, snapshotDigest, code: error.code };
+  return { action: 'unknown', attemptId };
+}
 
 export function WalletExecutorGas({ wallet, executor, csrfToken, ownerAction, syncResult, onSettled, onStateChange, disabled = false }: {
   wallet: Snapshot | null; executor: string; csrfToken: string | null; ownerAction: ExecutorGasOwnerAction;
@@ -114,20 +126,19 @@ export function WalletExecutorGas({ wallet, executor, csrfToken, ownerAction, sy
       reservation = parseExecutorGasReservationUI(await post({ action: 'reserve', expectedExecutor: target, reviewDigest: audit.review.digest, proofDigest: audit.freshProof.digest }, account, token), account, target);
       if (!reservation || reservation.review.digest !== audit.review.digest) throw new Error('تعذر إثبات الطلب المحفوظ. أعد قراءة الحالة.');
       if (!alive.current || ticket !== epoch.current) throw new Error('تغير عرض المحفظة قبل فتح الطلب.');
+      setFence({ blocked: true, active: reservation.attempt, last: reservation.attempt });
       requested = true;
       knownHash = (await ownerAction(reservation, target)).value;
       accept(await post({ action: 'record', attemptId: reservation.attempt.id, transactionHash: knownHash }, account, token), account, ticket);
       if (alive.current && ticket === epoch.current) setNotice(`حُفظت المعاملة ${knownHash}. انتظر تأكيدها النهائي قبل تجديد الإعداد.`);
     } catch (e) {
       if (reservation) {
-        const code = (e as { code?: unknown } | null)?.code;
-        const payload = knownHash ? { action: 'unknown', attemptId: reservation.attempt.id }
-          : !requested || isUnsentExecutorGasActionError(e) ? { action: 'cancel-unsent', attemptId: reservation.attempt.id, snapshotDigest: reservation.attempt.snapshotDigest, requestIssued: false }
-            : code === 4001 ? { action: 'reject', attemptId: reservation.attempt.id, code: 4001 } : { action: 'unknown', attemptId: reservation.attempt.id };
+        const payload = gasFailureReport(reservation.attempt, e, requested, knownHash);
         try { accept(await post(payload, account, token), account, ticket); } catch { /* Preserve the server fence, never resend. */ }
       }
       if (alive.current && ticket === epoch.current) {
-        setError(e instanceof Error ? e.message : 'لم تُحسم نتيجة المحفظة.');
+        setError(e instanceof ExecutorGasProviderUnauthorizedError ? labels['provider-unauthorized']
+          : e instanceof Error ? e.message : 'لم تُحسم نتيجة المحفظة.');
         if (knownHash) { setRecoveryHash(knownHash); setNotice(`معرّف المحفظة ${knownHash}. لم يتأكد حفظه؛ استخدم التحقق من المصدر دون إعادة الإرسال.`); }
       }
     } finally { if (alive.current && ticket === epoch.current) { busy.current = false; setPending(false); setAudit(null); } }
@@ -168,6 +179,7 @@ export function WalletExecutorGas({ wallet, executor, csrfToken, ownerAction, sy
   }
   useExecutorGasReceiptPolling(owner, chain, target, fence, resolve);
   const current = !!audit && audit.expiresAt * 1000 > now, r = audit?.review, active = fence?.active;
+  const unauthorized = error === labels['provider-unauthorized'] || (!active && !audit && fence?.last?.status === 'provider-unauthorized');
   return <section aria-labelledby="executor-gas-heading">
     <h3 id="executor-gas-heading">احتياطي غاز المشغّل على Gnosis</h3>
     <p>يرسل المالك العجز فقط إلى حساب المشغّل المثبت في الإعداد. هذا احتياطي تشغيل محدود؛ لا يفعّل التداول ولا يتجدد تلقائيًا.</p>
@@ -182,11 +194,14 @@ export function WalletExecutorGas({ wallet, executor, csrfToken, ownerAction, sy
     {waitSchedule && <p role="status">يفحص مرصاد التكلفة عندما يكون هذا التبويب ظاهرًا حتى {timeLabel(waitSchedule.deadline)} بالتوقيت المحلي.
       {pending ? ' جارٍ فحص التكلفة.' : waitSchedule.nextAt && waitSchedule.nextAt < waitSchedule.deadline ? ` أقرب فحص تالٍ عند ${timeLabel(waitSchedule.nextAt)}.` : ''}</p>}
     {pending && !waitSchedule && <p role="status">جارٍ إكمال الخطوة…</p>}
-    {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
+    {error && error !== labels['provider-unauthorized'] && <p role="alert">{error}</p>}
+    {unauthorized && <p role="alert">{labels['provider-unauthorized']} افتح قفل MetaMask إذا كانت مقفلة، ثم تحقق في المواقع المتصلة من أن مرصاد متصل بحساب المالك <bdi dir="ltr">{owner}</bdi> على شبكة Gnosis (100).</p>}
+    {notice && <p role="status">{notice}</p>}
     {active && <div role="status"><p>{labels[active.status]}.</p>
       {active.transactionHash ? <p><bdi dir="ltr">{active.transactionHash}</bdi></p> : <label>معرّف العملية من سجل المحفظة إذا أُرسلت:
         <input dir="ltr" maxLength={66} value={recoveryHash} onChange={e => setRecoveryHash(e.target.value.trim())} disabled={pending} autoComplete="off" spellCheck={false} /></label>}
       <button type="button" className={styles.button} disabled={pending || (!active.transactionHash && !/^0x[0-9a-fA-F]{64}$/.test(recoveryHash))} onClick={() => void resolve()}>التحقق من تأكيد الغاز</button>
+      {!active.transactionHash && <p>راجع الطلبات المفتوحة وسجل «النشاط» في MetaMask على Gnosis. إذا وجدت تحويل xDAI إلى حساب المشغّل أعلاه، انسخ معرّفه في الخانة. يبقى الطلب معلّقًا حتى تتضح نتيجته.</p>}
       <p>{active.status === 'hash-recorded' ? 'يتابع مرصاد تأكيد التحويل على Gnosis لمدة تصل إلى ست دقائق عندما يكون التبويب ظاهرًا. يبقى زر التحقق متاحًا بعد ذلك.' : 'يبقى الطلب محجوبًا حتى حسمه. التحقق ينتظر نهائية Gnosis.'}</p>
     </div>}
     {audit?.status === 'funded' && <div role="status"><p>الاحتياطي المقروء كافٍ. حدّث الإعداد قبل إعداد مراجعة صلاحية جديدة.</p>
