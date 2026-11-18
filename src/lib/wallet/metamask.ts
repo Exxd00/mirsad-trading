@@ -68,6 +68,12 @@ function quantity(raw: unknown) {
   if (typeof raw !== 'string' || !quantityPattern.test(raw)) throw new Error('invalid_quantity');
   return BigInt(raw);
 }
+function pendingTransactionCount(raw: unknown): bigint {
+  // MetaMask can return its locally tracked pending nonce as a JavaScript number.
+  if (typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0) return BigInt(raw);
+  if (typeof raw === 'string' && quantityPattern.test(raw)) return BigInt(raw);
+  throw new Error('invalid_pending_nonce');
+}
 function firstAddress(raw: unknown): string | null {
   if (!Array.isArray(raw)) throw new Error('invalid_accounts');
   if (!raw.length) return null;
@@ -244,7 +250,7 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
           } finally { if (timer !== undefined) clearTimeout(timer); }
           if (!alive || current !== provider || session !== epoch || !requested || bound.chainId !== '100' || bound.address?.toLowerCase() !== owner)
             throw new Error('wallet_executor_gas_wallet_changed');
-          if (quantity(pendingNonce) !== BigInt(reservation.freshProof.sourcePendingNonce)) throw new Error('wallet_executor_gas_nonce_changed');
+          if (pendingTransactionCount(pendingNonce) !== BigInt(reservation.freshProof.sourcePendingNonce)) throw new Error('wallet_executor_gas_nonce_changed');
           const checked = parseExecutorGasReservationUI(reservation, owner, executor);
           if (!checked || checked.attempt.snapshotDigest !== pending.snapshotDigest) throw new Error('wallet_executor_gas_review_invalid');
           assertExecutorGasReservationFresh(checked);
@@ -438,7 +444,7 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
         if (action === 'deploy') {
           const deployment = review.deploymentStep;
           if (!deployment || deployment.blocker || !deployment.gasEstimate) throw new Error('نشر عقد الحماية محجوب حتى يتوفر تقدير الغاز والتحقق من المسودة.');
-          const nonce = quantity(await provider.request({ method: 'eth_getTransactionCount', params: [review.owner, 'pending'] }));
+          const nonce = pendingTransactionCount(await provider.request({ method: 'eth_getTransactionCount', params: [review.owner, 'pending'] }));
           await assertOwner();
           if (nonce !== BigInt(deployment.transaction.nonce)) throw new Error('تغيّر ترتيب معاملات الحساب. أنشئ مراجعة نشر جديدة.');
           assertFresh();
@@ -500,7 +506,7 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
           if (chainId !== 100 || (error as { code?: unknown } | null)?.code !== 4902) throw error;
           await assertAccount();
           await provider.request({ method: 'wallet_addEthereumChain', params: [{ chainId: '0x64', chainName: 'Gnosis',
-            nativeCurrency: { name: 'xDAI', symbol: 'xDAI', decimals: 18 }, rpcUrls: ['https://rpc.gnosischain.com'],
+            nativeCurrency: { name: 'xDAI', symbol: 'XDAI', decimals: 18 }, rpcUrls: ['https://rpc.gnosischain.com'],
             blockExplorerUrls: ['https://gnosisscan.io'] }] });
           await assertAccount();
           await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: hex }] });

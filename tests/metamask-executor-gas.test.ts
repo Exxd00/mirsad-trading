@@ -4,9 +4,9 @@ import { emptyGasFence, gasAt, gasExecutor, gasOwner, gasReservation, gasResolve
 
 const clients: ReturnType<typeof watchMetaMask>[] = [];
 afterEach(() => { for (const client of clients.splice(0)) client.close(); vi.useRealTimers(); });
-async function fixture() {
+async function fixture(nonce: unknown = '0x3') {
   vi.useFakeTimers(); vi.setSystemTime(gasAt * 1000);
-  const state = { owner: gasOwner as string, chain: '0x64', nonce: '0x3' }, events = new Map<string, Set<(...args: unknown[]) => void>>();
+  const state = { owner: gasOwner as string, chain: '0x64', nonce }, events = new Map<string, Set<(...args: unknown[]) => void>>();
   const request = vi.fn<WalletProvider['request']>(async ({ method }) => {
     if (method === 'eth_accounts') return [state.owner];
     if (method === 'eth_chainId') return state.chain;
@@ -45,12 +45,27 @@ describe('executor gas owner-click transport (simulated wallet only)', () => {
     r.transaction.to = gasOwner; r.transaction.value = '0x1'; finish([gasOwner]); await action;
     expect(f.send()[0][0].params).toEqual([{ chainId: '0x64', from: gasOwner, to: gasExecutor, value: originalValue, data: '0x' }]);
   });
+  it.each([[0, 0], ['0x0', 0], [19, 19], ['0x13', 19]] as const)(
+    'matches wallet pending nonce %s against source proof %i', async (reported, expected) => {
+      const f = await fixture(reported), r = gasReservation('0', expected);
+      await expect(f.client.executorGasAction(r, gasExecutor)).resolves.toEqual({ kind: 'transaction', value: GH });
+      expect(f.request).toHaveBeenCalledWith({ method: 'eth_getTransactionCount', params: [gasOwner, 'pending'] });
+      expect(f.send()).toHaveLength(1);
+    });
+  it.each(['0x00', '0', '0x', '0xg', -1, 0.5, Number.MAX_SAFE_INTEGER + 1, null])(
+    'treats malformed pending nonce %s as unsent', async reported => {
+      const f = await fixture(reported);
+      const error = await f.client.executorGasAction(gasReservation('0', 0), gasExecutor).catch(e => e);
+      expect(isUnsentExecutorGasActionError(error)).toBe(true);
+      expect(error).toHaveProperty('message', 'invalid_pending_nonce');
+      expect(f.send()).toHaveLength(0);
+    });
   it.each(['account', 'chain', 'nonce', 'expiry', 'event'] as const)('blocks %s drift after awaited reads as locally unsent', async change => {
     const f = await fixture(), r = gasReservation();
     f.request.mockImplementationOnce(async () => {
       if (change === 'account') return [gasExecutor];
       if (change === 'chain') f.state.chain = '0x1';
-      if (change === 'nonce') f.state.nonce = '0x4';
+      if (change === 'nonce') f.state.nonce = 4;
       if (change === 'expiry') vi.setSystemTime((gasAt + 15) * 1000);
       if (change === 'event') f.event('accountsChanged');
       return [gasOwner];

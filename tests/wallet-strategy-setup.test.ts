@@ -134,6 +134,24 @@ describe('owner-only wallet strategy configuration API', () => {
     expect(JSON.stringify(value)).not.toContain(marker); expect(JSON.stringify(value)).not.toContain('postgres://');
     expect(value).not.toHaveProperty('profile'); expect(value).not.toHaveProperty('selectedMarkets');
   });
+
+  it('restores only the public gas identity of a current Gnosis CoW candidate without changing setup', async () => {
+    const input = profile();
+    input.chainId = 100; input.implementation.version = 'cow-wallet-v1';
+    await put(STRATEGY_PROFILE_KEY, envelope(input));
+    const before = await settingsSnapshot(), request = await sessionRequest();
+    const value = await (await GET(request)).json();
+    expect(value.gasCandidate).toEqual({ owner: input.owner, executor: input.executor, revision: 3, expiresAt: input.authority.expiresAt });
+    expect(await settingsSnapshot()).toEqual(before);
+    for (const at of [input.authority.startsAt - 1, input.authority.expiresAt]) {
+      expect((await walletStrategySetup({ query: db.query }, at)).gasCandidate).toBeNull();
+    }
+    for (const variant of [{ ...input, chainId: 1 }, { ...input, implementation: { ...input.implementation, kind: 'provider-neutral' } },
+      { ...input, implementation: { ...input.implementation, version: 'future-release' } }]) {
+      await put(STRATEGY_PROFILE_KEY, envelope(variant));
+      expect((await walletStrategySetup({ query: db.query }, NOW)).gasCandidate).toBeNull();
+    }
+  });
 });
 
 describe('fail-closed configuration evidence without side effects', () => {

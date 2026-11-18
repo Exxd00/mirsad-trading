@@ -1,9 +1,32 @@
 import { describe, expect, it, vi } from 'vitest';
-import { refreshAfterExecutorGas } from '../src/lib/wallet/executor-gas-refresh-ui';
+import { refreshAfterExecutorGas, savedGasExecutor } from '../src/lib/wallet/executor-gas-refresh-ui';
+import { publicAuthority } from '../src/lib/wallet/authority-service';
+import { authorityReview } from './fixtures/wallet-authority';
 import gnosis from '../src/lib/wallet/generated/gnosis-contracts.json';
 
 const now = 1794800000000, owner = '0x1111111111111111111111111111111111111111', executor = '0x2222222222222222222222222222222222222222';
 const wallet = { address: owner, chainId: '100', nativeBalance: '50000000000000000' }, csrf = 'a'.repeat(43);
+describe('gas review on return to a saved Gnosis setup', () => {
+  const candidate = { owner, executor, revision: 3, expiresAt: now / 1000 + 60 };
+  const report = publicAuthority(null, now / 1000);
+  it('recovers the matching active candidate without a setup quote or provider call', () => {
+    expect(savedGasExecutor(candidate, wallet, report, now)).toBe(executor);
+    expect(savedGasExecutor(candidate, { ...wallet, address: executor }, report, now)).toBeNull();
+    expect(savedGasExecutor(candidate, { ...wallet, chainId: '1' }, report, now)).toBeNull();
+    expect(savedGasExecutor(candidate, wallet, report, candidate.expiresAt * 1000)).toBeNull();
+    expect(savedGasExecutor(null, wallet, report, now)).toBeNull();
+    expect(savedGasExecutor(candidate, wallet, null, now)).toBeNull();
+    expect(savedGasExecutor(candidate, wallet, { ...report, state: 'verified' }, now)).toBeNull();
+  });
+  it('recovers a matching unsigned draft only before wallet actions have started', () => {
+    const review = { ...authorityReview(), chainId: 100 as const, owner, executor, profileRevision: 3 } as const;
+    const draft = { ...report, state: 'draft' as const, review };
+    expect(savedGasExecutor(candidate, wallet, draft, now)).toBe(executor);
+    expect(savedGasExecutor({ ...candidate, revision: 4 }, wallet, draft, now)).toBeNull();
+    expect(savedGasExecutor(candidate, wallet, { ...draft, candidateCallBatchIds: ['0x1234'] }, now)).toBeNull();
+    expect(savedGasExecutor(candidate, wallet, { ...draft, review: { ...review, executor: owner } }, now)).toBeNull();
+  });
+});
 function fixture() {
   let live = true, nonce = 0, revision = 1;
   const calls: { path: string; payload: Record<string, unknown> | null }[] = [];

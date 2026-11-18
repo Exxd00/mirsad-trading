@@ -76,6 +76,11 @@ describe('browser wallet binding', () => {
     await expect(readWallet(f.p)).rejects.toThrow('wallet_changed');
     f.client.close();
   });
+  it.each(['eth_chainId', 'eth_getBalance'] as const)('keeps numeric %s responses invalid', async method => {
+    const f = fixture(), read = f.request.getMockImplementation()!;
+    f.request.mockImplementation(req => req.method === method ? Promise.resolve(1) : read(req));
+    await expect(readWallet(f.p)).rejects.toThrow('invalid_quantity');
+  });
   it('ignores other wallets and duplicate announcements, blocks competing claimants even with a prompt in flight', async () => {
     const f = fixture(), rival = fixture();
     f.announce(rival.p, 'org.example'); f.announce(); expect(f.last()).toEqual({ status: 'ready' });
@@ -246,12 +251,16 @@ describe('explicit main strategy wallet operations', () => {
     p.deploymentStep = { compilerVersion: '0.8.30', artifactHash: hash, expectedAddress: p.contracts.enforcer, sender: owner.address, chainId: 1,
       transaction: { data: '0x6000', value: '0x0', nonce: '0x0' }, gasEstimate: '100000', blocker: null };
     const review = createAuthorityReview({ id: randomUUID(), profileRevision: 1, preparation: p, now });
-    const origin = f.request.getMockImplementation()!; let nonce = '0x0';
+    const origin = f.request.getMockImplementation()!; let nonce: unknown = 0;
     f.request.mockImplementation(async req => req.method === 'eth_getTransactionCount' ? nonce : req.method === 'eth_sendTransaction' ? hash : origin(req));
     expect(await reviewedAction(f.client, review, 'deploy')).toEqual({ kind: 'transaction', value: hash });
     expect(f.request).toHaveBeenCalledWith({ method: 'eth_sendTransaction', params: [{ from: owner.address, chainId: '0x1', data: '0x6000', value: '0x0', nonce: '0x0' }] });
     confirmed(f.client, hash);
-    nonce = '0x1';
+    nonce = '0x00';
+    const invalid = await reviewedAction(f.client, review, 'deploy').catch(e => e);
+    expect(isUnsentAuthorityActionError(invalid)).toBe(true);
+    expect(invalid).toHaveProperty('message', 'invalid_pending_nonce');
+    nonce = 1;
     await expect(reviewedAction(f.client, review, 'deploy')).rejects.toThrow('تغيّر ترتيب معاملات الحساب');
     expect(f.request.mock.calls.filter(([q]) => q.method === 'eth_sendTransaction')).toHaveLength(1);
     await expect(reviewedAction(f.client, review, 'sign')).rejects.toThrow('أكمل التحقق من العقود');
@@ -488,7 +497,7 @@ describe('explicit reviewed Gnosis wallet operations', () => {
     });
     expect(f.request.mock.calls.some(([q]) => q.method.startsWith('wallet_'))).toBe(false);
     await f.client.switchNetwork(100);
-    expect(f.request).toHaveBeenCalledWith({ method: 'wallet_addEthereumChain', params: [{ chainId: '0x64', chainName: 'Gnosis', nativeCurrency: { name: 'xDAI', symbol: 'xDAI', decimals: 18 }, rpcUrls: ['https://rpc.gnosischain.com'], blockExplorerUrls: ['https://gnosisscan.io'] }] });
+    expect(f.request).toHaveBeenCalledWith({ method: 'wallet_addEthereumChain', params: [{ chainId: '0x64', chainName: 'Gnosis', nativeCurrency: { name: 'xDAI', symbol: 'XDAI', decimals: 18 }, rpcUrls: ['https://rpc.gnosischain.com'], blockExplorerUrls: ['https://gnosisscan.io'] }] });
     await vi.waitFor(() => expect(f.last()).toMatchObject({ status: 'connected', wallet: { chainId: '100', address } }));
     expect(f.request.mock.calls.some(([q]) => ['wallet_sendCalls', 'eth_sendTransaction', 'eth_signTypedData_v4', 'eth_requestAccounts'].includes(q.method))).toBe(false);
   });

@@ -10,7 +10,7 @@ import type { ExecutorGasFreshProof, ExecutorGasReview } from '../../src/lib/wal
 export const gasOwner = getAddress('0x' + 'a'.repeat(40)), gasExecutor = getAddress('0x' + 'b'.repeat(40));
 export const gasAt = 1794800000, GH = ('0x' + 'ab'.repeat(32)) as Hex;
 export const emptyGasFence = (): ExecutorGasFence => ({ blocked: false, active: null, last: null });
-export function gasReservation(executorBalanceWei = '0'): ExecutorGasReservation {
+export function gasReservation(executorBalanceWei = '0', sourceNonce = 3): ExecutorGasReservation {
   const gasLimits = structuredClone(COW_GNOSIS_SETUP_GAS_LIMITS), budget = executorGasBudgetUI(gasLimits);
   const shortfallWei = (BigInt(budget.targetBalanceWei) > BigInt(executorBalanceWei) ? BigInt(budget.targetBalanceWei) - BigInt(executorBalanceWei) : 0n).toString();
   const latestBlock = { number: '1000', hash: GH, parentHash: GH, timestamp: gasAt }, finalizedBlock = { number: '970', hash: GH, parentHash: GH, timestamp: gasAt - 150 };
@@ -21,7 +21,7 @@ export function gasReservation(executorBalanceWei = '0'): ExecutorGasReservation
     executorBalanceWei, shortfallWei, ownerBalanceWei: '10000000000000000', ownerTransferGasUnits: shortfallWei === '0' ? '0' : '21000', ownerTransferFeeUpperWei: transferFee.toString(),
     ownerDeploymentReserveWei: '100000000000000', ownerReserveWei: '212000000000000',
     ownerRetainedWei: (10000000000000000n - BigInt(shortfallWei) - transferFee).toString(),
-    ownerCosts: 'runtime-fee-cap-review-budget-wallet-fees-and-other-setup-not-certified' as const, sourceNonce: 3, sourcePendingNonce: 3,
+    ownerCosts: 'runtime-fee-cap-review-budget-wallet-fees-and-other-setup-not-certified' as const, sourceNonce, sourcePendingNonce: sourceNonce,
     latestBlock, finalizedBlock, issuedAt: gasAt, expiresAt: gasAt + 90, transaction };
   const review: ExecutorGasReview = { ...base, digest: executorGasUIDigest(base) };
   const proofBase = { version: 1 as const, owner: gasOwner, executor: gasExecutor, profileRevision: review.profileRevision, reviewDigest: review.digest,
@@ -38,7 +38,7 @@ export function gasResolved(r: ExecutorGasReservation, status: 'confirmed' | 're
   const noSend = status === 'owner-rejected' || status === 'owner-cancelled-unsent';
   const attempt: ExecutorGasAttemptView = { ...r.attempt, status, transactionHash: noSend ? null : GH,
     resolution: noSend ? null : { chainId: 100, owner: r.review.owner, executor: r.review.executor, transactionHash: GH,
-      nonce: 3, valueWei: status === 'reverted' ? '0' : r.review.shortfallWei, gasUsed: '21000', effectiveGasPriceWei: '100000000', actualGasWei: '2100000000000',
+      nonce: r.freshProof.sourcePendingNonce, valueWei: status === 'reverted' ? '0' : r.review.shortfallWei, gasUsed: '21000', effectiveGasPriceWei: '100000000', actualGasWei: '2100000000000',
       receiptBlock: { number: '1001', hash: GH, timestamp: gasAt + 5 }, finalizedBlock: { number: '1031', hash: GH, timestamp: gasAt + 155 },
       outcome: status, evidenceDigest: GH }, ...(status === 'owner-cancelled-unsent' ? { unsentAttestationProof: GH } : {}) };
   return { attempt, fence: { ...emptyGasFence(), last: attempt } };

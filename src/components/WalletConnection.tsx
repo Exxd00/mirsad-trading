@@ -5,6 +5,7 @@ import { displayWallet, watchMetaMask, type WalletView } from '@/lib/wallet/meta
 import styles from '@/app/automation/page.module.css';
 import { WalletTrial } from './WalletTrial';
 import { WalletStrategyAuthority } from './WalletStrategyAuthority';
+import type { SavedGasCandidate } from '@/lib/wallet/executor-gas-refresh-ui';
 
 const captions: Record<WalletView['status'], string> = {
   missing: 'لم يجد مرصاد إضافة MetaMask في هذا المتصفح. افتح الصفحة في بروفايل Chrome الذي تستخدم فيه الإضافة.',
@@ -15,7 +16,7 @@ const captions: Record<WalletView['status'], string> = {
   error: 'تعذرت قراءة المحفظة. تحقق من الحساب والشبكة في الإضافة ثم أعد المحاولة.',
   connected: 'الحساب متصل للقراءة. يستعيد مرصاد الاتصال تلقائيًا عند فتح الصفحة ما دامت صلاحية MetaMask متاحة.',
 };
-export function WalletConnection() {
+export function WalletConnection({ gasCandidate }: { gasCandidate: SavedGasCandidate }) {
   const [view, setView] = useState<WalletView | null>(null);
   const [switching, setSwitching] = useState(false), [switchError, setSwitchError] = useState('');
   const switchBusy = useRef(false), alive = useRef(true);
@@ -56,6 +57,7 @@ export function WalletConnection() {
       <p>اختيار الشبكة يغيّر عرض الحساب فقط؛ لا ينقل رصيداً ولا يفعّل التداول.</p>
     </div>
   </section><WalletStrategyAuthority key={'authority:' + (view?.status === 'connected' ? view.wallet.address + ':' + view.wallet.chainId : 'detached')}
+    gasCandidate={gasCandidate}
     wallet={view?.status === 'connected' ? view.wallet : null}
     ownerAction={(review, action, close, reservation) => {
       if (!session.current) throw new Error('أعد ربط المحفظة.');

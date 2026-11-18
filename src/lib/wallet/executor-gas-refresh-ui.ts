@@ -1,4 +1,5 @@
 import type { Snapshot } from './metamask';
+import type { walletStrategySetup } from './strategy-setup';
 import type { AuthorityPublic } from './authority-service';
 import { currentFeasibility, type WalletFeasibility } from './wallet-feasibility';
 import { validWalletFeasibility } from './strategy-network-ui';
@@ -7,6 +8,19 @@ export type WalletSetupView = { status: 'funding-required' | 'configured'; owner
   funding?: { quoteUnit: string; quoteToken: string; quoteRaw: string; ownerGasWei: string; executorGasWei: string };
   markets: { symbol: string }[]; excluded?: { symbol: string; reason: string }[]; blockers: string[] };
 export type WalletAuthorityView = AuthorityPublic & { csrfToken: string };
+export type SavedGasCandidate = Awaited<ReturnType<typeof walletStrategySetup>>['gasCandidate'];
+
+/** A saved address lets the owner read the gas fence. A fresh review still proves the runtime and balance. */
+export function savedGasExecutor(candidate: SavedGasCandidate, wallet: Snapshot | null, report: AuthorityPublic | null, now = Date.now()) {
+  if (!candidate || !wallet || wallet.chainId !== '100' || wallet.address.toLowerCase() !== candidate.owner
+    || now >= candidate.expiresAt * 1000 || !report) return null;
+  if (report.state === 'missing') return candidate.executor;
+  const review = report.review;
+  if (report.state === 'draft' && review?.chainId === 100 && review.profileRevision === candidate.revision
+    && review.owner.toLowerCase() === candidate.owner && review.executor.toLowerCase() === candidate.executor
+    && !report.ownerTransactionHashes.length && !report.candidateTransactionHashes.length && !report.candidateCallBatchIds.length) return candidate.executor;
+  return null;
+}
 const fail = (): never => { throw new Error('wallet_executor_gas_refresh_unavailable'); };
 /** Refreshes unsigned server state after a finalized native transaction consumes
  * the owner nonce. There are no provider, signature, send or entry-enable calls. */

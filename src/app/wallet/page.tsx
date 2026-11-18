@@ -40,7 +40,7 @@ export default async function WalletPage() {
         <p className={styles.sectionNote}>وقت قراءة الإعداد: <bdi>{new Date(setup.readAt * 1000).toISOString()}</bdi>. هذه قراءة للإعداد المحفوظ؛ راجع <Link href="/automation">حالة المحرك والحماية</Link> للتحقق من جاهزية التنفيذ.</p>
       </div> : <p role="alert" className={styles.message}>تعذرت قراءة إعداد المحرك. حالة التنفيذ غير مؤكدة؛ أعد تحديث الصفحة.</p>}
     </section>
-    <WalletConnection />
+    <WalletConnection gasCandidate={setup?.gasCandidate ?? null} />
     <p className={styles.message}>{mode === 'metamask'
       ? 'MetaMask هي جهة التنفيذ الوحيدة. ربط الحساب للقراءة لا يفعّل التداول. تجربة Base Sepolia منفصلة عن استراتيجية المحرك؛ راجع صفحة الأتمتة لمعرفة جاهزيتها.'
       : 'إعداد جهة التنفيذ غير صالح. إرسال الأوامر مغلق حتى تصحيح إعداد المحفظة.'}</p>
