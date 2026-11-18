@@ -1,7 +1,12 @@
 import type { ReportedFill, ReportedOrder } from './source-model';
 import { D, decimal, type SourceFill } from './model';
 
+const fillFields = ['orderId', 'accountId', 'symbol', 'side', 'quantity', 'price', 'baseCurrency',
+  'quoteCurrency', 'createdAt', 'maker', 'fee', 'feeCurrency', 'feeIncludedInPriceEur'] as const satisfies readonly (keyof ReportedFill)[];
+
 export type ReportEvidence = { readAt: number; status: 'matched' | 'conflict' | 'unavailable';
+  archive?: { status: 'complete' | 'partial'; requiredClosedOrders: number; verifiedClosedOrders: number;
+    verified: { orderId: string; verifiedAt: number }[]; lastError: string | null };
   issues: string[]; orders: { orderId: string; quantity: string; fillQuantity: string;
     orderAveragePrice: string | null; fillAveragePrice: string | null; priceDifference: string | null;
     orderFilledAmount: string | null; fillNotional: string; quoteAmountDifference: string | null;
@@ -13,6 +18,9 @@ export function reconcileReportFills(orders: ReportedOrder[], records: ReportedF
   const issues: string[] = truncated ? ['report_fill_coverage_incomplete'] : [];
   const unique = new Map<string, ReportedFill>();
   for (const fill of records) {
+    const prior = unique.get(fill.id);
+    const conflict = prior && fillFields.some(field => prior[field] !== fill[field]);
+    if (conflict) issues.push('report_fill_conflict');
     const order = orders.find(o => o.id === fill.orderId);
     if (!order || fill.accountId !== 'metamask-strategy-v1' || fill.symbol !== order.symbol || fill.side !== order.side
       || fill.baseCurrency !== order.symbol.split('-')[0] || fill.quoteCurrency !== 'EUR'
@@ -20,10 +28,7 @@ export function reconcileReportFills(orders: ReportedOrder[], records: ReportedF
       || !Number.isFinite(Date.parse(fill.createdAt)) || Date.parse(fill.createdAt) / 1000 > readAt + 1) {
       issues.push('report_fill_identity_mismatch'); continue;
     }
-    const prior = unique.get(fill.id);
-    if (prior && (prior.orderId !== fill.orderId || prior.quantity !== fill.quantity || prior.price !== fill.price
-      || prior.createdAt !== fill.createdAt)) issues.push('report_fill_conflict');
-    else unique.set(fill.id, fill);
+    if (!conflict) unique.set(fill.id, fill);
   }
   const rows = orders.map(order => {
     const fills = [...unique.values()].filter(f => f.orderId === order.id);
