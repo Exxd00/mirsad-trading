@@ -284,6 +284,22 @@ describe('explicit reviewed Gnosis wallet operations', () => {
     expect(isUnsentAuthorityActionError(changed)).toBe(true);
     expect(f.request.mock.calls.some(([q]) => q.method === 'wallet_sendCalls')).toBe(false);
   });
+  it('never opens a wallet prompt when the action quote expires during the capabilities check', async () => {
+    const f = fixture({ addresses: [owner.address], chain: '0x64' });
+    await vi.waitFor(() => expect(f.last()?.status).toBe('connected'));
+    const review = reviewFor(100), reservation = authorityReservation(review, 'bootstrap');
+    const read = f.request.getMockImplementation()!;
+    let quoteCurrent = true;
+    f.request.mockImplementation(async request => {
+      if (request.method !== 'wallet_getCapabilities') return read(request);
+      quoteCurrent = false;
+      return { '0x64': { atomic: { status: 'ready' } } };
+    });
+    const error = await f.client.authorityAction(review, 'bootstrap', undefined, reservation, () => quoteCurrent).catch(e => e);
+    expect(quoteCurrent).toBe(false);
+    expect(isUnsentAuthorityActionError(error)).toBe(true);
+    expect(f.request.mock.calls.some(([q]) => q.method === 'wallet_sendCalls')).toBe(false);
+  });
   it('keeps a post-request unknown sticky through expiry, forged unsent errors, empty reads and new reservations', async () => {
     const f = fixture({ addresses: [owner.address], chain: '0x64' }); await vi.waitFor(() => expect(f.last()?.status).toBe('connected'));
     const review = reviewFor(100), r = authorityReservation(review, 'bootstrap'), read = f.request.getMockImplementation()!;

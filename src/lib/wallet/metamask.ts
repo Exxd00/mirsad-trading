@@ -387,7 +387,7 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
         || a.status === 'owner-cancelled-unsent' && !local.issued && !local.reference) locks.delete(key);
     },
     async authorityAction(inputReview: AuthorityReview, action: 'deploy' | 'bootstrap' | 'sign' | 'close', inputClose?: AuthorityCloseReview,
-      inputReservation?: AuthorityActionReservation) {
+      inputReservation?: AuthorityActionReservation, isReviewCurrent?: () => boolean) {
       if (current && (ownerRequests.has(current) || (authorityPending.get(current)?.size ?? 0) > 0)) {
         throw new AuthorityActionError('راجع اتصال محفظة الاستراتيجية. توجد محاولة غير محسومة.', true);
       }
@@ -414,6 +414,7 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
       };
       const assertFresh = () => {
         const now = Math.floor(Date.now() / 1000);
+        if (action !== 'close' && isReviewCurrent && !isReviewCurrent()) throw new Error('انتهت صلاحية بيانات التكلفة أو تغيّرت المراجعة قبل فتح MetaMask.');
         if (action === 'close') {
           if (!close || now >= close.reviewExpiresAt) throw new Error('حدّث مراجعة الإغلاق أولاً.');
         } else if (now >= review.reviewExpiresAt) throw new Error('انتهت صلاحية المراجعة. حدّثها قبل المتابعة.');

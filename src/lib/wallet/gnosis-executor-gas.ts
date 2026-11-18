@@ -8,7 +8,7 @@ import { CONFIG } from '../execution/v1/model';
 import { loadStrategyProfile, STRATEGY_PROFILE_KEY } from './strategy-profile';
 import { loadAuthority, AUTHORITY_KEY } from './authority-store';
 import { cowExecutor, COW_RUNTIME_KEY, loadCowRuntime, runtimeMatchesProfile, type CowRuntimeConfig } from './cow-runtime-config';
-import { assertCowSetupFeasible } from './cow-feasibility';
+import { assertCowSetupFeasible, CowSetupFeasibilityError } from './cow-feasibility';
 import { AuthorityError } from './authority';
 import { COW_GNOSIS_SETUP_GAS_LIMITS } from './wallet-feasibility';
 import { normalizeCowGasLimits } from './cow-gas-limits';
@@ -121,7 +121,13 @@ async function build(owner: string, executor: string, deps: ExecutorGasDependenc
   const work = async () => {
     const context = await loadExecutorGasContext(owner, executor, deps); live();
     try { await (deps.feasibility ?? assertCowSetupFeasible)(context.owner, 100); }
-    catch (e) { if (e instanceof AuthorityError && e.code === 'wallet_authority_feasibility_blocked') return fail('wallet_executor_gas_feasibility_blocked'); throw e; } live();
+    catch (e) {
+      if (e instanceof CowSetupFeasibilityError && e.marketCondition === 'cost-above-cap') return fail('wallet_executor_gas_cost_above_cap');
+      if (e instanceof CowSetupFeasibilityError && e.marketCondition === 'quote-expired') return fail('wallet_executor_gas_cost_expired');
+      if (e instanceof AuthorityError && e.code === 'wallet_authority_feasibility_blocked') return fail('wallet_executor_gas_feasibility_blocked');
+      throw e;
+    }
+    live();
     let history: Hex; try { history = await historyReady(deps, clock()); } catch { return fail('wallet_executor_gas_history_required'); } live();
     const evidence = await (deps.chain ?? readExecutorGasChain)({ owner: context.owner, executor: context.executor, config: context.config }, { clock }); live();
     try { if (history !== await historyReady(deps, clock())) return fail('wallet_executor_gas_history_required'); } catch { return fail('wallet_executor_gas_history_required'); } live();

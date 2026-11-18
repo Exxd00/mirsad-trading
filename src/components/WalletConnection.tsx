@@ -59,9 +59,9 @@ export function WalletConnection({ gasCandidate }: { gasCandidate: SavedGasCandi
   </section><WalletStrategyAuthority key={'authority:' + (view?.status === 'connected' ? view.wallet.address + ':' + view.wallet.chainId : 'detached')}
     gasCandidate={gasCandidate}
     wallet={view?.status === 'connected' ? view.wallet : null}
-    ownerAction={(review, action, close, reservation) => {
+    ownerAction={(review, action, close, reservation, isReviewCurrent) => {
       if (!session.current) throw new Error('أعد ربط المحفظة.');
-      return session.current.authorityAction(review, action, close, reservation);
+      return session.current.authorityAction(review, action, close, reservation, isReviewCurrent);
     }} authorityActionState={value => {
       session.current?.authorityActionState(value);
     }} fundingAction={(reservation, phase) => {
