@@ -90,7 +90,7 @@ export function WalletFundingReview({ wallet, csrfToken, ownerAction, syncResult
   }, [audit]);
   const fresh = !!audit && audit.owner.toLowerCase() === owner && audit.expiresAt * 1000 > now;
   async function quote() {
-    if (!owner || !csrfToken || busy.current || disabled || wallet?.chainId !== '1') return;
+    if (!owner || !csrfToken || !fence || fence.blocked || busy.current || disabled || wallet?.chainId !== '1') return;
     const ticket = epoch.current, control = new AbortController(); request.current = control;
     busy.current = true; setPending(true); setReviewed(false); setError(''); setNotice('');
     try {
@@ -160,15 +160,16 @@ export function WalletFundingReview({ wallet, csrfToken, ownerAction, syncResult
     finally { if (alive.current && ticket === epoch.current) { busy.current = false; setPending(false); } }
   }
   const review = audit?.review, active = fence?.active;
+  const canReviewFunding = !!fence && !fence.blocked;
   const finiteApproved = !!review && audit?.freshProof?.sourceAllowanceRaw === review.approval.amountRaw;
   const canAct = !disabled && !pending && reviewed && fresh && !!audit?.ownerReviewAllowed && !fence?.blocked && wallet?.chainId === '1';
   return <section aria-labelledby="wallet-funding-heading">
     <h3 id="wallet-funding-heading">مراجعة تمويل Gnosis من الرصيد الحالي</h3>
-    <p>المسار المقترح يستخدم إجمالي 10 mUSD من Ethereum لإرسال USDC.e وجزء مخصص لغاز xDAI إلى حسابك على Gnosis. يظل فتح طلب المحفظة محجوبًا حتى اكتمال دليل السوق ومراجعة المسار.</p>
+    {canReviewFunding && <p>المسار المقترح يستخدم إجمالي 10 mUSD من Ethereum لإرسال USDC.e وجزء مخصص لغاز xDAI إلى حسابك على Gnosis. يظل فتح طلب المحفظة محجوبًا حتى اكتمال دليل السوق ومراجعة المسار.</p>}
     <p>قبل تفعيل المحرك تبقى مراجعة الصلاحية وتكلفة الدورة وحماية الإلغاء وتوقيت المجدول مطلوبة.</p>
-    {wallet?.chainId !== '1' && <p>اختر Ethereum (1) في أزرار المحفظة أعلاه لقراءة مراجعة التمويل. لا ينقل اختيار الشبكة الرصيد.</p>}
+    {canReviewFunding && wallet?.chainId !== '1' && <p>اختر Ethereum (1) في أزرار المحفظة أعلاه لقراءة مراجعة التمويل.</p>}
     <div className={styles.controls}>
-      <button type="button" className={styles.button} disabled={disabled || pending || !owner || !csrfToken || wallet?.chainId !== '1'} onClick={() => void quote()}>قراءة عرض التمويل والرسوم</button>
+      {canReviewFunding && <button type="button" className={styles.button} disabled={disabled || pending || !owner || !csrfToken || wallet?.chainId !== '1'} onClick={() => void quote()}>قراءة عرض التمويل والرسوم</button>}
       <button type="button" className={styles.button} disabled={pending || !owner} onClick={() => void read()}>تحديث الحالة المحفوظة</button>
     </div>
     {pending && <p role="status">جارٍ إكمال الخطوة الحالية…</p>}
@@ -183,9 +184,9 @@ export function WalletFundingReview({ wallet, csrfToken, ownerAction, syncResult
       <p>يبقى الإرسال محجوبًا حتى حسم الطلب المحفوظ. لا يثبت انتهاء وقت المراجعة أن الطلب رُفض.</p>
       <p>ينتظر التحقق نهائية شبكة Ethereum، وقد يستغرق عدة دقائق.</p>
     </div>}
-    {fence?.fundCompleted && <p role="status">تأكدت عملية التمويل على شبكة المصدر. يُثبت وصول USDC.e وxDAI بفحص الأرصدة على Gnosis قبل إعداد المحرك.</p>}
-    {fence?.lastApproval && <p>تأكدت الموافقة المحدودة على المصدر. اقرأ عرضًا حديثًا لمراجعة التحويل.</p>}
-    {audit && <>
+    {fence?.fundCompleted && <p role="status">تأكد التمويل على شبكة Ethereum. للتحقق من وصول USDC.e وxDAI على Gnosis، {wallet?.chainId !== '100' && 'اختر Gnosis ثم '}<a href="#wallet-feasibility-heading">افحص رصيد المحفظة وتكلفة التشغيل</a>.</p>}
+    {fence?.lastApproval && canReviewFunding && <p>تأكدت الموافقة المحدودة على المصدر. اقرأ عرضًا حديثًا لمراجعة التحويل.</p>}
+    {audit && canReviewFunding && <>
       <FundingReviewAvailability audit={audit} fresh={fresh} />
       <p role="status">{audit.ownerReviewAllowed && fresh ? 'اكتملت متطلبات عرض الطلب على صاحب المحفظة.' : 'متطلبات فتح طلب المحفظة لم تكتمل بعد.'}</p>
       <p>وقت القراءة: <bdi dir="ltr">{stamp(audit.readAt)}</bdi>؛ نهاية المراجعة: <bdi dir="ltr">{stamp(audit.expiresAt)}</bdi>.</p>

@@ -191,8 +191,29 @@ export async function auditCowFeasibility(ownerInput: string, chainId: number,
     ], samples, maximumCostFraction: '0.004', decision, blockers, setupCosts: 'not-estimated', createdExecutionState: false };
 }
 
+export class CowSetupFeasibilityError extends AuthorityError {
+  readonly marketCondition: 'cost-above-cap' | 'quote-expired' | null;
+
+  constructor(audit: Pick<WalletFeasibility, 'decision' | 'expiresAt' | 'blockers'>, now: number) {
+    super('wallet_authority_feasibility_blocked');
+    const causes = audit.blockers.filter(reason => reason !== 'wallet_sample_feasibility_unproven');
+    const onlyCostCeiling = causes.length > 0 && causes.every(reason =>
+      reason === 'wallet_sample_cost_ceiling_exceeded' || reason === 'wallet_sample_entry_fee_exceeds_roundtrip_cap');
+    const onlyStaleQuotes = causes.length > 0 && causes.every(reason => reason === 'wallet_sample_cost_stale');
+    const expired = audit.expiresAt <= now;
+    if ((audit.decision === 'eligible-for-setup' && expired) || onlyStaleQuotes || (onlyCostCeiling && expired)) {
+      this.marketCondition = 'quote-expired';
+    } else if (audit.decision === 'blocked' && onlyCostCeiling) {
+      this.marketCondition = 'cost-above-cap';
+    } else {
+      this.marketCondition = null;
+    }
+  }
+}
+
 export async function assertCowSetupFeasible(owner: string, chainId: number) {
   const audit = await auditCowFeasibility(owner, chainId);
-  if (audit.decision !== 'eligible-for-setup' || audit.expiresAt <= Date.now()) throw new AuthorityError('wallet_authority_feasibility_blocked');
+  const now = Date.now();
+  if (audit.decision !== 'eligible-for-setup' || audit.expiresAt <= now) throw new CowSetupFeasibilityError(audit, now);
   return audit;
 }

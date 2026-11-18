@@ -13,6 +13,7 @@ import { cancelExecutorGasUnsent, markExecutorGasUnknown, readExecutorGasFence, 
 import { parseExecutorGasAttemptResultUI, parseExecutorGasReservationUI, parseExecutorGasReviewUI } from '../src/lib/wallet/gnosis-executor-gas-ui';
 import { configuredGas, GAS_NOW, GAS_OWNER, GAS_TX } from './helpers/executor-gas';
 import { COW_RUNTIME_KEY } from '../src/lib/wallet/cow-runtime-config';
+import { CowSetupFeasibilityError } from '../src/lib/wallet/cow-feasibility';
 beforeEach(async () => {
   await closeDatabase(); vi.stubEnv('NODE_ENV', 'test'); vi.stubEnv('DATABASE_URL', ''); vi.stubEnv('VERCEL', ''); vi.stubEnv('VERCEL_ENV', '');
   vi.stubEnv('LOCAL_DATABASE_PATH', 'memory://'); vi.stubEnv('ENCRYPTION_KEY', randomBytes(32).toString('base64')); vi.stubEnv('MIRSAD_RETIRE_LEGACY_CONNECTION', undefined);
@@ -27,6 +28,23 @@ async function prepared() {
 }
 const attempts = () => query<{ key: string; value: unknown }>("SELECT key,value FROM app_settings WHERE key LIKE 'wallet:gnosis:executor-gas:v1:%:attempt:%'");
 describe('configured Gnosis executor gas owner review and durable prompt fence', () => {
+  it('retries only a cost-only rejection or an expired quote and leaves the wallet untouched', async () => {
+    const f = await configuredGas(), at = GAS_NOW * 1000;
+    const checks = [
+      { decision: 'blocked', blockers: ['wallet_sample_feasibility_unproven', 'wallet_sample_cost_ceiling_exceeded'], expiresAt: at + 1000, expected: 'wallet_executor_gas_cost_above_cap' },
+      { decision: 'eligible-for-setup', blockers: [], expiresAt: at, expected: 'wallet_executor_gas_cost_expired' },
+      { decision: 'unproven', blockers: ['wallet_sample_cost_stale'], expiresAt: at + 1000, expected: 'wallet_executor_gas_cost_expired' },
+      { decision: 'blocked', blockers: ['wallet_owner_gas_unavailable', 'wallet_sample_cost_ceiling_exceeded'], expiresAt: at, expected: 'wallet_executor_gas_feasibility_blocked' },
+      { decision: 'unproven', blockers: ['wallet_sample_quote_unavailable'], expiresAt: at + 1000, expected: 'wallet_executor_gas_feasibility_blocked' },
+    ] as const;
+    for (const check of checks) {
+      const failure = new CowSetupFeasibilityError({ ...check, blockers: [...check.blockers] }, at);
+      expect(failure.code).toBe('wallet_authority_feasibility_blocked');
+      const { audit } = await prepareExecutorGasReview(f.owner, f.executor, { ...f.deps, feasibility: async () => { throw failure; } });
+      expect(audit).toMatchObject({ status: 'blocked', review: null, freshProof: null, ownerReviewAllowed: false, blockers: [check.expected] });
+    }
+    expect((await attempts()).rowCount).toBe(0);
+  });
   it('binds the actual encrypted executor and current profile while leaving all trading state unarmed and prices/authority unchanged', async () => {
     const f = await prepared(), review = f.p.audit.review!;
     expect(review).toMatchObject({ chainId: 100, owner: f.owner, executor: f.executor, profileRevision: 1,

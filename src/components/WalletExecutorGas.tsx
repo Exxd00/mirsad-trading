@@ -1,15 +1,18 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { isUnsentExecutorGasActionError, type Snapshot } from '@/lib/wallet/metamask';
 import type { ExecutorGasAudit } from '@/lib/wallet/gnosis-executor-gas';
 import type { ExecutorGasAttemptView, ExecutorGasFence, ExecutorGasReservation } from '@/lib/wallet/gnosis-executor-gas-attempts';
 import { parseExecutorGasReviewUI, parseExecutorGasReservationUI, parseExecutorGasAttemptResultUI } from '@/lib/wallet/gnosis-executor-gas-ui';
+import { matchesGasReceipt, useExecutorGasReceiptPolling, type RecordedGasReceipt } from '@/lib/wallet/use-executor-gas-receipt';
+import { gasReviewWaitMs, waitForGasReview } from '@/lib/wallet/executor-gas-review-wait';
 import styles from '@/app/automation/page.module.css';
 
 export type ExecutorGasOwnerAction = (reservation: ExecutorGasReservation, expectedExecutor: string) => Promise<{ kind: 'transaction'; value: `0x${string}` }>;
 export type ExecutorGasAttemptResult = { attempt: ExecutorGasAttemptView | null; fence: ExecutorGasFence };
 const endpoint = '/api/wallet/strategy/executor-gas';
+const timeLabel = (millis: number) => new Date(millis).toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const amount = (raw: string) => { const p = raw.padStart(19, '0'), f = p.slice(-18).replace(/0+$/, ''); return p.slice(0, -18) + (f ? '.' + f : ''); };
 const labels = { reserved: 'حُفظ الطلب؛ قد تكون نافذة المحفظة مفتوحة', 'hash-recorded': 'المعاملة بانتظار تأكيد السلسلة', unknown: 'نتيجة المحفظة غير محسومة',
   'owner-rejected': 'رفض المالك الطلب', 'owner-cancelled-unsent': 'أُغلق الطلب قبل إرساله بعد فحص المصدر', confirmed: 'تأكد التحويل النهائي', reverted: 'أثبتت السلسلة فشل التحويل' };
@@ -19,11 +22,13 @@ export function WalletExecutorGas({ wallet, executor, csrfToken, ownerAction, sy
   syncResult: (result: ExecutorGasAttemptResult, expectedExecutor: string) => void;
   onSettled: (attemptId: string, funded: boolean) => void; onStateChange: (blocked: boolean) => void; disabled?: boolean;
 }) {
-  const owner = wallet?.address.toLowerCase(), target = executor.toLowerCase();
+  const owner = wallet?.address.toLowerCase(), target = executor.toLowerCase(), chain = wallet?.chainId;
   const [audit, setAudit] = useState<(ExecutorGasAudit & { fence: ExecutorGasFence }) | null>(null), [fence, setFence] = useState<ExecutorGasFence | null>(null);
   const [pending, setPending] = useState(false), [reviewed, setReviewed] = useState(false), [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [recoveryHash, setRecoveryHash] = useState('');
   const busy = useRef(false), alive = useRef(true), epoch = useRef(0), request = useRef<AbortController | null>(null);
+  const waiting = useRef<AbortController | null>(null);
+  const [waitSchedule, setWaitSchedule] = useState<{ deadline: number; nextAt: number | null } | null>(null);
   const callbacks = useRef({ syncResult, onSettled, onStateChange });
   useEffect(() => { callbacks.current = { syncResult, onSettled, onStateChange }; }, [syncResult, onSettled, onStateChange]);
   useEffect(() => { callbacks.current.onStateChange(pending || !!fence?.blocked); }, [pending, fence]);
@@ -34,9 +39,9 @@ export function WalletExecutorGas({ wallet, executor, csrfToken, ownerAction, sy
     if (!r.ok) throw new Error('تعذر إثبات خطوة غاز المشغّل. أعد قراءة الحالة المحفوظة قبل إعادة المحاولة.');
     return value;
   }, []);
-  const accept = useCallback((value: unknown, account: string, ticket: number) => {
+  const accept = useCallback((value: unknown, account: string, ticket: number, receipt?: RecordedGasReceipt) => {
     const parsed = parseExecutorGasAttemptResultUI(value, account, target);
-    if (!parsed) throw new Error('لم تطابق نتيجة التحقق حساب المالك والمشغّل المحدد.');
+    if (!parsed || (receipt && !matchesGasReceipt(parsed, receipt))) throw new Error('لم تطابق نتيجة التحقق الطلب المحدد وحسابَي المالك والمشغّل.');
     callbacks.current.syncResult(parsed, target);
     if (alive.current && ticket === epoch.current) { setFence(parsed.fence); setNow(Date.now()); }
     return parsed;
@@ -53,29 +58,54 @@ export function WalletExecutorGas({ wallet, executor, csrfToken, ownerAction, sy
     } catch { if (ticket === epoch.current && !control.signal.aborted) setError('تعذرت قراءة سجل طلب غاز المشغّل.'); }
     finally { if (ticket === epoch.current) { busy.current = false; setPending(false); request.current = null; } }
   }, [owner, accept]);
+  useLayoutEffect(() => {
+    alive.current = true; epoch.current++; setWaitSchedule(null); setAudit(null); setFence(null); setReviewed(false); setNotice(''); setRecoveryHash(''); void read();
+    return () => {
+      alive.current = false; epoch.current++; waiting.current?.abort(); waiting.current = null;
+      request.current?.abort(); busy.current = false; callbacks.current.onStateChange(false);
+    };
+  }, [read, chain]);
   useEffect(() => {
-    alive.current = true; epoch.current++; setAudit(null); setFence(null); setReviewed(false); setNotice(''); setRecoveryHash(''); void read();
-    return () => { alive.current = false; epoch.current++; request.current?.abort(); busy.current = false; callbacks.current.onStateChange(false); };
-  }, [read]);
+    if (disabled || !csrfToken || fence?.blocked) waiting.current?.abort();
+  }, [disabled, csrfToken, fence?.blocked]);
   useEffect(() => {
     if (!audit) return;
     const timer = setTimeout(() => { setNow(Date.now()); setReviewed(false); }, Math.min(2147483647, Math.max(0, audit.expiresAt * 1000 - Date.now() + 25)));
     return () => clearTimeout(timer);
   }, [audit]);
-  async function reviewGas() {
-    if (!owner || !csrfToken || wallet?.chainId !== '100' || busy.current || disabled) return;
+  async function reviewGas(waitSignal?: AbortSignal) {
+    if (!owner || !csrfToken || chain !== '100' || busy.current || disabled || fence?.blocked || waitSignal?.aborted) return null;
     const ticket = epoch.current, control = new AbortController(); request.current = control;
+    const signal = waitSignal ? AbortSignal.any([control.signal, waitSignal]) : control.signal;
     busy.current = true; setPending(true); setError(''); setNotice(''); setReviewed(false);
     try {
-      const raw = await post({ action: 'review', expectedExecutor: target }, owner, csrfToken, control.signal);
-      if (ticket !== epoch.current || control.signal.aborted) return;
+      const raw = await post({ action: 'review', expectedExecutor: target }, owner, csrfToken, signal);
+      if (ticket !== epoch.current || signal.aborted) return null;
       const value = parseExecutorGasReviewUI(raw, owner, target); if (!value) throw new Error('لم تطابق مراجعة الغاز إعداد المشغّل الحالي.');
       setAudit(value); setFence(value.fence); setNow(Date.now());
-    } catch (e) { if (ticket === epoch.current && !control.signal.aborted) setError(e instanceof Error ? e.message : 'تعذرت مراجعة الغاز.'); }
+      return value;
+    } catch (e) {
+      if (ticket === epoch.current && !signal.aborted) { setAudit(null); setError(e instanceof Error ? e.message : 'تعذرت مراجعة الغاز.'); }
+      return null;
+    }
     finally { if (ticket === epoch.current) { busy.current = false; setPending(false); request.current = null; } }
   }
+  async function startWaiting() {
+    if (waiting.current || busy.current || disabled || !owner || !csrfToken || chain !== '100' || !fence || fence.blocked) return;
+    const controller = new AbortController(), deadline = Date.now() + gasReviewWaitMs;
+    waiting.current = controller;
+    setReviewed(false); setWaitSchedule({ deadline, nextAt: null });
+    const result = await waitForGasReview({ deadline, visibility: document, signal: controller.signal, review: reviewGas,
+      onRetry: nextAt => { if (waiting.current === controller) setWaitSchedule({ deadline, nextAt }); } });
+    if (!alive.current || waiting.current !== controller) return;
+    waiting.current = null; setWaitSchedule(null);
+    const message = { reviewable: 'المراجعة جاهزة. طابق المبلغ والعنوان والرسوم أدناه قبل فتح MetaMask.',
+      funded: 'اكتمل فحص الرصيد والاحتياطي كافٍ.', expired: 'انتهت مدة انتظار التكلفة. يمكنك بدء فحص جديد.',
+      cancelled: 'توقف انتظار التكلفة.', stopped: 'توقف الانتظار. راجع نتيجة الفحص أو حالة الطلب أدناه.' };
+    setNotice(message[result]);
+  }
   async function send() {
-    if (!owner || !csrfToken || !audit?.review || !audit.freshProof || !audit.ownerReviewAllowed || !reviewed || busy.current || disabled
+    if (!owner || !csrfToken || !audit?.review || !audit.freshProof || !audit.ownerReviewAllowed || !reviewed || busy.current || waiting.current || disabled
       || wallet?.chainId !== '100' || fence?.blocked || Date.now() >= audit.expiresAt * 1000) return;
     const account = owner, token = csrfToken, ticket = epoch.current;
     let reservation: ExecutorGasReservation | null = null, requested = false, knownHash: `0x${string}` | null = null;
@@ -102,36 +132,62 @@ export function WalletExecutorGas({ wallet, executor, csrfToken, ownerAction, sy
       }
     } finally { if (alive.current && ticket === epoch.current) { busy.current = false; setPending(false); setAudit(null); } }
   }
-  async function resolve() {
+  async function resolve(expected?: RecordedGasReceipt, signal?: AbortSignal): Promise<boolean> {
     const active = fence?.active;
-    if (!owner || !csrfToken || !active || busy.current || (!active.transactionHash && !/^0x[0-9a-fA-F]{64}$/.test(recoveryHash))) return;
-    const ticket = epoch.current; busy.current = true; setPending(true); setError('');
+    if (!owner || chain !== '100' || !csrfToken || !active || active.owner.toLowerCase() !== owner
+      || active.executor.toLowerCase() !== target || signal?.aborted) return false;
+    if (expected && (active.status !== 'hash-recorded' || expected.id !== active.id || expected.transactionHash !== active.transactionHash)) return false;
+    if (busy.current || (expected && disabled)) return true;
+    const hash = active.transactionHash ?? recoveryHash.toLowerCase();
+    if (!/^0x[0-9a-f]{64}$/.test(hash)) return false;
+    const receipt: RecordedGasReceipt = { id: active.id, transactionHash: hash as `0x${string}` };
+    const ticket = epoch.current;
+    const currentRequest = () => alive.current && epoch.current === ticket && !signal?.aborted;
+    busy.current = true; setPending(true); setError('');
     try {
-      if (!active.transactionHash) accept(await post({ action: 'record', attemptId: active.id, transactionHash: recoveryHash }, owner, csrfToken), owner, ticket);
-      const result = accept(await post({ action: 'resolve', attemptId: active.id }, owner, csrfToken), owner, ticket);
-      if (alive.current && ticket === epoch.current) {
-        if (result.attempt && ['confirmed', 'reverted'].includes(result.attempt.status)) callbacks.current.onSettled(result.attempt.id, result.attempt.status === 'confirmed');
-        else setNotice('لم يتأكد التحويل النهائي بعد. انتظر ثم أعد التحقق دون إعادة الإرسال.');
+      if (!expected && !active.transactionHash) {
+        const recorded = await post({ action: 'record', attemptId: active.id, transactionHash: hash }, owner, csrfToken);
+        if (!currentRequest()) return false;
+        accept(recorded, owner, ticket, receipt);
       }
-    } catch (e) { if (alive.current && ticket === epoch.current) setError(e instanceof Error ? e.message : 'تعذر التحقق من التحويل.'); }
+      const raw = await post({ action: 'resolve', attemptId: active.id }, owner, csrfToken, signal);
+      if (!currentRequest()) return false;
+      const { attempt } = accept(raw, owner, ticket, receipt);
+      if (attempt?.status === 'confirmed' || attempt?.status === 'reverted') {
+        callbacks.current.onSettled(attempt.id, attempt.status === 'confirmed');
+        return false;
+      }
+      const awaitingReceipt = attempt?.status === 'hash-recorded';
+      setNotice(awaitingReceipt ? 'التحويل بانتظار تأكيد الشبكة.' : 'نتيجة التحويل غير محسومة. راجع حالة الطلب في مرصاد.');
+      return awaitingReceipt;
+    } catch (e) {
+      if (currentRequest()) setError(e instanceof Error ? e.message : 'تعذر التحقق من التحويل.');
+      return false;
+    }
     finally { if (alive.current && ticket === epoch.current) { busy.current = false; setPending(false); } }
   }
+  useExecutorGasReceiptPolling(owner, chain, target, fence, resolve);
   const current = !!audit && audit.expiresAt * 1000 > now, r = audit?.review, active = fence?.active;
   return <section aria-labelledby="executor-gas-heading">
     <h3 id="executor-gas-heading">احتياطي غاز المشغّل على Gnosis</h3>
     <p>يرسل المالك العجز فقط إلى حساب المشغّل المثبت في الإعداد. هذا احتياطي تشغيل محدود؛ لا يفعّل التداول ولا يتجدد تلقائيًا.</p>
     <p>حساب المشغّل: <bdi dir="ltr">{executor}</bdi>.</p>
     <div className={styles.controls}>
-      <button type="button" className={styles.button} disabled={disabled || pending || !csrfToken || wallet?.chainId !== '100'} onClick={() => void reviewGas()}>مراجعة عجز الغاز</button>
-      <button type="button" className={styles.button} disabled={pending || !owner} onClick={() => void read()}>تحديث حالة الطلب</button>
+      <button type="button" className={styles.button} disabled={disabled || pending || !!waitSchedule || !!fence?.blocked || !csrfToken || chain !== '100'} onClick={() => void reviewGas()}>مراجعة عجز الغاز</button>
+      {waitSchedule ? <button type="button" className={styles.button} onClick={() => waiting.current?.abort()}>إيقاف انتظار التكلفة</button>
+        : <button type="button" className={styles.button} disabled={disabled || pending || !csrfToken || chain !== '100' || !fence || fence.blocked || (current && audit?.ownerReviewAllowed) || audit?.status === 'funded'}
+          onClick={() => void startWaiting()}>انتظار تكلفة ضمن سقف 0.40٪</button>}
+      <button type="button" className={styles.button} disabled={pending || !!waitSchedule || !owner} onClick={() => void read()}>تحديث حالة الطلب</button>
     </div>
-    {pending && <p role="status">جارٍ إكمال الخطوة؛ راجع MetaMask إذا ظهرت نافذة الموافقة.</p>}
+    {waitSchedule && <p role="status">يفحص مرصاد التكلفة عندما يكون هذا التبويب ظاهرًا حتى {timeLabel(waitSchedule.deadline)} بالتوقيت المحلي.
+      {pending ? ' جارٍ فحص التكلفة.' : waitSchedule.nextAt && waitSchedule.nextAt < waitSchedule.deadline ? ` أقرب فحص تالٍ عند ${timeLabel(waitSchedule.nextAt)}.` : ''}</p>}
+    {pending && !waitSchedule && <p role="status">جارٍ إكمال الخطوة…</p>}
     {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     {active && <div role="status"><p>{labels[active.status]}.</p>
       {active.transactionHash ? <p><bdi dir="ltr">{active.transactionHash}</bdi></p> : <label>معرّف العملية من سجل المحفظة إذا أُرسلت:
         <input dir="ltr" maxLength={66} value={recoveryHash} onChange={e => setRecoveryHash(e.target.value.trim())} disabled={pending} autoComplete="off" spellCheck={false} /></label>}
       <button type="button" className={styles.button} disabled={pending || (!active.transactionHash && !/^0x[0-9a-fA-F]{64}$/.test(recoveryHash))} onClick={() => void resolve()}>التحقق من تأكيد الغاز</button>
-      <p>يبقى الطلب محجوبًا حتى حسمه. التحقق ينتظر نهائية Gnosis.</p>
+      <p>{active.status === 'hash-recorded' ? 'يتابع مرصاد تأكيد التحويل على Gnosis لمدة تصل إلى ست دقائق عندما يكون التبويب ظاهرًا. يبقى زر التحقق متاحًا بعد ذلك.' : 'يبقى الطلب محجوبًا حتى حسمه. التحقق ينتظر نهائية Gnosis.'}</p>
     </div>}
     {audit?.status === 'funded' && <div role="status"><p>الاحتياطي المقروء كافٍ. حدّث الإعداد قبل إعداد مراجعة صلاحية جديدة.</p>
       <button type="button" className={styles.button} disabled={pending || disabled} onClick={() => callbacks.current.onSettled('verified-existing-balance', true)}>تحديث الإعداد بعد تحقق الغاز</button></div>}
@@ -143,11 +199,16 @@ export function WalletExecutorGas({ wallet, executor, csrfToken, ownerAction, sy
         <dt>ميزانية رسوم التحويل المقدرة</dt><dd><bdi>{amount(r.ownerTransferFeeUpperWei)} xDAI</bdi></dd>
         <dt>المتبقي للمالك وفق الميزانية</dt><dd><bdi>{amount(r.ownerRetainedWei)} xDAI</bdi></dd>
       </dl>
+      <p>{current ? `تنتهي صلاحية مراجعة الغاز عند ${timeLabel(audit.expiresAt * 1000)} بالتوقيت المحلي.` : 'انتهت صلاحية مراجعة الغاز. حدّث المراجعة لقراءة المبلغ والرسوم مجددًا.'}</p>
       <p>الهدف يساوي ميزانية20 معاملة بأقصى تكلفة للمرحلة، وليس20 دورة تداول. رسوم المالك النهائية وبقية إعداد المحفظة تُراجع في MetaMask.</p>
       <label><input type="checkbox" checked={reviewed} disabled={pending || !current || !audit?.ownerReviewAllowed || !!fence?.blocked}
         onChange={e => setReviewed(e.target.checked)} /> راجعت عنوان المشغّل والمبلغ والاحتياطي والرسوم المقدرة.</label>
       <button type="button" className={styles.button} disabled={disabled || pending || !reviewed || !current || !audit?.ownerReviewAllowed || !!fence?.blocked || wallet?.chainId !== '100'} onClick={() => void send()}>مراجعة تحويل الغاز المحدود في MetaMask</button>
     </>}
-    {!!audit?.blockers.length && <details open><summary>متطلبات لم تثبت بعد</summary><ul>{audit.blockers.map(b => <li key={b}><bdi dir="ltr">{b}</bdi></li>)}</ul></details>}
+    {!!audit?.blockers.length && <details open><summary>متطلبات لم تثبت بعد</summary><ul>{audit.blockers.map(b => <li key={b}>{
+      b === 'wallet_executor_gas_cost_above_cap' ? 'تتجاوز تكلفة الدورة المقدّرة سقف 0.40٪.'
+      : b === 'wallet_executor_gas_cost_expired' ? 'انتهت صلاحية عينة التكلفة قبل اعتمادها.'
+      : b === 'wallet_executor_gas_feasibility_blocked' ? 'لم يثبت فحص الأصول والتكلفة جاهزية الإعداد. راجع تفاصيل العوائق في فحص أصول المحفظة وتكلفة التشغيل.'
+      : <bdi dir="ltr">{b}</bdi>}</li>)}</ul></details>}
   </section>;
 }
