@@ -3,7 +3,7 @@ import { requireMutation, requireSession, refreshSessionCookie } from '@/lib/aut
 import { body, failure, json } from '@/lib/http';
 import { ExecutorGasError, prepareExecutorGasReview } from '@/lib/wallet/gnosis-executor-gas';
 import { ExecutorGasReadError } from '@/lib/wallet/gnosis-executor-gas-rpc';
-import { cancelExecutorGasUnsent, markExecutorGasUnknown, readExecutorGasFence, recordExecutorGasHash, rejectExecutorGas,
+import { cancelExecutorGasUnsent, markExecutorGasUnknown, readExecutorGasFence, recordExecutorGasHash, recordExecutorGasProviderUnauthorized, rejectExecutorGas,
   reserveExecutorGas, resolveExecutorGasAttempt, saveExecutorGasArtifact } from '@/lib/wallet/gnosis-executor-gas-attempts';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -17,6 +17,7 @@ const input = z.discriminatedUnion('action', [
   z.object({ ...shared, action: z.literal('record'), attemptId, transactionHash: hash }).strict(),
   z.object({ ...shared, action: z.literal('unknown'), attemptId }).strict(),
   z.object({ ...shared, action: z.literal('reject'), attemptId, code: z.literal(4001) }).strict(),
+  z.object({ ...shared, action: z.literal('provider-unauthorized'), attemptId, snapshotDigest: hash, code: z.literal(4100) }).strict(),
   z.object({ ...shared, action: z.literal('cancel-unsent'), attemptId, snapshotDigest: hash, requestIssued: z.literal(false) }).strict(),
   z.object({ ...shared, action: z.literal('resolve'), attemptId }).strict(),
 ]);
@@ -42,6 +43,7 @@ export async function POST(request: Request) {
     else if (p.action === 'record') result = await recordExecutorGasHash(p.owner, p.attemptId, p.transactionHash);
     else if (p.action === 'unknown') result = await markExecutorGasUnknown(p.owner, p.attemptId);
     else if (p.action === 'reject') result = await rejectExecutorGas(p.owner, p.attemptId, p.code);
+    else if (p.action === 'provider-unauthorized') result = await recordExecutorGasProviderUnauthorized(p.owner, p.attemptId, p.snapshotDigest, p.code);
     else if (p.action === 'cancel-unsent') result = await cancelExecutorGasUnsent(p.owner, p.attemptId, p.snapshotDigest, p.requestIssued);
     else result = await resolveExecutorGasAttempt(p.owner, p.attemptId);
     const response = json({ ...(result as object), csrfToken: session.csrfToken });

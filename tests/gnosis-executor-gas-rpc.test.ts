@@ -88,6 +88,19 @@ async function receiptFixture(baselineNonce = 0n) {
 }
 
 describe('fixed read-only Gnosis executor gas evidence (public RPC simulated)', () => {
+  it('adds a two-source pinned finalized owner nonce check only for a reported provider refusal', async () => {
+    const f = fixture();
+    const finalizedOwnerNonce = (c: Call) => c.method === 'eth_getTransactionCount' && c.params[0] === OWNER && c.params[1] === toHex(f.state.finalized);
+    const ordinary = await readExecutorGasChain(f.input, f.deps);
+    expect(ordinary).not.toHaveProperty('sourceFinalizedNonce');
+    expect(f.seen.filter(v => finalizedOwnerNonce(v.call))).toHaveLength(0);
+    const scoped = { ...f.input, verifyFinalizedSourceNonce: true as const };
+    expect((await readExecutorGasChain(scoped, f.deps)).sourceFinalizedNonce).toBe(0);
+    expect(new Set(f.seen.filter(v => finalizedOwnerNonce(v.call)).map(v => v.url)).size).toBe(2);
+    f.state.mutate = (call, _url, value) => finalizedOwnerNonce(call) ? '0x1' : value;
+    await expect(readExecutorGasChain(scoped, f.deps)).rejects.toThrow('wallet_executor_gas_provider_refusal_unproved');
+    expect(await readExecutorGasChain(f.input, f.deps)).toEqual(ordinary);
+  });
   it('computes the exact twenty-call shortfall, separate cycle minimum, and conservative owner creation reserve', async () => {
     const f = fixture(), e = await readExecutorGasChain(f.input, f.deps);
     expect(e).toMatchObject({ targetBalanceWei: '700000000000000', maxPhaseCostWei: '35000000000000', reserveMultiplier: 20,

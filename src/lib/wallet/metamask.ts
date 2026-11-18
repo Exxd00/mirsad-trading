@@ -46,7 +46,7 @@ export class FundingOwnerRejectedError extends FundingActionError {
   constructor() { super('wallet_gnosis_funding_owner_rejected', true); this.name = 'FundingOwnerRejectedError'; }
 }
 type ExecutorGasPending = { id: string; snapshotDigest: string; runtimeDigest: string; profileRevision: number;
-  valueWei: string | null; hash: string | null; requestIssued: boolean };
+  valueWei: string | null; hash: string | null; requestIssued: boolean; denialCode?: 4001 | 4100 };
 const executorGasPending = new WeakMap<WalletProvider, Map<string, ExecutorGasPending>>();
 export class ExecutorGasActionError extends Error {
   constructor(message: string, readonly requestIssued: boolean) { super(message); this.name = 'ExecutorGasActionError'; }
@@ -56,6 +56,10 @@ export const isUnsentExecutorGasActionError = (error: unknown): error is Executo
 export class ExecutorGasOwnerRejectedError extends ExecutorGasActionError {
   readonly code = 4001;
   constructor() { super('wallet_executor_gas_owner_rejected', true); this.name = 'ExecutorGasOwnerRejectedError'; }
+}
+export class ExecutorGasProviderUnauthorizedError extends ExecutorGasActionError {
+  readonly code = 4100;
+  constructor() { super('wallet_executor_gas_provider_unauthorized', true); this.name = 'ExecutorGasProviderUnauthorizedError'; }
 }
 export interface Snapshot { address: string; chainId: string; nativeBalance: string; }
 export type WalletView =
@@ -261,7 +265,13 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
             value = await provider.request({ method: 'eth_sendTransaction', params: [{ chainId: '0x64', from: tx.from,
               to: tx.to, value: tx.value, data: '0x' }] });
           } catch (error) {
-            if ((error as { code?: unknown } | null)?.code === 4001) throw new ExecutorGasOwnerRejectedError();
+            if (typeof error === 'object' && error !== null && !Array.isArray(error) && Object.hasOwn(error, 'code')) {
+              const { code } = error as { code: unknown };
+              if (code === 4001 || code === 4100) {
+                pending.denialCode = code;
+                throw code === 4001 ? new ExecutorGasOwnerRejectedError() : new ExecutorGasProviderUnauthorizedError();
+              }
+            }
             throw new Error('wallet_executor_gas_result_unknown');
           }
           if (typeof value !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(value)) throw new Error('wallet_executor_gas_result_unknown');
@@ -269,7 +279,7 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
           return { kind: 'transaction' as const, value: pending.hash as `0x${string}` };
         } finally { ownerRequests.delete(provider); if (queued) scheduleRefresh(); }
       } catch (error) {
-        if (error instanceof ExecutorGasOwnerRejectedError && requestIssued) throw error;
+        if (requestIssued && (error instanceof ExecutorGasOwnerRejectedError || error instanceof ExecutorGasProviderUnauthorizedError)) throw error;
         throw new ExecutorGasActionError(requestIssued && !(error instanceof Error && error.message === 'wallet_executor_gas_attempt_pending')
           ? 'wallet_executor_gas_result_unknown' : error instanceof Error ? error.message : 'wallet_executor_gas_review_invalid', requestIssued);
       }
@@ -285,13 +295,20 @@ export function watchMetaMask(target: EventTarget, render: (view: WalletView) =>
       const local = locks.get(key), a = result.attempt ?? result.fence.last;
       if (local && a && a.id === local.id && a.snapshotDigest === local.snapshotDigest && a.runtimeDigest === local.runtimeDigest
         && a.profileRevision === local.profileRevision && (!local.hash || a.transactionHash === local.hash)
-        && (a.status === 'owner-rejected' && !local.hash || a.status === 'owner-cancelled-unsent' && !local.hash && !local.requestIssued
+        && (a.status === 'owner-rejected' && !local.hash && (local.denialCode === 4001 || local.valueWei === null)
+          || a.status === 'provider-unauthorized' && !local.hash && (local.denialCode === 4100 || local.valueWei === null && !local.requestIssued)
+          || a.status === 'owner-cancelled-unsent' && !local.hash && !local.requestIssued
           || a.status === 'confirmed' && (local.valueWei === null || a.resolution?.valueWei === local.valueWei)
           || a.status === 'reverted' && a.resolution?.valueWei === '0')) locks.delete(key);
       const active = result.fence.active;
-      if (active && !locks.has(key)) locks.set(key, { id: active.id, snapshotDigest: active.snapshotDigest,
-        runtimeDigest: active.runtimeDigest, profileRevision: active.profileRevision, valueWei: null, hash: active.transactionHash,
-        requestIssued: active.status !== 'reserved' });
+      if (active && !locks.has(key)) {
+        locks.set(key, { id: active.id, snapshotDigest: active.snapshotDigest, runtimeDigest: active.runtimeDigest,
+          profileRevision: active.profileRevision, valueWei: null, hash: active.transactionHash, requestIssued: active.status !== 'reserved' });
+      } else if (active && local?.valueWei === null && active.id === local.id && active.snapshotDigest === local.snapshotDigest) {
+        // A delayed GET must not downgrade an observed unknown or recorded hash to a fresh reservation.
+        local.requestIssued ||= active.status !== 'reserved';
+        local.hash ??= active.transactionHash;
+      }
     },
     /** Explicit owner click only, after authenticated server reservation. This
      * method never connects, switches chain, approves twice, or retries sends. */

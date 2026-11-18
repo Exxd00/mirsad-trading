@@ -133,7 +133,8 @@ const margin = (gas: bigint) => { if (!gas || gas > MAX_GAS) return fail('wallet
 
 /** Fixed read-only public sinks. No signer, SQL, source installation or send
  * method is accepted. The 20-call buffer is distinct from per-trade expenses. */
-export async function readExecutorGasChain(input: { owner: Address; executor: Address; config: CowRuntimeConfig }, deps: Dependencies = {}): Promise<ExecutorGasChainEvidence> {
+export async function readExecutorGasChain(input: { owner: Address; executor: Address; config: CowRuntimeConfig; verifyFinalizedSourceNonce?: true },
+  deps: Dependencies = {}): Promise<ExecutorGasChainEvidence & { sourceFinalizedNonce?: number }> {
   const c = context(deps);
   try {
     const captured = structuredClone(input), owner = address(captured.owner), executor = address(captured.executor), config = runtime(captured.config), network = cowNetwork(100);
@@ -148,11 +149,14 @@ export async function readExecutorGasChain(input: { owner: Address; executor: Ad
       { method: 'eth_getTransactionCount', params: [owner, l] }, { method: 'eth_getTransactionCount', params: [owner, 'pending'] },
       { method: 'eth_getTransactionCount', params: [executor, l] }, { method: 'eth_getTransactionCount', params: [executor, 'pending'] },
       { method: 'eth_getCode', params: [config.enforcer, l] },
+      ...(captured.verifyFinalizedSourceNonce ? [{ method: 'eth_getTransactionCount', params: [owner, f] }] : []),
     ]);
     const ownerBalance = uint(q[0]), executorLatest = uint(q[1]), executorBalance = uint(q[2]);
     if (hex(q[3]) !== '0x' || hex(q[4]) !== '0x' || executorLatest !== executorBalance) return fail('wallet_executor_gas_executor_not_finalized');
     const sourceNonce = number(uint(q[5])), sourcePendingNonce = number(uint(q[6])), executorNonce = number(uint(q[7])), executorPendingNonce = number(uint(q[8]));
     if (sourceNonce !== sourcePendingNonce || executorNonce !== executorPendingNonce) return fail('wallet_executor_gas_pending_nonce');
+    const sourceFinalizedNonce = captured.verifyFinalizedSourceNonce ? number(uint(q[10])) : undefined;
+    if (sourceFinalizedNonce !== undefined && sourceFinalizedNonce !== sourceNonce) return fail('wallet_executor_gas_provider_refusal_unproved');
     const code = hex(q[9]), deployed = code !== '0x';
     if (deployed && code !== expectedCowEnforcerRuntime(config.manager, 100).toLowerCase()) return fail('wallet_executor_gas_contract_changed');
     const maxFee = BigInt(limits.maxFeePerGasWei), cap = BigInt(limits.maxTransactionCostWei);
@@ -183,7 +187,7 @@ export async function readExecutorGasChain(input: { owner: Address; executor: Ad
       sourceNonce, sourcePendingNonce, executorNonce, executorPendingNonce, maxPhaseCostWei: maxPhase.toString(), reserveMultiplier: 20 as const, targetBalanceWei: target.toString(),
       minimumRoundTripWei: minimumRoundTrip.toString(), shortfallWei: shortfall.toString(), ownerTransferGasUnits: transferGas.toString(), ownerTransferFeeUpperWei: transferFee.toString(),
       ownerDeploymentReserveWei: deploymentReserve.toString(), ownerReserveWei: ownerReserve.toString(), ownerRetainedWei: (ownerBalance - shortfall - transferFee).toString(), readAt, expiresAt };
-    return { ...value, evidenceDigest: digest({ ...value, owner, executor, limits, estimated, q }) };
+    return { ...value, ...(sourceFinalizedNonce === undefined ? {} : { sourceFinalizedNonce }), evidenceDigest: digest({ ...value, owner, executor, limits, estimated, q }) };
   } catch (error) { throw error instanceof ExecutorGasReadError ? error : new ExecutorGasReadError('wallet_executor_gas_read_unavailable'); }
   finally { close(c); }
 }

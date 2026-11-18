@@ -12,10 +12,10 @@ import { assertExecutorGasContext, ExecutorGasError, loadExecutorGasContext, loc
   type ExecutorGasContext, type ExecutorGasDependencies, type ExecutorGasPrepared } from './gnosis-executor-gas';
 import { readExecutorGasChain, resolveExecutorGasReceipt } from './gnosis-executor-gas-rpc';
 import { assertAuthorityActionIdle } from './authority-action-fence';
-export type ExecutorGasAttemptStatus = 'reserved' | 'hash-recorded' | 'unknown' | 'owner-rejected' | 'owner-cancelled-unsent' | 'confirmed' | 'reverted';
+export type ExecutorGasAttemptStatus = 'reserved' | 'hash-recorded' | 'unknown' | 'owner-rejected' | 'owner-cancelled-unsent' | 'provider-unauthorized' | 'confirmed' | 'reverted';
 export type ExecutorGasAttemptView = { id: string; owner: Address; executor: Address; profileRevision: number; runtimeDigest: Hex;
   status: ExecutorGasAttemptStatus; reviewDigest: Hex; proofDigest: Hex; snapshotDigest: Hex; issuedAt: number; expiresAt: number;
-  transactionHash: Hex | null; resolution: ExecutorGasResolution | null; unsentAttestationProof?: Hex };
+  transactionHash: Hex | null; resolution: ExecutorGasResolution | null; unsentAttestationProof?: Hex; providerUnauthorizedProof?: Hex };
 export type ExecutorGasFence = { blocked: boolean; active: ExecutorGasAttemptView | null; last: ExecutorGasAttemptView | null };
 export type ExecutorGasReservation = { version: 1; attempt: ExecutorGasAttemptView; review: ExecutorGasReview;
   freshProof: ExecutorGasFreshProof; transaction: ExecutorGasTransaction };
@@ -24,12 +24,18 @@ type Dependencies = ExecutorGasDependencies & { transact?: typeof transaction; v
 const PREFIX = 'wallet:gnosis:executor-gas:v1:', journal = new SqlJournal();
 const hash = z.string().regex(/^0x[0-9a-f]{64}$/).transform(v => v as Hex), stamp = z.number().int().min(0).max(253402300799);
 const addr = z.string().regex(/^0x[0-9a-fA-F]{40}$/).refine(v => !/^0x0{40}$/i.test(v)).transform(v => getAddress(v.toLowerCase()));
-const statuses = ['reserved', 'hash-recorded', 'unknown', 'owner-rejected', 'owner-cancelled-unsent', 'confirmed', 'reverted'] as const;
+const statuses = ['reserved', 'hash-recorded', 'unknown', 'owner-rejected', 'owner-cancelled-unsent', 'provider-unauthorized', 'confirmed', 'reverted'] as const;
+const providerRefusal = z.object({
+  method: z.literal('eth_sendTransaction'), code: z.literal(4100), snapshotDigest: hash, chainEvidenceDigest: hash,
+  sourceFinalizedNonce: z.number().int().nonnegative(), readAt: stamp,
+}).strict();
 const stateSchema = z.object({ version: z.literal(1), owner: addr, activeId: z.string().uuid().nullable(), lastId: z.string().uuid().nullable() }).strict();
 type State = z.infer<typeof stateSchema>;
 const attemptSchema = z.object({ id: z.string().uuid(), owner: addr, executor: addr, profileRevision: z.number().int().positive(), runtimeDigest: hash,
   status: z.enum(statuses), reviewDigest: hash, proofDigest: hash, snapshotDigest: hash, issuedAt: stamp, expiresAt: stamp, transactionHash: hash.nullable(),
-  resolution: z.unknown().nullable(), unsentAttestationProof: hash.optional(), reviewJson: z.string().max(180000), proofJson: z.string().max(180000), contextJson: z.string().max(180000) }).strict();
+  resolution: z.unknown().nullable(), unsentAttestationProof: hash.optional(), providerRejectionPolicy: z.literal(1).optional(),
+  providerUnauthorizedProof: hash.optional(), providerUnauthorizedEvidence: providerRefusal.optional(),
+  reviewJson: z.string().max(180000), proofJson: z.string().max(180000), contextJson: z.string().max(180000) }).strict();
 type Attempt = Omit<z.infer<typeof attemptSchema>, 'resolution'> & { resolution: ExecutorGasResolution | null };
 const artifactSchema = z.object({ version: z.literal(1), owner: addr, executor: addr, reviewDigest: hash, proofDigest: hash,
   reviewJson: z.string().max(180000), proofJson: z.string().max(180000), contextJson: z.string().max(180000) }).strict();
@@ -53,8 +59,14 @@ function parseAttempt(v: unknown, owner: Address, id: string): Attempt {
       || !unsigned(review) || !unsigned(proof) || a.reviewDigest !== review.digest || a.proofDigest !== proof.digest || proof.reviewDigest !== a.reviewDigest
       || a.issuedAt !== proof.readAt || a.expiresAt !== proof.expiresAt || a.expiresAt <= a.issuedAt || snapshot(a, review, proof) !== a.snapshotDigest
       || ['hash-recorded', 'confirmed', 'reverted'].includes(a.status) && !a.transactionHash
-      || ['reserved', 'owner-rejected', 'owner-cancelled-unsent'].includes(a.status) && a.transactionHash
+      || ['reserved', 'owner-rejected', 'owner-cancelled-unsent', 'provider-unauthorized'].includes(a.status) && a.transactionHash
       || (a.status === 'owner-cancelled-unsent' ? !a.unsentAttestationProof : a.unsentAttestationProof !== undefined)) return fail();
+    if (a.status === 'provider-unauthorized') {
+      const refusal = a.providerUnauthorizedEvidence;
+      if (a.providerRejectionPolicy !== 1 || !refusal || refusal.snapshotDigest !== a.snapshotDigest
+        || refusal.sourceFinalizedNonce !== proof.sourceNonce || refusal.readAt < a.issuedAt
+        || fundingDigest(refusal) !== a.providerUnauthorizedProof) return fail();
+    } else if (a.providerUnauthorizedProof !== undefined || a.providerUnauthorizedEvidence !== undefined) return fail();
     const r = a.resolution as ExecutorGasResolution | null;
     if (a.status === 'confirmed' || a.status === 'reverted') {
       if (!r || r.outcome !== a.status || r.chainId !== 100 || r.owner !== owner || r.executor !== a.executor || r.transactionHash !== a.transactionHash
@@ -76,7 +88,8 @@ async function loadAttempt(tx: SqlExecutor, owner: Address, id: string): Promise
   if (r.rowCount !== 1) return fail(); return parseAttempt(r.rows[0].value, owner, id);
 }
 function view(a: Attempt): ExecutorGasAttemptView {
-  const { reviewJson: _r, proofJson: _p, contextJson: _c, ...publicValue } = a; return publicValue;
+  const { reviewJson: _r, proofJson: _p, contextJson: _c, providerRejectionPolicy: _policy,
+    providerUnauthorizedEvidence: _evidence, ...publicValue } = a; return publicValue;
 }
 async function fence(tx: SqlExecutor, owner: Address, s: State | null): Promise<ExecutorGasFence> {
   const active = s?.activeId ? await loadAttempt(tx, owner, s.activeId) : null, last = s?.lastId ? await loadAttempt(tx, owner, s.lastId) : null;
@@ -114,7 +127,7 @@ export async function reserveExecutorGas(input: { owner: string; expectedExecuto
     if (proof.expiresAt <= now(deps) || now(deps) < proof.readAt) return fail('wallet_executor_gas_stale');
     const base = { id: randomUUID(), owner, executor, profileRevision: context.profileRevision, runtimeDigest: context.runtimeDigest,
       reviewDigest: review.digest, proofDigest: proof.digest, issuedAt: proof.readAt, expiresAt: proof.expiresAt };
-    const a: Attempt = { ...base, snapshotDigest: snapshot(base, review, proof), status: 'reserved', transactionHash: null, resolution: null,
+    const a: Attempt = { ...base, snapshotDigest: snapshot(base, review, proof), status: 'reserved', transactionHash: null, resolution: null, providerRejectionPolicy: 1,
       reviewJson: JSON.stringify(review), proofJson: JSON.stringify(proof), contextJson: JSON.stringify(context) };
     await save(tx, key(owner, 'attempt:' + a.id), a); await save(tx, key(owner, 'state'), { ...state, activeId: a.id, lastId: a.id });
     await tx.query('INSERT INTO audit_events(event,detail) VALUES($1,$2::jsonb)', ['wallet.executor_gas.reserved', JSON.stringify({ owner, executor, id: a.id, at: now(deps) })]);
@@ -125,7 +138,8 @@ async function update(ownerInput: string, id: string, action: (a: Attempt, s: St
   const owner = ownerAddress(ownerInput);
   return (deps.transact ?? transaction)(async tx => {
     const s = await loadState(tx, owner, true); if (!s) return fail(); const a = await loadAttempt(tx, owner, id), next = await action(a, s, tx);
-    await save(tx, key(owner, 'attempt:' + id), next.a); await save(tx, key(owner, 'state'), next.s);
+    if (next.a !== a) await save(tx, key(owner, 'attempt:' + id), next.a);
+    if (next.s !== s) await save(tx, key(owner, 'state'), next.s);
     if (next.a.status !== a.status) await tx.query('INSERT INTO audit_events(event,detail) VALUES($1,$2::jsonb)',
       ['wallet.executor_gas.attempt_state', JSON.stringify({ id, owner, executor: a.executor, before: a.status, after: next.a.status })]);
     return { attempt: view(next.a), fence: await fence(tx, owner, next.s) };
@@ -149,6 +163,44 @@ export async function rejectExecutorGas(owner: string, id: string, code: number,
     if (a.status === 'owner-rejected') return { a, s };
     if (a.transactionHash || s.activeId !== id || !['reserved', 'unknown'].includes(a.status)) return fail('wallet_executor_gas_attempt_changed');
     return { a: { ...a, status: 'owner-rejected' }, s: { ...s, activeId: null } };
+  }, deps);
+}
+export async function recordExecutorGasProviderUnauthorized(owner: string, id: string, snapshotDigest: Hex, code: number, deps: Dependencies = {}) {
+  if (code !== 4100) return fail('wallet_executor_gas_request_invalid');
+  const expectedOwner = ownerAddress(owner), readTx = { query: deps.read ?? query };
+  const check = (a: Attempt) => {
+    if (a.providerRejectionPolicy !== 1 || a.snapshotDigest !== snapshotDigest || a.transactionHash
+      || (a.status !== 'reserved' && a.status !== 'provider-unauthorized')) return fail('wallet_executor_gas_attempt_changed');
+  };
+  const a = await loadAttempt(readTx, expectedOwner, id);
+  check(a);
+  if (a.status === 'provider-unauthorized') return { attempt: view(a), fence: await readExecutorGasFence(owner, deps) };
+  if ((await loadState(readTx, expectedOwner))?.activeId !== id) {
+    const latest = await loadAttempt(readTx, expectedOwner, id);
+    check(latest);
+    if (latest.status === 'provider-unauthorized') return { attempt: view(latest), fence: await readExecutorGasFence(owner, deps) };
+    return fail('wallet_executor_gas_attempt_changed');
+  }
+  const previous = json<ExecutorGasFreshProof>(a.proofJson), context = json<ExecutorGasContext>(a.contextJson);
+  const current = await loadExecutorGasContext(owner, a.executor, deps);
+  if (current.runtimeDigest !== a.runtimeDigest || current.profileRevision !== a.profileRevision
+    || current.signerFingerprint !== context.signerFingerprint) return fail('wallet_executor_gas_setup_changed');
+  const evidence = await (deps.chain ?? readExecutorGasChain)({ owner: expectedOwner, executor: a.executor, config: current.config, verifyFinalizedSourceNonce: true }, { clock: deps.clock });
+  if (evidence.ownerBalanceWei !== previous.ownerBalanceWei || evidence.executorBalanceWei !== previous.executorBalanceWei
+    || evidence.sourceNonce !== previous.sourceNonce || evidence.sourcePendingNonce !== previous.sourcePendingNonce
+    || evidence.sourceFinalizedNonce !== previous.sourceNonce || evidence.readAt < previous.readAt)
+    return fail('wallet_executor_gas_provider_refusal_unproved');
+  const refusal = providerRefusal.parse({ method: 'eth_sendTransaction', code, snapshotDigest, chainEvidenceDigest: evidence.evidenceDigest,
+    sourceFinalizedNonce: evidence.sourceFinalizedNonce, readAt: evidence.readAt });
+  return update(owner, id, async (saved, s, tx) => {
+    check(saved);
+    if (saved.status === 'provider-unauthorized') return { a: saved, s };
+    if (s.activeId !== id) return fail('wallet_executor_gas_attempt_changed');
+    await assertExecutorGasContext(tx, current);
+    const time = now(deps);
+    if (evidence.readAt > time || evidence.expiresAt <= time) return fail('wallet_executor_gas_stale');
+    return { a: { ...saved, status: 'provider-unauthorized', providerUnauthorizedProof: fundingDigest(refusal), providerUnauthorizedEvidence: refusal },
+      s: { ...s, activeId: null } };
   }, deps);
 }
 export async function cancelExecutorGasUnsent(owner: string, id: string, snapshotDigest: Hex, requestIssued: false, deps: Dependencies = {}) {

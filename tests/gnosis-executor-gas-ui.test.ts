@@ -83,4 +83,14 @@ describe('bounded executor native gas review (local software only)', () => {
     delete unsent.attempt.unsentAttestationProof;
     expect(parseExecutorGasAttemptResultUI(unsent, gasOwner, gasExecutor)).toBeNull();
   });
+  it('requires a separate hashless 4100 result proof and never accepts a refused attempt as the active fence', () => {
+    const { attempt } = gasReservation(), refused = { ...attempt, status: 'provider-unauthorized' as const, providerUnauthorizedProof: GH };
+    const result = { attempt: refused, fence: { ...emptyGasFence(), last: refused } };
+    expect(parseExecutorGasAttemptResultUI(result, gasOwner, gasExecutor)).toEqual(result);
+    for (const change of [{ providerUnauthorizedProof: undefined }, { status: 'owner-rejected' }, { status: 'unknown' },
+      { transactionHash: GH }, { resolution: { outcome: 'confirmed' } }, { unsentAttestationProof: GH }])
+      expect(parseExecutorGasAttemptResultUI({ ...result, attempt: { ...refused, ...change } }, gasOwner, gasExecutor)).toBeNull();
+    expect(parseExecutorGasAttemptResultUI({ ...result, fence: { blocked: true, active: refused, last: refused } }, gasOwner, gasExecutor)).toBeNull();
+    expect(parseExecutorGasAttemptResultUI({ ...result, fence: { blocked: false, active: null, last: attempt } }, gasOwner, gasExecutor)).toBeNull();
+  });
 });

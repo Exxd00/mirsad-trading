@@ -57,9 +57,9 @@ const resolution = z.object({ chainId: z.literal(100), owner: address, executor:
   valueWei: raw, gasUsed: positive, effectiveGasPriceWei: raw, actualGasWei: raw, receiptBlock, finalizedBlock: receiptBlock,
   outcome: z.enum(['confirmed', 'reverted']), evidenceDigest: hash }).strict();
 const attemptSchema = z.object({ id: z.string().uuid(), owner: address, executor: address, profileRevision: revision, runtimeDigest: hash,
-  status: z.enum(['reserved', 'hash-recorded', 'unknown', 'owner-rejected', 'owner-cancelled-unsent', 'confirmed', 'reverted']), reviewDigest: hash,
+  status: z.enum(['reserved', 'hash-recorded', 'unknown', 'owner-rejected', 'owner-cancelled-unsent', 'provider-unauthorized', 'confirmed', 'reverted']), reviewDigest: hash,
   proofDigest: hash, snapshotDigest: hash, issuedAt: time, expiresAt: time, transactionHash: hash.nullable(), resolution: resolution.nullable(),
-  unsentAttestationProof: hash.optional() }).strict();
+  unsentAttestationProof: hash.optional(), providerUnauthorizedProof: hash.optional() }).strict();
 const fenceSchema = z.object({ blocked: z.boolean(), active: attemptSchema.nullable(), last: attemptSchema.nullable() }).strict();
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const clone = (value: unknown): unknown => { const json = JSON.stringify(value); if (!json || json.length > 40000) return fail(); return JSON.parse(json) as unknown; };
@@ -103,9 +103,10 @@ function checkedProof(value: unknown, r: ExecutorGasReview): ExecutorGasFreshPro
 function checkedAttempt(value: unknown, owner: string, executor: string): ExecutorGasAttemptView {
   const a = attemptSchema.parse(value); owners(a.owner, a.executor, owner, executor);
   if (a.expiresAt <= a.issuedAt || a.expiresAt > a.issuedAt + 15
-    || (['reserved', 'owner-rejected', 'owner-cancelled-unsent'].includes(a.status) && a.transactionHash !== null)
+    || (['reserved', 'owner-rejected', 'owner-cancelled-unsent', 'provider-unauthorized'].includes(a.status) && a.transactionHash !== null)
     || (['hash-recorded', 'confirmed', 'reverted'].includes(a.status) && a.transactionHash === null)
-    || (a.status === 'owner-cancelled-unsent' ? !a.unsentAttestationProof : a.unsentAttestationProof !== undefined)) fail();
+    || (a.status === 'owner-cancelled-unsent' ? !a.unsentAttestationProof : a.unsentAttestationProof !== undefined)
+    || (a.status === 'provider-unauthorized' ? !a.providerUnauthorizedProof : a.providerUnauthorizedProof !== undefined)) fail();
   if (a.status === 'confirmed' || a.status === 'reverted') {
     const r = a.resolution;
     if (!r || r.outcome !== a.status || r.transactionHash !== a.transactionHash || !same(r.owner, owner) || !same(r.executor, executor)
@@ -157,6 +158,7 @@ export function parseExecutorGasAttemptResultUI(value: unknown, owner: string, e
     const v = z.object({ attempt: z.unknown().optional(), fence: z.unknown() }).parse(clone(value));
     const f = checkedFence(v.fence, owner, expectedExecutor), a = v.attempt == null ? null : checkedAttempt(v.attempt, owner, expectedExecutor);
     if (a && (['reserved', 'hash-recorded', 'unknown'].includes(a.status) ? f.active?.id !== a.id : f.active?.id === a.id)) return null;
+    if (a?.status === 'provider-unauthorized' && (!f.last || (f.last.id === a.id && executorGasUIDigest(f.last) !== executorGasUIDigest(a)))) return null;
     return { attempt: a, fence: f };
   } catch { return null; }
 }
